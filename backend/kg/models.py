@@ -337,6 +337,11 @@ class ProposalSchema(_Base):
     review_note: str = ""
     created_at: str
     reviewed_at: Optional[str] = None
+    # 异步落盘流水线
+    apply_status: str = "idle"  # idle|queued|running|done|aborted|failed
+    apply_error: str = ""
+    apply_started_at: Optional[str] = None
+    apply_finished_at: Optional[str] = None
 
 
 # ============================================================

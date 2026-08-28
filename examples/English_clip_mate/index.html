@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BingeMate · 追剧搭子 —— 追剧的时候，它在旁边陪你学</title>
+<meta name="description" content="WeSmartFlow Demo：追剧时随时待命的英语学习搭子。兴趣驱动，玩中学。" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%BF%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- ======================= 顶栏 ======================= -->
+<header class="topbar">
+  <div class="brand" onclick="App.goHome()">
+    <div class="brand-mark">🍿</div>
+    <div class="brand-text">
+      <div class="brand-name">BingeMate · 追剧搭子</div>
+      <div class="brand-sub">追剧的时候，它在旁边陪你学</div>
+    </div>
+  </div>
+
+  <div class="topbar-spacer"></div>
+
+  <div class="streak" id="streakBar">
+    <span>已陪你看 <b id="stClips">0</b> 段</span>
+    <div class="streak-div"></div>
+    <span>收下 <b id="stWords">0</b> 个表达</span>
+    <div class="streak-div"></div>
+    <span>连续 <b id="stDays">1</b> 天 🔥</span>
+  </div>
+
+  <a class="wsf-link" id="wsfLink" href="http://wesmartflow.cn" target="_blank" rel="noopener">WeSmartFlow ↗</a>
+</header>
+
+<!-- ======================= 首页 ======================= -->
+<main class="page" id="pageHome">
+  <div class="wrap">
+
+    <section class="hero">
+      <div class="hero-badge">
+        <span class="dot"></span>
+        WeSmartFlow · 具体学习场景 Demo
+      </div>
+
+      <h1>
+        英语不用被动听讲，<br />
+        <span class="grad">追着剧就学进去了。</span>
+      </h1>
+
+      <p>
+        挑一段你想追的剧，照平时那样看。<br />
+        遇到值得说两句的地方，旁边这位会招呼你一声——<br />
+        <b>表达怎么用、梗从哪儿来、音是怎么连怎么吞的</b>，<br />
+        都在剧情里当场拆开。
+      </p>
+
+      <div class="pillars">
+        <div class="pillar">🎯 <b>兴趣驱动</b> 挑你真心想追的那部</div>
+        <div class="pillar">✋ <b>随时举手</b> 有料的地方它招呼你</div>
+        <div class="pillar">🎬 <b>原生语境</b> 完整一段真实对话</div>
+        <div class="pillar">💬 <b>三个维度</b> 表达 · 文化梗 · 发音</div>
+      </div>
+    </section>
+
+    <div class="section-head">
+      <h2>我的片单</h2>
+      <span id="homeCount"></span>
+    </div>
+
+    <section class="clip-grid" id="clipGrid"></section>
+
+    <div class="foot">
+      WeSmartFlow · BingeMate Demo &nbsp;·&nbsp;
+      纯前端静态页面，数据全部预置在 <a href="data.js" target="_blank">data.js</a>，换一部剧只需新增一份数据。<br />
+      字幕时间轴由 Whisper 转写原片生成，台词与说话人以官方剧本校对，发音标记经音频能量实测验证。
+      视频片段仅作教学演示用途引用，版权归原权利人所有。
+    </div>
+  </div>
+</main>
+
+<!-- ======================= 学习页 ======================= -->
+<main class="page hidden" id="pageStudy">
+  <div class="wrap">
+
+    <!-- 四轮进度：任意一个都可以直接点 -->
+    <div class="stepper" id="stepper"></div>
+
+    <div class="study">
+      <!-- ---------- 左：播放器 / 内容区 ---------- -->
+      <div class="study-main">
+        <div class="player-card" id="playerCard">
+          <div class="stage" id="stage">
+            <video id="video" playsinline preload="auto"></video>
+
+            <!-- 遮住片源自带的中文硬字幕 / 台标，同时作为我们的字幕舞台 -->
+            <div class="hardsub-mask-top" id="hardsubMaskTop"></div>
+            <div class="hardsub-mask" id="hardsubMask"></div>
+
+            <div class="blind-badge hidden" id="blindBadge">
+              <b>裸听模式</b> · 没有字幕，先当一集剧看完就好
+            </div>
+
+            <div class="sub-layer hidden" id="subLayer">
+              <div class="sub-speaker" id="subSpeaker"></div>
+              <div class="sub-en" id="subEn"></div>
+              <div class="sub-zh" id="subZh"></div>
+            </div>
+
+            <!-- AI 举手气泡 -->
+            <div class="raise" id="raise" onclick="App.acceptRaise()">
+              <div class="raise-ava">🍿</div>
+              <div>
+                <div class="raise-txt" id="raiseTxt"></div>
+                <div class="raise-hint">点开听两句 · 不理我 3 秒后自动走</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="controls">
+            <div class="bar" id="bar">
+              <div class="bar-loop hidden" id="barLoop"></div>
+              <div class="bar-fill" id="barFill"></div>
+            </div>
+
+            <div class="ctrl-row">
+              <button class="icon-btn play" id="btnPlay" onclick="App.togglePlay()">▶</button>
+              <button class="icon-btn" onclick="App.back3()" title="回退 3 秒">↺</button>
+              <div class="time"><span id="tCur">0:00</span> / <span id="tDur">0:00</span></div>
+
+              <div class="ctrl-spacer"></div>
+
+              <button class="chip" id="chipRate" onclick="App.cycleRate()" title="0.5 / 0.75 / 1 / 1.25">1x</button>
+              <button class="chip" id="chipZh" onclick="App.toggleZh()">中文常显</button>
+              <button class="chip" id="chipNoHear" onclick="App.notHeard()">这句没听懂 🤔</button>
+              <button class="chip" id="chipJump" onclick="App.jump()">⏭</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="hint-bar" id="hintBar"></div>
+
+        <div id="roundZone"></div>
+      </div>
+
+      <!-- ---------- 右：AI 伴学栏 ---------- -->
+      <aside class="mate">
+        <div class="mate-head">
+          <div class="mate-ava" id="mateAva">🍿</div>
+          <div style="flex:1">
+            <div class="mate-name">BingeMate</div>
+            <div class="mate-state" id="mateState">在旁边看着</div>
+          </div>
+        </div>
+
+        <div class="mate-body" id="mateBody"></div>
+
+        <div class="mate-foot">
+          <div class="later-strip" id="laterStrip" onclick="App.openLater()"
+               title="第 2 轮里你没点开的举手点，都攒在这儿">
+            <span>⏳</span>
+            <span style="flex:1">举手时你跳过的，攒在这里</span>
+            <span class="later-n" id="laterN">0</span>
+          </div>
+
+          <div class="vault">
+            <div class="vault-head">
+              <span>我的表达库</span>
+              <span id="vaultN">0</span>
+            </div>
+            <div class="vault-list" id="vaultList">
+              <span class="vault-empty">还是空的 —— 点字幕里的词，或收下讲解卡里的表达</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</main>
+
+<!-- ======================= 讲解卡 ======================= -->
+<div class="sheet-mask" id="sheetMask" onclick="App.closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-head">
+    <div class="sheet-head-main">
+      <span class="tag" id="sheetTag"></span>
+      <div class="sheet-phrase" id="sheetPhrase"></div>
+      <div class="sheet-zh" id="sheetZh"></div>
+    </div>
+    <button class="sheet-close" onclick="App.closeSheet()">✕</button>
+  </div>
+
+  <!-- 同一个知识点的三个面：用法 / 发音 / 背景梗 -->
+  <div class="sheet-tabs" id="sheetTabs"></div>
+
+  <div class="sheet-body" id="sheetBody"></div>
+
+  <div class="sheet-foot">
+    <button class="btn btn-sm btn-primary" onclick="App.replayOnce()">🔊 重听一次</button>
+    <button class="btn btn-sm" onclick="App.replayLoop()">🔁 循环</button>
+    <div class="sheet-nav" id="sheetNav"></div>
+    <div style="flex:1"></div>
+    <button class="btn btn-sm" id="sheetSave" onclick="App.savePoint()">＋ 收进表达库</button>
+  </div>
+</div>
+
+<div class="wordpop" id="wordpop"></div>
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

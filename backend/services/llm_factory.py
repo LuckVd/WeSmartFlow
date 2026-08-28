@@ -82,8 +82,11 @@ def get_profile_llm(user_id: str) -> BaseLLM:
     )
 
 
-def get_llm(user_id: str) -> BaseLLM:
+def get_llm(user_id: str, with_quota: bool = True) -> BaseLLM:
     """每次调用都从数据库/环境变量读取指定用户的最新配置，确保设置页修改后立即生效。
+
+    with_quota=False 用于系统级内容生成（如 examples demo 的案件生成），
+    不消耗任何用户的免费对话额度。
 
     优先级：
       1. 用户在设置页配置了自己的 OpenAI key → 使用 OpenAI（不限额）
@@ -122,7 +125,11 @@ def get_llm(user_id: str) -> BaseLLM:
             )
 
         return create_openai_llm(
-            user_id, api_key=env_key, base_url=base_url, model=model, with_quota=True
+            user_id,
+            api_key=env_key,
+            base_url=base_url,
+            model=model,
+            with_quota=with_quota,
         )
 
     raise RuntimeError("未配置任何 LLM 服务。请在 .env 中设置 LLM_API_KEY。")

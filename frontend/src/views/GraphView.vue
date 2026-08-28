@@ -90,6 +90,48 @@
         </select>
         <!-- 图谱视图控制 -->
         <div v-if="viewMode === 'graph'" class="graph-controls">
+          <div class="graph-mode-switch">
+            <button
+              class="mode-btn"
+              :class="{ active: graphDisplayMode === 'full' }"
+              @click="graphDisplayMode = 'full'"
+            >
+              完整图谱
+            </button>
+            <button
+              class="mode-btn"
+              :class="{ active: graphDisplayMode === 'simplified' }"
+              :disabled="!simplifiedProfile"
+              :title="
+                simplifiedProfile
+                  ? '查看 AI 整理后的简化图谱'
+                  : '请先一键整理图谱'
+              "
+              @click="graphDisplayMode = 'simplified'"
+            >
+              简化图谱<span
+                v-if="
+                  graphDisplayMode === 'simplified' && hiddenDetailCount > 0
+                "
+                class="mode-count"
+                >省 {{ hiddenDetailCount }}</span
+              ><span v-if="simplifiedStale" class="mode-dot" />
+            </button>
+          </div>
+          <button
+            class="ctrl-toggle"
+            :class="{ active: graphDisplayMode === 'simplified' }"
+            :disabled="simplifyingGraph"
+            @click="simplifyGraph"
+          >
+            {{
+              simplifyingGraph
+                ? "整理中..."
+                : simplifiedProfile
+                  ? "重新整理图谱"
+                  : "一键整理图谱"
+            }}
+          </button>
           <button class="ctrl-btn" title="重置视图" @click="resetView">
             <svg
               width="13"
@@ -643,8 +685,15 @@
               </div>
             </div>
 
-            <!-- 来源定位 -->
-            <div v-if="selectedNode.origins?.length" class="dp-section">
+            <!-- 来源与证据：创建来源 + 测验记录 + 学习记录 -->
+            <div
+              v-if="
+                selectedNode.origins?.length ||
+                selectedNode.evidence ||
+                selectedNode.logs?.length
+              "
+              class="dp-section"
+            >
               <div class="dp-section-title">
                 <svg
                   width="11"
@@ -654,12 +703,22 @@
                   stroke="currentColor"
                   stroke-width="2"
                 >
-                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
-                  <circle cx="12" cy="10" r="3" />
+                  <path
+                    d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                  />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
                 </svg>
-                来源定位
+                来源与证据
               </div>
-              <div class="origins-list">
+              <div class="evidence-list">
+                <div
+                  v-if="selectedNode.origins?.length"
+                  class="evidence-group-title"
+                >
+                  创建来源
+                </div>
                 <div
                   v-for="(origin, oi) in selectedNode.origins"
                   :key="origin.source_id + '_' + oi"
@@ -762,40 +821,97 @@
                     <blockquote>{{ origin.excerpt }}</blockquote>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            <!-- 学习记录（有数据才显示） -->
-            <div v-if="selectedNode.logs?.length" class="dp-section">
-              <div class="dp-section-title">
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <polyline points="12 6 12 12 16 14" />
-                </svg>
-                学习记录
-              </div>
-              <div class="study-log">
                 <div
-                  v-for="log in selectedNode.logs"
-                  :key="log.date"
-                  class="sl-item"
+                  v-if="selectedNode.evidence?.quizzes?.length"
+                  class="evidence-group-title"
+                >
+                  测验记录
+                </div>
+                <div
+                  v-for="(q, qi) in selectedNode.evidence?.quizzes?.slice(0, 5)"
+                  :key="q.id || qi"
+                  class="evidence-item quiz"
+                >
+                  <div class="evidence-head">
+                    <span class="evidence-type">测验记录</span>
+                    <span
+                      class="evidence-result"
+                      :class="q.is_correct ? 'ok' : 'bad'"
+                    >
+                      {{
+                        q.is_correct
+                          ? "答对"
+                          : q.answered_at
+                            ? "答错"
+                            : "未作答"
+                      }}
+                    </span>
+                  </div>
+                  <div class="evidence-text">{{ q.question }}</div>
+                  <div class="evidence-meta">
+                    <span v-if="q.user_answer"
+                      >你的答案：{{ q.user_answer }}</span
+                    >
+                    <span>正确答案：{{ q.correct_answer }}</span>
+                  </div>
+                  <div v-if="q.explanation" class="evidence-quote">
+                    {{ q.explanation }}
+                  </div>
+                </div>
+
+                <div
+                  v-if="
+                    selectedNode.evidence?.study_logs?.length ||
+                    selectedNode.logs?.length
+                  "
+                  class="evidence-group-title"
+                >
+                  学习记录
+                </div>
+                <div
+                  v-for="(log, li) in selectedNode.evidence?.study_logs?.slice(
+                    0,
+                    3,
+                  )"
+                  :key="log.id || li"
+                  class="evidence-item"
+                >
+                  <div class="evidence-head">
+                    <span class="evidence-type">学习记录</span>
+                    <span class="evidence-result ok"
+                      >{{ log.minutes }} 分钟</span
+                    >
+                  </div>
+                  <div class="evidence-meta">
+                    <span>{{ log.date }}</span>
+                    <span v-if="log.session_id"
+                      >会话 {{ log.session_id.slice(0, 8) }}</span
+                    >
+                  </div>
+                </div>
+                <div
+                  v-for="log in selectedNode.logs || []"
+                  :key="`legacy_${log.date}_${log.text}`"
+                  class="sl-item evidence-legacy-log"
                 >
                   <div class="sl-dot" :class="log.type" />
                   <div class="sl-content">
-                    <div class="sl-text">
-                      {{ log.text }}
-                    </div>
-                    <div class="sl-date">
-                      {{ log.date }}
-                    </div>
+                    <div class="sl-text">{{ log.text }}</div>
+                    <div class="sl-date">{{ log.date }}</div>
                   </div>
+                </div>
+
+                <div
+                  v-if="
+                    !selectedNode.origins?.length &&
+                    !selectedNode.evidence?.quizzes?.length &&
+                    !selectedNode.evidence?.study_logs?.length &&
+                    !selectedNode.logs?.length
+                  "
+                  class="evidence-empty"
+                >
+                  暂无更细证据；后续新建节点会逐步记录聊天、文档、错题和课程来源。
                 </div>
               </div>
             </div>
@@ -910,7 +1026,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
-import { nodeApi } from "@/api";
+import { nodeApi, graphApi } from "@/api";
 
 const router = useRouter();
 const route = useRoute();
@@ -924,6 +1040,10 @@ const searchFocused = ref(false);
 const activeFilter = ref("all");
 const sortBy = ref("recent");
 const viewMode = ref("graph");
+const graphDisplayMode = ref("full");
+const simplifiedProfile = ref(null);
+const simplifiedStale = ref(false);
+const simplifyingGraph = ref(false);
 const selectedNode = ref(null);
 const loading = ref(false);
 
@@ -961,6 +1081,47 @@ function getTagColor(tag) {
     colorCache[tag] = SUBJECT_COLORS[tag] || DEFAULT_COLORS[idx];
   }
   return colorCache[tag];
+}
+
+const DETAIL_NODE_PATTERNS = [
+  /例题|经典题|典型题|练习题|真题|错题/,
+  /作图法|作图步骤|作图构造|构造法/,
+  /证明过程|证明思路|证法|推导过程|推导步骤/,
+  /目标拆解|解题策略|识别策略|判定策略|常见手法/,
+  /几何来源|本质对比|易错点|应用场景|题型/,
+];
+
+const CORE_CONCEPT_PATTERNS = [
+  /定理$/,
+  /法则$/,
+  /公式$/,
+  /函数$/,
+  /方程$/,
+  /数列$/,
+  /变换$/,
+  /三角形$/,
+  /四边形$/,
+  /多边形$/,
+  /圆$/,
+  /角$/,
+  /线$/,
+  /点$/,
+];
+
+function isDetailNode(node) {
+  const title = String(node.label || node.title || "").trim();
+  if (!title) return false;
+  if (CORE_CONCEPT_PATTERNS.some((pattern) => pattern.test(title)))
+    return false;
+  return DETAIL_NODE_PATTERNS.some((pattern) => pattern.test(title));
+}
+
+function nodeMatchesQuery(node, q) {
+  return (
+    node.label.toLowerCase().includes(q) ||
+    node.desc?.toLowerCase().includes(q) ||
+    node.tags?.some((t) => t.toLowerCase().includes(q))
+  );
 }
 
 // 格式化最近学习时间（后端返回 UTC 时间，强制按 UTC 解析）
@@ -1257,6 +1418,7 @@ function layoutNodes(rawNodes) {
         lastStudied: formatLastStudied(n.last_review_at),
         decayWarning: calcDecayWarning(n.due_date),
         desc: n.description,
+        isDetail: isDetailNode({ ...n, label: n.title, desc: n.description }),
         emoji: SUBJECT_EMOJIS[n.tags?.[0]] || "💡",
         content: null,
         origins: [],
@@ -1318,6 +1480,7 @@ async function loadNodes() {
     const raw = await nodeApi.getAll();
     nodes.value = layoutNodes(raw);
     edges.value = buildEdges(raw);
+    await loadSimplifiedProfile();
     // 动态更新 filters 的标签选项
     const tagSet = new Set(raw.flatMap((n) => n.tags || []));
     // 取全部 tag，不截断，让筛选器完整
@@ -1333,10 +1496,41 @@ async function loadNodes() {
   }
 }
 
+async function loadSimplifiedProfile() {
+  try {
+    const data = await graphApi.getSimplified();
+    simplifiedProfile.value = data.exists ? data.profile : null;
+    simplifiedStale.value = !!data.stale;
+    if (data.exists && graphDisplayMode.value === "full") {
+      graphDisplayMode.value = "simplified";
+    }
+  } catch (e) {
+    console.warn("简化图谱加载失败:", e.message);
+  }
+}
+
+async function simplifyGraph() {
+  simplifyingGraph.value = true;
+  try {
+    const data = await graphApi.simplify();
+    simplifiedProfile.value = data.profile;
+    simplifiedStale.value = false;
+    graphDisplayMode.value = "simplified";
+    await loadNodes();
+  } catch (e) {
+    console.warn("一键整理图谱失败:", e.message);
+  } finally {
+    simplifyingGraph.value = false;
+  }
+}
+
 // 点击节点时懒加载完整详情
 async function loadNodeDetail(nodeId) {
   try {
-    const detail = await nodeApi.getById(nodeId);
+    const [detail, evidence] = await Promise.all([
+      nodeApi.getById(nodeId),
+      nodeApi.getEvidence(nodeId).catch(() => null),
+    ]);
     const idx = nodes.value.findIndex((n) => n.id === nodeId);
     if (idx !== -1) {
       // 用 Object.assign 原地更新，避免引用断裂导致面板闪烁
@@ -1364,6 +1558,7 @@ async function loadNodeDetail(nodeId) {
         last_review_at:
           detail.memory?.last_review_at ?? nodes.value[idx].last_review_at,
         due_date: detail.memory?.due_date ?? nodes.value[idx].due_date,
+        evidence,
       });
       // 重新计算衍生字段（用 memoryPct 避免与后端 memory 对象字段名冲突）
       const n = nodes.value[idx];
@@ -1390,7 +1585,7 @@ const edgeColors = {
 const dynamicFilters = ref([]);
 
 // ── Computed ────────────────────────────────────────────────────
-const filteredNodes = computed(() => {
+const baseFilteredNodes = computed(() => {
   let list = nodes.value;
   if (activeFilter.value !== "all")
     list = list.filter(
@@ -1398,14 +1593,32 @@ const filteredNodes = computed(() => {
         n.subject === activeFilter.value ||
         n.tags?.includes(activeFilter.value),
     );
-  if (searchQuery.value) {
-    const q = searchQuery.value.toLowerCase();
-    list = list.filter(
-      (n) =>
-        n.label.toLowerCase().includes(q) ||
-        n.desc?.toLowerCase().includes(q) ||
-        n.tags?.some((t) => t.toLowerCase().includes(q)),
-    );
+  return list;
+});
+
+const simplifiedConfig = computed(
+  () =>
+    simplifiedProfile.value?.view_config ||
+    simplifiedProfile.value?.profile?.view_config ||
+    null,
+);
+const simplifiedVisibleIds = computed(
+  () => new Set(simplifiedConfig.value?.visible_node_ids || []),
+);
+const hiddenDetailCount = computed(() => {
+  if (graphDisplayMode.value !== "simplified" || !simplifiedConfig.value)
+    return 0;
+  return Math.max(0, nodes.value.length - simplifiedVisibleIds.value.size);
+});
+
+const filteredNodes = computed(() => {
+  let list = baseFilteredNodes.value;
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) {
+    return list.filter((n) => nodeMatchesQuery(n, q));
+  }
+  if (graphDisplayMode.value === "simplified" && simplifiedConfig.value) {
+    list = list.filter((n) => simplifiedVisibleIds.value.has(n.id));
   }
   return list;
 });
@@ -1431,7 +1644,10 @@ const displayedEdges = computed(() => {
 });
 
 const sortedNodes = computed(() => {
-  const list = [...filteredNodes.value];
+  let list = baseFilteredNodes.value;
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) list = list.filter((n) => nodeMatchesQuery(n, q));
+  list = [...list];
   if (sortBy.value === "mastery-desc")
     list.sort((a, b) => b.mastery - a.mastery);
   else if (sortBy.value === "mastery-asc")
@@ -1883,7 +2099,46 @@ onMounted(async () => {
 .graph-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+.graph-mode-switch {
+  display: flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+.mode-btn {
+  position: relative;
+  height: 24px;
+  padding: 0 9px;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.mode-btn.active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+.mode-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.mode-dot {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+}
+.mode-count {
+  margin-left: 4px;
+  color: var(--text-dim);
 }
 .ctrl-btn {
   width: 28px;
@@ -1901,6 +2156,25 @@ onMounted(async () => {
 .ctrl-btn:hover {
   background: var(--brand-dim);
   color: var(--brand-light);
+}
+.ctrl-toggle {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+.ctrl-toggle:hover,
+.ctrl-toggle.active {
+  background: var(--brand-dim);
+  color: var(--brand-light);
+  border-color: var(--border-active);
 }
 .zoom-val {
   font-size: 11px;
@@ -2513,6 +2787,82 @@ onMounted(async () => {
   background: var(--brand-dim);
   color: var(--brand-light);
   border-color: var(--border-active);
+}
+.evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.evidence-group-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+.evidence-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  padding: 9px 10px;
+}
+.evidence-item.quiz {
+  border-color: rgba(245, 158, 11, 0.28);
+}
+.evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.evidence-type {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.evidence-result {
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+}
+.evidence-result.ok {
+  color: var(--green);
+  background: var(--green-dim);
+}
+.evidence-result.bad {
+  color: var(--red);
+  background: var(--red-dim);
+}
+.evidence-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin-bottom: 5px;
+}
+.evidence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.evidence-quote {
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.evidence-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
 }
 .origin-excerpt {
   border-top: 1px solid var(--border);

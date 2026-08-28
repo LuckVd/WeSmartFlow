@@ -1,0 +1,2149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>知识之境 · 勾股定理 · 从周公的矩尺到赵爽的弦图</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;600;700&family=Cormorant+Garamond:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root{
+  --gold:#d4b77a; --gold-bright:#f0d9a8; --purple-deep:#0b0714;
+  --ink:rgba(10,8,20,.78); --text:#e8e2d5; --text-dim:#9a92a8;
+  --cyan:#7fc8d8; --cyan-dim:rgba(127,200,216,.25);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--purple-deep);color:var(--text);
+  font-family:'Noto Serif SC',serif;}
+#app{position:fixed;inset:0;}
+button{font-family:inherit;}
+
+/* ---------- 场景层 ---------- */
+.scene{position:absolute;inset:0;opacity:0;transition:opacity 1.1s ease;pointer-events:none;}
+.scene.active{opacity:1;pointer-events:auto;}
+.scene img{width:100%;height:100%;object-fit:cover;transform:scale(1.02);}
+.scene.active img{animation:kenburns 26s ease-in-out infinite alternate;}
+@keyframes kenburns{from{transform:scale(1.02) translate(0,0)}to{transform:scale(1.12) translate(-1.2%,1%)}}
+.scene::after{content:'';position:absolute;inset:0;
+  background:linear-gradient(to top,rgba(5,3,12,.92) 0%,rgba(5,3,12,.35) 30%,rgba(5,3,12,.12) 55%,rgba(5,3,12,.4) 100%);}
+
+/* ---------- 时代标题卡 ---------- */
+#era-card{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:rgba(5,3,12,.55);opacity:0;pointer-events:none;transition:opacity .9s ease;z-index:40;backdrop-filter:blur(2px);}
+#era-card.show{opacity:1;}
+#era-card .era-en{font-family:'Cormorant Garamond',serif;font-style:italic;letter-spacing:.35em;
+  color:var(--gold);font-size:clamp(12px,1.6vw,16px);text-transform:uppercase;margin-bottom:14px;opacity:0;}
+#era-card .era-title{font-size:clamp(28px,5vw,54px);font-weight:600;letter-spacing:.18em;color:#fff;
+  text-shadow:0 0 40px rgba(212,183,122,.45);opacity:0;}
+#era-card .era-line{width:0;height:1px;background:linear-gradient(90deg,transparent,var(--gold),transparent);margin-top:22px;}
+#era-card.show .era-en{animation:fadeUp 1s .2s forwards}
+#era-card.show .era-title{animation:fadeUp 1.1s .45s forwards}
+#era-card.show .era-line{animation:growLine 1.2s .6s forwards}
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@keyframes growLine{from{width:0}to{width:min(46vw,420px)}}
+
+/* ---------- 顶部时间线 ---------- */
+#timeline-wrap{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:30;text-align:center;}
+#timeline{display:inline-flex;gap:10px;padding:8px 18px;border-radius:999px;background:rgba(8,6,16,.45);
+  backdrop-filter:blur(8px);border:1px solid rgba(212,183,122,.18);}
+#timeline .node{width:9px;height:9px;border-radius:50%;background:rgba(212,183,122,.22);position:relative;transition:all .5s;}
+#timeline .node.done{background:var(--gold);box-shadow:0 0 8px rgba(212,183,122,.6);cursor:pointer;}
+#timeline .node.done:hover{transform:scale(1.5);box-shadow:0 0 14px rgba(240,217,168,.9);}
+#timeline .node.now{background:var(--gold-bright);animation:pulse 1.8s infinite;}
+@keyframes pulse{0%,100%{box-shadow:0 0 6px rgba(240,217,168,.5);transform:scale(1)}50%{box-shadow:0 0 16px rgba(240,217,168,.9);transform:scale(1.25)}}
+#timeline .node .tip{position:absolute;top:18px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-size:11px;color:var(--gold);opacity:0;transition:opacity .3s;pointer-events:none;}
+#timeline .node.done:hover .tip{opacity:1;}
+#tl-hint{font-size:10px;color:var(--text-dim);letter-spacing:.2em;margin-top:6px;opacity:0;transition:opacity .6s;}
+#tl-hint.show{opacity:.8;}
+
+/* ---------- HUD ---------- */
+#hud{position:absolute;top:16px;right:18px;z-index:30;display:flex;gap:10px;align-items:center;}
+.hud-chip{display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;
+  background:rgba(8,6,16,.5);backdrop-filter:blur(8px);border:1px solid rgba(212,183,122,.22);}
+#resonance-val{font-family:'Cormorant Garamond',serif;font-size:17px;color:var(--gold-bright);min-width:30px;text-align:center;}
+#codex-btn{cursor:pointer;transition:border-color .3s;}
+#codex-btn:hover{border-color:var(--gold);}
+.res-float{position:absolute;top:56px;right:36px;font-family:'Cormorant Garamond',serif;font-size:22px;
+  color:var(--gold-bright);z-index:80;animation:floatUp 1.6s forwards;pointer-events:none;text-shadow:0 0 12px rgba(240,217,168,.8);}
+@keyframes floatUp{from{opacity:0;transform:translateY(8px)}15%{opacity:1}to{opacity:0;transform:translateY(-34px)}}
+
+/* ---------- 对话框 ---------- */
+#dialogue{position:absolute;left:50%;transform:translateX(-50%);bottom:max(26px,4vh);width:min(92vw,880px);z-index:35;}
+#dlg-name{display:inline-block;padding:7px 22px;margin-left:18px;margin-bottom:-1px;position:relative;z-index:2;
+  background:linear-gradient(135deg,rgba(64,48,20,.9),rgba(30,22,8,.9));border:1px solid var(--gold);border-bottom:none;
+  border-radius:10px 10px 0 0;color:var(--gold-bright);font-size:15px;letter-spacing:.14em;}
+#dlg-box{background:var(--ink);backdrop-filter:blur(14px);border:1px solid rgba(212,183,122,.35);
+  border-radius:14px;padding:22px 28px 20px;box-shadow:0 18px 50px rgba(0,0,0,.55);cursor:pointer;
+  min-height:118px;position:relative;transition:border-color .3s;}
+#dlg-box:hover{border-color:rgba(212,183,122,.6);}
+#dlg-text{font-size:clamp(15px,1.9vw,18px);line-height:1.95;letter-spacing:.04em;font-weight:300;}
+#dlg-text .em{color:var(--gold-bright);}
+#dlg-next{position:absolute;right:22px;bottom:12px;color:var(--gold);font-size:13px;letter-spacing:.2em;
+  animation:bob 1.4s ease-in-out infinite;opacity:.85;}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+#dlg-hint{position:absolute;left:28px;bottom:14px;font-size:11px;color:var(--text-dim);letter-spacing:.15em;}
+
+/* ---------- 决策点 ---------- */
+#choice-layer{position:absolute;inset:0;z-index:45;display:none;align-items:center;justify-content:center;
+  background:rgba(5,3,12,.45);backdrop-filter:blur(3px);}
+#choice-layer.show{display:flex;}
+#choice-inner{width:min(92vw,680px);}
+#choice-prompt{text-align:center;font-size:clamp(17px,2.2vw,22px);color:#fff;margin-bottom:26px;
+  letter-spacing:.06em;text-shadow:0 2px 18px rgba(0,0,0,.9);line-height:1.8;}
+#choice-prompt .mark{color:var(--gold);}
+.choice-opt{background:rgba(14,10,26,.82);border:1px solid rgba(212,183,122,.3);border-radius:12px;
+  padding:16px 24px;margin-bottom:14px;cursor:pointer;font-size:clamp(14px,1.7vw,16.5px);line-height:1.7;
+  letter-spacing:.03em;transition:all .28s;position:relative;overflow:hidden;}
+.choice-opt::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--gold);
+  transform:scaleY(0);transition:transform .28s;}
+.choice-opt:hover{border-color:var(--gold);background:rgba(34,24,54,.9);transform:translateX(6px);}
+.choice-opt:hover::before{transform:scaleY(1);}
+.choice-opt .key{color:var(--gold);font-family:'Cormorant Garamond',serif;font-size:1.15em;margin-right:12px;}
+
+/* ---------- 探究实验室 & 衔接课堂 通用面板 ---------- */
+.panel-overlay{position:absolute;inset:0;z-index:48;display:none;align-items:center;justify-content:center;
+  background:rgba(5,3,12,.72);backdrop-filter:blur(6px);}
+.panel-overlay.show{display:flex;}
+.panel-card{width:min(94vw,940px);max-height:90vh;overflow-y:auto;border-radius:16px;padding:26px 30px 24px;
+  background:linear-gradient(165deg,rgba(22,16,38,.96),rgba(10,7,20,.97));
+  box-shadow:0 24px 70px rgba(0,0,0,.6);scrollbar-width:thin;}
+.panel-card.gold{border:1px solid rgba(212,183,122,.4);}
+.panel-card.cyan{border:1px solid rgba(127,200,216,.4);}
+.panel-tag{display:inline-block;padding:4px 14px;border-radius:999px;font-size:12px;letter-spacing:.25em;margin-bottom:12px;}
+.gold .panel-tag{background:rgba(212,183,122,.14);color:var(--gold);border:1px solid rgba(212,183,122,.35);}
+.cyan .panel-tag{background:var(--cyan-dim);color:var(--cyan);border:1px solid rgba(127,200,216,.4);}
+.panel-title{font-size:clamp(18px,2.4vw,24px);font-weight:600;letter-spacing:.1em;color:#fff;margin-bottom:8px;}
+.panel-intro{font-size:14px;line-height:1.9;color:var(--text);font-weight:300;margin-bottom:18px;letter-spacing:.03em;}
+.panel-intro .em{color:var(--gold-bright);}
+.panel-foot{margin-top:20px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;}
+.panel-status{font-size:13px;color:var(--text-dim);letter-spacing:.05em;line-height:1.7;}
+.panel-status.ok{color:var(--gold-bright);}
+.btn-panel{padding:12px 38px;border:1px solid var(--gold);border-radius:999px;background:transparent;
+  color:var(--gold-bright);font-size:15px;letter-spacing:.25em;cursor:pointer;transition:all .3s;}
+.btn-panel:hover:not(:disabled){background:rgba(212,183,122,.14);box-shadow:0 0 26px rgba(212,183,122,.3);}
+.btn-panel:disabled{opacity:.35;cursor:not-allowed;border-color:rgba(212,183,122,.4);}
+.btn-panel.cyan{border-color:var(--cyan);color:var(--cyan);}
+.btn-panel.cyan:hover:not(:disabled){background:rgba(127,200,216,.12);box-shadow:0 0 26px rgba(127,200,216,.3);}
+
+/* ---------- 探究模块内部 ---------- */
+.lab-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start;}
+.lab-grid.single{grid-template-columns:1fr;}
+@media (max-width:760px){.lab-grid{grid-template-columns:1fr;}}
+.lab-canvas-wrap{background:rgba(0,0,0,.35);border:1px solid rgba(212,183,122,.18);border-radius:12px;
+  padding:10px;display:flex;justify-content:center;}
+.lab-canvas-wrap canvas{max-width:100%;border-radius:6px;}
+.lab-controls{display:flex;flex-direction:column;gap:14px;}
+.slider-row{font-size:13.5px;color:var(--text);letter-spacing:.04em;}
+.slider-row .val{color:var(--gold-bright);font-family:'Cormorant Garamond',serif;font-size:17px;margin-left:6px;}
+input[type=range]{width:100%;appearance:none;height:4px;border-radius:2px;margin-top:8px;
+  background:linear-gradient(90deg,var(--gold) var(--p,50%),rgba(212,183,122,.18) var(--p,50%));outline:none;}
+input[type=range]::-webkit-slider-thumb{appearance:none;width:18px;height:18px;border-radius:50%;
+  background:var(--gold-bright);border:2px solid var(--gold);cursor:pointer;box-shadow:0 0 10px rgba(240,217,168,.6);}
+.lab-readout{background:rgba(0,0,0,.3);border-radius:10px;padding:12px 16px;font-size:14px;line-height:2;letter-spacing:.03em;}
+.lab-readout .k{color:var(--text-dim);font-size:12.5px;letter-spacing:.1em;}
+.lab-readout .v{color:var(--gold-bright);font-family:'Cormorant Garamond',serif;font-size:18px;margin-left:8px;}
+.lab-readout .formula-big{display:block;text-align:center;font-family:'Cormorant Garamond',serif;
+  font-size:21px;color:var(--gold-bright);padding:6px 0;letter-spacing:.05em;}
+.lab-note{font-size:12.5px;color:var(--text-dim);line-height:1.8;letter-spacing:.03em;}
+.lab-note .em{color:var(--gold);}
+.lab-verdict{margin-top:4px;padding:10px 14px;border-radius:10px;font-size:13.5px;line-height:1.8;
+  border:1px dashed rgba(212,183,122,.3);color:var(--text);min-height:24px;}
+.lab-verdict.win{border-style:solid;border-color:var(--gold);color:var(--gold-bright);
+  background:rgba(212,183,122,.08);}
+
+/* 第谷数据表 */
+.tycho-table{width:100%;border-collapse:collapse;font-size:13.5px;}
+.tycho-table th{color:var(--gold);font-weight:400;letter-spacing:.12em;font-size:12px;
+  padding:10px 8px;border-bottom:1px solid rgba(212,183,122,.35);text-align:center;}
+.tycho-table td{padding:10px 8px;text-align:center;border-bottom:1px solid rgba(212,183,122,.1);
+  font-family:'Cormorant Garamond',serif;font-size:15px;letter-spacing:.04em;transition:background .3s;}
+.tycho-table tbody tr{cursor:pointer;transition:background .25s;}
+.tycho-table tbody tr:hover{background:rgba(212,183,122,.08);}
+.tycho-table tr.revealed td.dev{font-weight:600;}
+.tycho-table tr.revealed.ok td.dev{color:var(--text-dim);}
+.tycho-table tr.revealed.hit{background:rgba(212,183,122,.14);}
+.tycho-table tr.revealed.hit td.dev{color:var(--gold-bright);text-shadow:0 0 10px rgba(240,217,168,.6);}
+.tycho-table td.dev{color:rgba(154,146,168,.4);font-style:italic;}
+.tycho-comment{margin-top:14px;font-size:13.5px;line-height:1.9;min-height:52px;padding:12px 16px;
+  border-left:3px solid rgba(212,183,122,.4);background:rgba(0,0,0,.25);border-radius:0 10px 10px 0;color:var(--text);}
+.tycho-comment .em{color:var(--gold-bright);}
+
+/* 衔接课堂 */
+.bridge-map{margin:6px 0 16px;}
+.bridge-map li{list-style:none;padding:12px 16px;margin-bottom:10px;border-radius:10px;font-size:14px;line-height:1.85;
+  background:rgba(127,200,216,.06);border:1px solid rgba(127,200,216,.18);position:relative;padding-left:38px;}
+.bridge-map li::before{content:'➤';position:absolute;left:14px;color:var(--cyan);font-size:12px;top:15px;}
+.bridge-map .em{color:var(--gold-bright);}
+.bridge-book{display:flex;gap:10px;align-items:center;margin-bottom:16px;padding:10px 16px;border-radius:10px;
+  background:rgba(127,200,216,.08);border:1px solid rgba(127,200,216,.25);font-size:13.5px;letter-spacing:.05em;}
+.bridge-book .b{color:var(--cyan);}
+.quiz-q{font-size:15.5px;line-height:1.9;margin-bottom:14px;color:#fff;letter-spacing:.03em;}
+.quiz-opt{display:block;width:100%;text-align:left;background:rgba(14,10,26,.7);border:1px solid rgba(127,200,216,.25);
+  border-radius:10px;padding:12px 18px;margin-bottom:10px;color:var(--text);font-size:14.5px;cursor:pointer;
+  transition:all .25s;letter-spacing:.03em;line-height:1.7;}
+.quiz-opt:hover:not(:disabled){border-color:var(--cyan);background:rgba(127,200,216,.1);}
+.quiz-opt:disabled{cursor:default;}
+.quiz-opt.right{border-color:var(--gold);color:var(--gold-bright);background:rgba(212,183,122,.12);}
+.quiz-opt.wrong{border-color:rgba(220,110,110,.5);color:rgba(220,140,140,.9);}
+.quiz-opt .key{color:var(--cyan);margin-right:10px;font-family:'Cormorant Garamond',serif;font-size:1.1em;}
+.quiz-opt.right .key{color:var(--gold);}
+.quiz-explain{display:none;margin-top:6px;padding:12px 16px;border-radius:10px;font-size:13.5px;line-height:1.9;
+  background:rgba(212,183,122,.07);border:1px dashed rgba(212,183,122,.35);color:var(--text);}
+.quiz-explain.show{display:block;animation:fadeUp .5s;}
+.quiz-explain .em{color:var(--gold-bright);}
+
+/* ---------- 图鉴 ---------- */
+#codex-panel{position:absolute;top:0;right:0;bottom:0;width:min(430px,94vw);z-index:55;
+  background:rgba(10,7,18,.93);backdrop-filter:blur(16px);border-left:1px solid rgba(212,183,122,.3);
+  transform:translateX(105%);transition:transform .5s cubic-bezier(.22,1,.3,1);padding:70px 26px 30px;overflow-y:auto;}
+#codex-panel.open{transform:none;}
+#codex-panel h2{font-size:19px;letter-spacing:.3em;color:var(--gold);margin-bottom:24px;text-align:center;font-weight:600;}
+.codex-card{border:1px solid rgba(212,183,122,.28);border-radius:12px;padding:18px 20px;margin-bottom:16px;
+  background:linear-gradient(160deg,rgba(40,28,60,.35),rgba(14,10,24,.5));animation:fadeUp .6s both;}
+.codex-card h3{color:var(--gold-bright);font-size:16px;letter-spacing:.1em;margin-bottom:10px;font-weight:600;}
+.codex-card h3 .no{font-family:'Cormorant Garamond',serif;color:var(--gold);margin-right:8px;}
+.codex-card p{font-size:13.5px;line-height:1.85;color:var(--text);font-weight:300;}
+.codex-card .formula{display:block;margin-top:10px;padding:9px 12px;background:rgba(0,0,0,.35);border-radius:8px;
+  font-family:'Cormorant Garamond',serif;font-size:15.5px;color:var(--gold-bright);text-align:center;letter-spacing:.06em;}
+.codex-card .tb{display:block;margin-top:8px;font-size:11.5px;color:var(--cyan);letter-spacing:.08em;}
+.codex-empty{text-align:center;color:var(--text-dim);font-size:13px;margin-top:40px;line-height:2;}
+#codex-close{position:absolute;top:20px;right:22px;color:var(--gold);font-size:24px;cursor:pointer;background:none;border:none;}
+
+/* ---------- 探索面板（返回已完成节点） ---------- */
+#explore{position:absolute;inset:0;z-index:58;display:none;background:rgba(5,3,12,.9);backdrop-filter:blur(8px);}
+#explore.show{display:flex;flex-direction:column;align-items:center;}
+#explore-inner{width:min(94vw,980px);max-height:100vh;overflow-y:auto;padding:26px 10px 40px;}
+#explore-head{text-align:center;margin-bottom:18px;}
+#explore-head .ex-era{font-family:'Cormorant Garamond',serif;font-style:italic;letter-spacing:.3em;color:var(--gold);font-size:13px;}
+#explore-head .ex-title{font-size:clamp(22px,3.4vw,32px);letter-spacing:.16em;color:#fff;font-weight:600;margin-top:6px;}
+#explore-tabs{display:flex;justify-content:center;gap:8px;margin-bottom:20px;flex-wrap:wrap;}
+.ex-tab{padding:9px 22px;border-radius:999px;border:1px solid rgba(212,183,122,.3);background:transparent;
+  color:var(--text-dim);font-size:13.5px;letter-spacing:.15em;cursor:pointer;transition:all .3s;}
+.ex-tab.active{border-color:var(--gold);color:var(--gold-bright);background:rgba(212,183,122,.1);}
+.ex-body{display:none;}
+.ex-body.active{display:block;animation:fadeUp .5s;}
+.ex-dialogue{max-width:760px;margin:0 auto;}
+.ex-line{padding:13px 18px;margin-bottom:10px;border-radius:10px;background:rgba(14,10,26,.6);
+  border:1px solid rgba(212,183,122,.14);font-size:14px;line-height:1.9;}
+.ex-line .who{color:var(--gold);font-size:12.5px;letter-spacing:.15em;display:block;margin-bottom:4px;}
+#explore-back{margin:26px auto 0;display:block;}
+
+/* ---------- 封面 & 结局 ---------- */
+.overlay-page{position:absolute;inset:0;z-index:70;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;background:radial-gradient(ellipse at 50% 35%,rgba(46,30,78,.55),rgba(5,3,12,.94) 75%);}
+#cover .game-sub{font-family:'Cormorant Garamond',serif;font-style:italic;letter-spacing:.5em;color:var(--gold);
+  font-size:clamp(12px,1.7vw,17px);margin-bottom:20px;text-transform:uppercase;}
+#cover .game-title{font-size:clamp(44px,8vw,88px);font-weight:700;letter-spacing:.22em;color:#fff;
+  text-shadow:0 0 60px rgba(212,183,122,.5);margin-bottom:16px;}
+#cover .game-chapter{font-size:clamp(15px,2.2vw,22px);color:var(--text-dim);letter-spacing:.3em;margin-bottom:20px;}
+#cover .game-feats{font-size:12.5px;color:var(--text-dim);letter-spacing:.18em;margin-bottom:44px;line-height:2.2;}
+#cover .game-feats span{color:var(--gold);}
+.btn-main{padding:15px 58px;border:1px solid var(--gold);border-radius:999px;background:transparent;color:var(--gold-bright);
+  font-size:17px;letter-spacing:.35em;cursor:pointer;transition:all .35s;margin:7px;}
+.btn-main:hover{background:rgba(212,183,122,.14);box-shadow:0 0 34px rgba(212,183,122,.35);letter-spacing:.42em;}
+.btn-ghost{border-color:rgba(212,183,122,.35);color:var(--text-dim);font-size:14px;padding:12px 44px;}
+#ending{display:none;}
+#ending .end-rank{font-family:'Cormorant Garamond',serif;font-size:clamp(13px,1.6vw,16px);letter-spacing:.5em;
+  color:var(--gold);text-transform:uppercase;margin-bottom:18px;}
+#ending .end-title{font-size:clamp(34px,6vw,64px);font-weight:700;letter-spacing:.3em;margin-bottom:26px;color:#fff;
+  text-shadow:0 0 50px rgba(212,183,122,.55);}
+#ending .end-text{max-width:min(88vw,620px);font-size:clamp(14px,1.8vw,17px);line-height:2.2;font-weight:300;color:var(--text);margin-bottom:14px;}
+#ending .end-score{font-family:'Cormorant Garamond',serif;font-size:21px;color:var(--gold-bright);margin:22px 0 30px;}
+#ending .end-cards{font-size:13px;color:var(--text-dim);margin-bottom:34px;letter-spacing:.08em;}
+
+/* ---------- 幕前铺垫（Briefing） ---------- */
+#briefing{position:absolute;inset:0;z-index:44;display:none;align-items:center;justify-content:center;
+  background:rgba(5,3,12,.82);backdrop-filter:blur(7px);}
+#briefing.show{display:flex;}
+#brief-card{width:min(92vw,720px);border:1px solid rgba(180,154,224,.35);border-radius:18px;
+  background:linear-gradient(170deg,rgba(30,20,52,.96),rgba(12,8,24,.97));
+  padding:34px 40px 28px;box-shadow:0 24px 70px rgba(0,0,0,.65);}
+#brief-card .b-tag{display:inline-block;padding:4px 16px;border-radius:999px;font-size:12px;letter-spacing:.3em;
+  background:rgba(180,154,224,.12);color:#b49ae0;border:1px solid rgba(180,154,224,.4);margin-bottom:16px;}
+#brief-title{font-size:clamp(20px,2.8vw,28px);font-weight:600;letter-spacing:.12em;color:#fff;margin-bottom:16px;}
+#brief-text{font-size:clamp(14.5px,1.8vw,16.5px);line-height:2.15;font-weight:300;letter-spacing:.04em;min-height:130px;}
+#brief-text .em{color:var(--gold-bright);}
+#brief-text .violet{color:#b49ae0;}
+#brief-text .formula-line{display:block;text-align:center;font-family:'Cormorant Garamond',serif;
+  font-size:19px;color:var(--gold-bright);padding:10px 0;letter-spacing:.06em;}
+#brief-foot{display:flex;justify-content:space-between;align-items:center;margin-top:22px;}
+#brief-dots{display:flex;gap:8px;}
+#brief-dots i{width:7px;height:7px;border-radius:50%;background:rgba(180,154,224,.25);transition:all .3s;}
+#brief-dots i.on{background:#b49ae0;box-shadow:0 0 8px rgba(180,154,224,.8);}
+.btn-panel.violet{border-color:#b49ae0;color:#b49ae0;}
+.btn-panel.violet:hover:not(:disabled){background:rgba(180,154,224,.12);}
+
+/* ---------- 自由问答 ---------- */
+#talk-bar{position:absolute;left:50%;transform:translateX(-50%);bottom:max(26px,4vh);width:min(92vw,880px);z-index:36;display:none;}
+#talk-box{background:var(--ink);backdrop-filter:blur(14px);border:1px solid rgba(180,154,224,.45);
+  border-radius:14px;padding:18px 22px 16px;box-shadow:0 18px 50px rgba(0,0,0,.55);}
+#talk-hint{font-size:13px;color:#b49ae0;letter-spacing:.08em;margin-bottom:12px;line-height:1.8;}
+#talk-row{display:flex;gap:10px;}
+#talk-input{flex:1;background:rgba(0,0,0,.4);border:1px solid rgba(180,154,224,.35);border-radius:10px;
+  padding:12px 16px;color:var(--text);font-family:inherit;font-size:15px;outline:none;transition:border-color .3s;}
+#talk-input:focus{border-color:#b49ae0;}
+#talk-input::placeholder{color:rgba(154,146,168,.5);}
+#talk-send{padding:12px 26px;border:1px solid #b49ae0;border-radius:10px;background:rgba(180,154,224,.1);
+  color:#b49ae0;font-size:14px;letter-spacing:.15em;cursor:pointer;transition:all .3s;}
+#talk-send:hover:not(:disabled){background:rgba(180,154,224,.22);}
+#talk-send:disabled{opacity:.4;cursor:not-allowed;}
+#talk-presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+.talk-preset{padding:7px 16px;border-radius:999px;border:1px solid rgba(180,154,224,.3);background:transparent;
+  color:var(--text-dim);font-size:12.5px;cursor:pointer;transition:all .3s;letter-spacing:.05em;}
+.talk-preset:hover{border-color:#b49ae0;color:#b49ae0;}
+#talk-leave{margin-top:12px;padding:9px 30px;border:1px solid var(--gold);border-radius:999px;background:transparent;
+  color:var(--gold-bright);font-size:13.5px;letter-spacing:.2em;cursor:pointer;transition:all .3s;}
+#talk-leave:hover{background:rgba(212,183,122,.12);}
+
+/* ---------- 角色配音声波动画 ---------- */
+#dlg-name{display:inline-flex;align-items:center;gap:8px;}
+#dlg-name .wave{display:none;gap:2px;align-items:flex-end;height:12px;}
+#dlg-name .wave i{width:3px;background:var(--gold-bright);border-radius:2px;animation:wave .9s ease-in-out infinite;}
+#dlg-name .wave i:nth-child(2){animation-delay:.15s}
+#dlg-name .wave i:nth-child(3){animation-delay:.3s}
+#dlg-name.speaking .wave{display:inline-flex;}
+@keyframes wave{0%,100%{height:4px}50%{height:12px}}
+#voice-btn.muted{opacity:.45;}
+#voice-btn,#settings-btn{cursor:pointer;transition:border-color .3s;}
+#voice-btn:hover,#settings-btn:hover{border-color:var(--gold);}
+
+/* ---------- 知识长河收束页 ---------- */
+#river{position:absolute;inset:0;z-index:60;display:none;overflow-y:auto;
+  background:radial-gradient(ellipse at 50% 0%,rgba(46,30,78,.75),rgba(5,3,12,.97) 70%);}
+#river.show{display:block;}
+#river-inner{width:min(94vw,1000px);margin:0 auto;padding:60px 10px 60px;}
+#river .r-tag{text-align:center;font-family:'Cormorant Garamond',serif;font-style:italic;letter-spacing:.45em;
+  color:var(--gold);font-size:14px;text-transform:uppercase;}
+#river h1{text-align:center;font-size:clamp(30px,5vw,52px);letter-spacing:.24em;color:#fff;font-weight:700;
+  margin:14px 0 8px;text-shadow:0 0 44px rgba(212,183,122,.5);}
+#river .r-sub{text-align:center;color:var(--text-dim);font-size:14px;letter-spacing:.2em;margin-bottom:44px;}
+.river-flow{position:relative;}
+.river-flow::before{content:'';position:absolute;left:26px;top:8px;bottom:8px;width:2px;
+  background:linear-gradient(to bottom,rgba(212,183,122,.1),var(--gold),rgba(212,183,122,.1));}
+.river-node{position:relative;padding:0 0 26px 68px;}
+.river-node .r-dot{position:absolute;left:18px;top:6px;width:18px;height:18px;border-radius:50%;
+  border:2px solid var(--gold);background:var(--purple-deep);box-shadow:0 0 14px rgba(212,183,122,.55);}
+.river-node .r-stage{font-size:12px;letter-spacing:.3em;color:var(--gold);margin-bottom:5px;}
+.river-node .r-who{font-size:19px;letter-spacing:.1em;color:#fff;font-weight:600;margin-bottom:8px;}
+.river-node .r-who .r-era{font-family:'Cormorant Garamond',serif;font-size:14px;color:var(--text-dim);
+  margin-left:12px;font-weight:400;letter-spacing:.05em;}
+.river-node .r-did{font-size:14.5px;line-height:1.95;color:var(--text);font-weight:300;margin-bottom:6px;}
+.river-node .r-did .em{color:var(--gold-bright);}
+.river-node .r-pass{font-size:12.5px;color:var(--cyan);letter-spacing:.05em;}
+.river-node .r-pass::before{content:'↳ 传给下一站：';color:var(--text-dim);}
+#river-meaning{margin-top:44px;border:1px solid rgba(127,200,216,.3);border-radius:16px;padding:26px 30px;
+  background:linear-gradient(165deg,rgba(20,34,44,.6),rgba(10,7,20,.8));}
+#river-meaning h2{font-size:20px;letter-spacing:.2em;color:var(--cyan);margin-bottom:18px;font-weight:600;}
+#river-meaning .rm-book{font-size:14.5px;line-height:2;color:var(--text);margin-bottom:16px;}
+#river-meaning .rm-book .em{color:var(--gold-bright);}
+#river-apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;}
+#river-apps .app{padding:12px 16px;border-radius:10px;background:rgba(127,200,216,.06);
+  border:1px solid rgba(127,200,216,.16);font-size:13.5px;line-height:1.75;}
+#river-quote{text-align:center;margin:44px 0 30px;font-size:clamp(15px,2vw,18px);line-height:2.4;
+  color:var(--text);font-weight:300;font-style:italic;}
+#river-quote .em{color:var(--gold-bright);font-style:normal;}
+#river-enter{margin:0 auto;display:block;}
+
+/* ---------- AI 设置面板 ---------- */
+#settings{position:absolute;inset:0;z-index:75;display:none;align-items:center;justify-content:center;
+  background:rgba(5,3,12,.8);backdrop-filter:blur(6px);}
+#settings.show{display:flex;}
+#settings-card{width:min(92vw,560px);border:1px solid rgba(180,154,224,.4);border-radius:16px;
+  background:linear-gradient(165deg,rgba(26,18,46,.97),rgba(10,7,20,.98));padding:28px 32px;}
+#settings-card h2{font-size:19px;letter-spacing:.25em;color:#b49ae0;margin-bottom:20px;font-weight:600;}
+.set-row{margin-bottom:16px;}
+.set-row label{display:block;font-size:12.5px;color:var(--text-dim);letter-spacing:.12em;margin-bottom:7px;}
+.set-row input{width:100%;background:rgba(0,0,0,.4);border:1px solid rgba(180,154,224,.3);border-radius:9px;
+  padding:11px 14px;color:var(--text);font-family:inherit;font-size:14px;outline:none;}
+.set-row input:focus{border-color:#b49ae0;}
+.set-note{font-size:12px;color:var(--text-dim);line-height:1.9;margin:6px 0 18px;padding:12px 14px;
+  background:rgba(180,154,224,.06);border-radius:9px;border:1px dashed rgba(180,154,224,.25);}
+.set-note .em{color:#b49ae0;}
+#set-actions{display:flex;justify-content:flex-end;gap:12px;}
+
+/* ---------- 加载 ---------- */
+#loader{position:absolute;inset:0;z-index:99;background:var(--purple-deep);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;transition:opacity .8s;}
+#loader .spin{width:44px;height:44px;border:1px solid rgba(212,183,122,.2);border-top-color:var(--gold);
+  border-radius:50%;animation:spin 1s linear infinite;margin-bottom:22px;}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loader p{color:var(--text-dim);font-size:13px;letter-spacing:.4em;}
+
+@media (max-width:640px){
+  #timeline{gap:7px;} #timeline .node{width:7px;height:7px;}
+  #hud{top:10px;right:10px}.hud-chip{padding:6px 10px}
+  #dlg-box{padding:16px 18px;min-height:100px}
+  .panel-card{padding:20px 16px;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="scenes"></div>
+
+  <div id="era-card">
+    <div class="era-en" id="era-en"></div>
+    <div class="era-title" id="era-title"></div>
+    <div class="era-line"></div>
+  </div>
+
+  <!-- 幕前铺垫 -->
+  <div id="briefing">
+    <div id="brief-card">
+      <span class="b-tag">幕 前 · 背 景</span>
+      <div id="brief-title"></div>
+      <div id="brief-text"></div>
+      <div id="brief-foot">
+        <div id="brief-dots"></div>
+        <button class="btn-panel violet" id="brief-next">继续 →</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="timeline-wrap">
+    <div id="timeline"></div>
+    <div id="tl-hint">点亮的节点可以随时重返探索</div>
+  </div>
+
+  <div id="hud">
+    <div class="hud-chip" id="voice-btn" title="配音开关">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M11 5L6 9H3v6h3l5 4V5z" stroke="#d4b77a" stroke-width="1.5"/><path d="M15.5 8.5a5 5 0 010 7M18 6a8.5 8.5 0 010 12" stroke="#d4b77a" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </div>
+    <div class="hud-chip" title="共鸣度 —— 你与「曲线」的羁绊">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2L22 12L12 22L2 12Z" stroke="#d4b77a" stroke-width="1.6"/></svg>
+      <span id="resonance-val">0</span>
+    </div>
+    <div class="hud-chip" id="codex-btn" title="知识图鉴">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 4h13a3 3 0 013 3v13H7a3 3 0 01-3-3V4z" stroke="#d4b77a" stroke-width="1.5"/><path d="M8 8h8M8 12h8" stroke="#d4b77a" stroke-width="1.3"/></svg>
+      <span style="font-size:13px;letter-spacing:.15em;color:var(--gold)">图鉴</span>
+    </div>
+    <div class="hud-chip" id="settings-btn" title="AI 设置">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="#d4b77a" stroke-width="1.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" stroke="#d4b77a" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+
+  <div id="dialogue" style="display:none">
+    <div id="dlg-name"><span id="dlg-name-text"></span><span class="wave"><i></i><i></i><i></i></span></div>
+    <div id="dlg-box">
+      <div id="dlg-text"></div>
+      <div id="dlg-hint">点击继续</div>
+      <div id="dlg-next">▼</div>
+    </div>
+  </div>
+
+  <!-- 自由问答 -->
+  <div id="talk-bar">
+    <div id="talk-box">
+      <div id="talk-hint"></div>
+      <div id="talk-row">
+        <input id="talk-input" maxlength="120" placeholder="向 TA 提问……">
+        <button id="talk-send">发问</button>
+      </div>
+      <div id="talk-presets"></div>
+      <button id="talk-leave">问完了，继续旅程 →</button>
+    </div>
+  </div>
+
+  <div id="choice-layer">
+    <div id="choice-inner">
+      <div id="choice-prompt"></div>
+      <div id="choice-opts"></div>
+    </div>
+  </div>
+
+  <!-- 探究实验室 -->
+  <div class="panel-overlay" id="lab-overlay">
+    <div class="panel-card gold">
+      <span class="panel-tag">探 究 实 验 室</span>
+      <div class="panel-title" id="lab-title"></div>
+      <div class="panel-intro" id="lab-intro"></div>
+      <div id="lab-host"></div>
+      <div class="panel-foot">
+        <div class="panel-status" id="lab-status"></div>
+        <button class="btn-panel" id="lab-done" disabled>完成探究 →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 衔接课堂 -->
+  <div class="panel-overlay" id="bridge-overlay">
+    <div class="panel-card cyan">
+      <span class="panel-tag">衔 接 课 堂</span>
+      <div class="panel-title">从长河回到课本</div>
+      <div class="bridge-book">📖 <span class="b" id="bridge-textbook"></span></div>
+      <ul class="bridge-map" id="bridge-map"></ul>
+      <div class="quiz-q" id="quiz-q"></div>
+      <div id="quiz-opts"></div>
+      <div class="quiz-explain" id="quiz-explain"></div>
+      <div class="panel-foot">
+        <div class="panel-status" id="bridge-status">答对课本小题，共鸣度 +10</div>
+        <button class="btn-panel cyan" id="bridge-done" disabled>收进图鉴 →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 图鉴 -->
+  <div id="codex-panel">
+    <button id="codex-close">×</button>
+    <h2>知 识 图 鉴</h2>
+    <div id="codex-list"><div class="codex-empty">尚未收集任何知识卡<br>跟随时间线，与每一位伟大心灵相遇</div></div>
+  </div>
+
+  <!-- 探索面板 -->
+  <div id="explore">
+    <div id="explore-inner">
+      <div id="explore-head">
+        <div class="ex-era" id="ex-era"></div>
+        <div class="ex-title" id="ex-title"></div>
+      </div>
+      <div id="explore-tabs">
+        <button class="ex-tab active" data-tab="dlg">对话回顾</button>
+        <button class="ex-tab" data-tab="lab">重玩探究</button>
+        <button class="ex-tab" data-tab="card">知识卡</button>
+      </div>
+      <div class="ex-body active" id="ex-dlg"><div class="ex-dialogue" id="ex-dlg-list"></div></div>
+      <div class="ex-body" id="ex-lab"><div id="ex-lab-host"></div></div>
+      <div class="ex-body" id="ex-card"><div id="ex-card-host"></div></div>
+      <button class="btn-main btn-ghost" id="explore-back">返 回 旅 程</button>
+    </div>
+  </div>
+
+  <!-- 知识长河收束页 -->
+  <div id="river">
+    <div id="river-inner">
+      <div class="r-tag">The Long River of Knowledge</div>
+      <h1>知 识 长 河</h1>
+      <div class="r-sub">从来源到发展 · 一个概念的完整一生</div>
+      <div class="river-flow" id="river-flow"></div>
+      <div id="river-meaning">
+        <h2>它对今天的意义</h2>
+        <div class="rm-book" id="rm-book"></div>
+        <div id="river-apps"></div>
+      </div>
+      <div id="river-quote"></div>
+      <button class="btn-main" id="river-enter">抵 达 结 局</button>
+    </div>
+  </div>
+
+  <!-- 封面 -->
+  <div id="cover" class="overlay-page">
+    <div class="game-sub">Realm of Knowledge</div>
+    <div class="game-title">知识之境</div>
+    <div class="game-chapter">勾股定理 · 从周公的矩尺到赵爽的弦图</div>
+    <div style="font-size:14px;color:var(--text-dim);letter-spacing:.2em;margin-bottom:26px;">一个直角三角形三边关系的四千年求证之路</div>
+    <div class="game-feats">六段历史现场 · 六个<span>可操作探究实验</span> · 六节<span>课本衔接课堂</span><br>幕前铺垫 · <span>AI 自由问答</span> · 角色配音 · 终章「知识长河」收束</div>
+    <button class="btn-main" id="btn-start">开 始 旅 程</button>
+    <button class="btn-main btn-ghost" id="btn-continue" style="display:none">继 续 旅 程</button>
+    <a href="../../generate.html" style="display:block;margin-top:26px;color:var(--text-dim);font-size:13px;letter-spacing:.25em;text-decoration:none;transition:color .3s;" onmouseover="this.style.color='var(--gold)'" onmouseout="this.style.color='var(--text-dim)'">✦ 输入新主题，生成新篇章</a>
+  </div>
+
+  <!-- 结局 -->
+  <div id="ending" class="overlay-page">
+    <div class="end-rank" id="end-rank"></div>
+    <div class="end-title" id="end-title"></div>
+    <div class="end-text" id="end-text"></div>
+    <div class="end-score" id="end-score"></div>
+    <div class="end-cards" id="end-cards"></div>
+    <button class="btn-main" id="btn-restart">再 入 长 河</button>
+  </div>
+
+  <!-- AI 设置 -->
+  <div id="settings">
+    <div id="settings-card">
+      <h2>AI 设 置</h2>
+      <div class="set-note">用 <span class="em">python3 server.py</span> 启动时会自动读取 edu-agent 根目录 .env 的 LLM（及可选 TTS_*）配置，<span class="em">无需任何手动填写</span>。这里的表单仅用于脱离 server.py 运行（如直接双击 html）时的手动直连。<br>配音说明：<span class="em">浏览器自带语音较机械，仅作兜底</span>；在 .env 加 TTS_BASE_URL 等配置，或在此处填 TTS 接口，即可获得真人级角色配音。</div>
+      <div class="set-row"><label>LLM Base URL（如 https://api.openai.com/v1）</label><input id="set-llm-url" placeholder="留空则关闭自由问答"></div>
+      <div class="set-row"><label>LLM API Key</label><input id="set-llm-key" type="password" placeholder="sk-..."></div>
+      <div class="set-row"><label>LLM 模型名</label><input id="set-llm-model" placeholder="如 gpt-4o-mini / deepseek-chat"></div>
+      <div class="set-row"><label>TTS Base URL（可空，OpenAI 兼容 /audio/speech）</label><input id="set-tts-url" placeholder="留空则使用浏览器语音"></div>
+      <div id="set-actions">
+        <button class="btn-panel" id="set-test" style="padding:10px 24px">试听配音</button>
+        <button class="btn-panel violet" id="set-save" style="padding:10px 30px">保存</button>
+        <button class="btn-panel" id="set-close" style="padding:10px 30px">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loader"><div class="spin"></div><p>世界构筑中</p></div>
+</div>
+
+<script src="story.js"></script>
+<script>
+/* ============================================================
+   知识之境 · 圆锥曲线篇 v3
+   幕前铺垫 → 对话 → 决策 → 自由问答(LLM) → 实验 → 衔接课堂
+   角色配音（Web Speech / OpenAI兼容TTS） · 知识长河收束
+   ============================================================ */
+
+const { STORY, APP_STORY, RIVER, RIVER_BOOK, RIVER_APPS, RIVER_QUOTE, RIVER_QUOTE_AUDIO, TYCHO_DATA, ENDINGS } = window.STORY_DATA;
+// 播放序列 = 历史幕 + 应用幕（应用幕在历史幕走完后、知识长河收束前播放；旧篇章无 APP_STORY 时安全退化）
+const ALL_NODES = STORY.concat(APP_STORY || []);
+/* 篇章 META（工厂生成时注入）：向导名 → 声线自动注册 */
+const META = window.STORY_DATA.META || {};
+
+/* ================= 引擎状态 ================= */
+const $ = id => document.getElementById(id);
+const state = { node:0, resonance:0, cards:[], doneNodes:[], typing:false };
+
+function saveGame(){
+  try{ localStorage.setItem('live_science_pythagorean-journey_v1', JSON.stringify({
+    node:state.node, resonance:state.resonance, cards:state.cards, doneNodes:state.doneNodes })); }catch(e){}
+}
+function loadGame(){
+  try{ const s = JSON.parse(localStorage.getItem('live_science_pythagorean-journey_v1'));
+    if(s && typeof s.node==='number' && s.node>0 && s.node<ALL_NODES.length){ return s; } }catch(e){}
+  return null;
+}
+function clearSave(){ try{ localStorage.removeItem('live_science_pythagorean-journey_v1'); }catch(e){} }
+
+/* ---------- AI 配置 ---------- */
+function loadAICfg(){
+  try{ return JSON.parse(localStorage.getItem('live_science_ai_cfg'))||{}; }catch(e){ return {}; }
+}
+function saveAICfg(c){ try{ localStorage.setItem('live_science_ai_cfg', JSON.stringify(c)); }catch(e){} }
+
+/* ============================================================
+   配音层：优先 OpenAI 兼容 TTS，兜底 Web Speech API
+   曲线之灵=空灵女声；科学家按年龄/性格差异化声线
+   ============================================================ */
+const Voice = {
+  enabled: localStorage.getItem('live_science_voice')!=='off',
+  audio: null,
+  profiles:{
+    // 浏览器兜底通道用 pitch/rate（收敛在自然音域，大幅升降调会机械失真）
+    // DashScope 通道用 tvoice + instruct（qwen3-tts-instruct-flash 的语气指令是核心能力）
+    '？？？':     {gender:'f', pitch:1.06, rate:0.90, tvoice:'Chelsie', instruct:'空灵、缓慢的女声，像在星空中低语，带轻微回响感'},
+    '曲线之灵':   {gender:'f', pitch:1.06, rate:0.90, tvoice:'Chelsie', instruct:'空灵、缓慢的女声，像在星空中低语，带轻微回响感'},
+    '旁白':       {gender:'f', pitch:1.00, rate:0.96, tvoice:'Serena', instruct:'平静温柔的旁白女声，娓娓道来的讲述感'},
+    '你':         {gender:'m', pitch:1.00, rate:1.00, tvoice:'Ethan',  instruct:'年轻学生的声音，好奇、轻声'},
+    '梅内克缪斯': {gender:'m', pitch:1.03, rate:1.02, tvoice:'Ethan',  instruct:'年轻学者，急切而兴奋，语速偏快'},
+    '阿波罗尼奥斯':{gender:'m', pitch:0.99, rate:0.96, tvoice:'Nofish', instruct:'沉稳自信的中年学者男声，从容不迫'},
+    '开普勒':     {gender:'m', pitch:0.96, rate:0.94, tvoice:'Nofish', instruct:'中年男声，疲惫而执着，略带沙哑，偶尔激动'},
+    '笛卡尔':     {gender:'m', pitch:0.98, rate:0.92, tvoice:'Nofish', instruct:'从容慵懒的中年男声，循循善诱'},
+    '牛顿':       {gender:'m', pitch:1.01, rate:1.04, tvoice:'Ethan',  instruct:'冷峻的年轻男声，语速略快，防御性中藏着热切'}
+  },
+  _voices: null,
+  // 篇章向导声线自动注册（META.guide_name 不在预置表时注入空灵女声）
+  // + 全篇章科学家角色自动注册（不依赖 LLM 额外提供声线元数据——任何新主题生成的新角色名都会自动分配到差异化声线，
+  //   而不是像早期生成篇章那样全部落到同一个默认 Cherry 声线，听不出区分）
+  // 声线池按性别分成两组（不能混用交替分配——历史科学家绝大多数是男性，交替分配会把"卡文迪许""爱因斯坦"
+  //   这样的真实男性人物错配成女声，这是实测踩过的真实事故）。性别判断来自 META.cast（工厂生成时 LLM 标注 +
+  //   代码兜底），按角色名分配到对应性别池，同性别池内按名字排序轮转，保证同性别角色之间也听得出区分。
+  // 男声 9 个 / 女声 8 个，均为 qwen3-tts-instruct-flash 实测可用的真实不同音色
+  // （早期版本男声只有 Nofish/Ethan 两个真实音色换 pitch 凑数，2026-08 实测扩充 Moon/Kai/Eldric Sage/
+  //   Vincent/Arthur/Neil/Mochi 七个新男声，官方音色表见 aliyun model-studio qwen-tts-voice-list）
+  _poolMale: [
+    {gender:'m', pitch:0.95, rate:0.90, tvoice:'Eldric Sage', instruct:'沉稳睿智的老者男声，沧桑如松却心明如镜，语速缓慢字字有力'},
+    {gender:'m', pitch:1.02, rate:1.05, tvoice:'Ethan',       instruct:'标准普通话年轻男声，阳光温暖，充满朝气与冲劲'},
+    {gender:'m', pitch:0.98, rate:0.92, tvoice:'Nofish',      instruct:'从容自信的中年男声，循循善诱，带点狡黠'},
+    {gender:'m', pitch:1.00, rate:1.08, tvoice:'Mochi',       instruct:'聪明伶俐的年轻男声，语速偏快，带一点少年早慧的锐气'},
+    {gender:'m', pitch:0.97, rate:0.85, tvoice:'Vincent',     instruct:'带沙哑烟嗓质感的男声，苍劲豪情，字字有重量'},
+    {gender:'m', pitch:0.99, rate:0.95, tvoice:'Arthur',      instruct:'被岁月浸泡过的质朴男声，不疾不徐，带乡野智者的从容'},
+    {gender:'m', pitch:1.01, rate:1.00, tvoice:'Kai',         instruct:'温润舒缓的男声，如耳畔SPA般平和亲切'},
+    {gender:'m', pitch:0.93, rate:0.88, tvoice:'Moon',        instruct:'率性帅气的男声，洒脱不羁又带一丝孤傲'},
+    {gender:'m', pitch:1.00, rate:0.98, tvoice:'Neil',        instruct:'平直基线语调，字正腔圆，专业播报感'},
+  ],
+  _poolFemale: [
+    {gender:'f', pitch:1.02, rate:0.98, tvoice:'Serena',      instruct:'温柔成熟的女性学者声，清晰理性，不疾不徐'},
+    {gender:'f', pitch:1.05, rate:1.02, tvoice:'Bella',       instruct:'干脆利落带点小暴躁的女声，倔强直接'},
+    {gender:'f', pitch:0.98, rate:0.92, tvoice:'Vivian',      instruct:'温和成熟女声，带学者的耐心与韧性'},
+    {gender:'f', pitch:1.00, rate:0.95, tvoice:'Maia',        instruct:'知性与温柔碰撞的女声，沉静而有分量'},
+    {gender:'f', pitch:1.03, rate:1.00, tvoice:'Chelsie',     instruct:'清亮灵动的年轻女声，好奇又专注'},
+    {gender:'f', pitch:0.96, rate:0.90, tvoice:'Katerina',    instruct:'御姐气质女声，韵律沉稳，回味十足'},
+    {gender:'f', pitch:1.04, rate:1.03, tvoice:'Momo',        instruct:'撒娇搞怪略带调皮的女声，鲜活跳脱'},
+    {gender:'f', pitch:1.01, rate:0.97, tvoice:'Cherry',      instruct:'阳光积极亲切自然的女声，稳重可靠'},
+  ],
+  // 年龄段音色子集：cast 标注 -old/-young 时从这里选（图年长的人物不再配年轻音）
+  _poolMaleElder: [
+    {gender:'m', pitch:0.95, rate:0.90, tvoice:'Eldric Sage', instruct:'沉稳睿智的老者男声，沧桑如松却心明如镜，语速缓慢字字有力'},
+    {gender:'m', pitch:0.97, rate:0.85, tvoice:'Vincent',     instruct:'带沙哑烟嗓质感的男声，苍劲豪情，字字有重量'},
+    {gender:'m', pitch:0.99, rate:0.95, tvoice:'Arthur',      instruct:'被岁月浸泡过的质朴男声，不疾不徐，带乡野智者的从容'},
+  ],
+  _poolMaleYoung: [
+    {gender:'m', pitch:1.02, rate:1.05, tvoice:'Ethan',       instruct:'标准普通话年轻男声，阳光温暖，充满朝气与冲劲'},
+    {gender:'m', pitch:1.00, rate:1.08, tvoice:'Mochi',       instruct:'聪明伶俐的年轻男声，语速偏快，带一点少年早慧的锐气'},
+  ],
+  _poolFemaleElder: [
+    {gender:'f', pitch:1.02, rate:0.98, tvoice:'Serena',      instruct:'温柔成熟的女性学者声，清晰理性，不疾不徐'},
+    {gender:'f', pitch:0.96, rate:0.90, tvoice:'Katerina',    instruct:'御姐气质女声，韵律沉稳，回味十足'},
+    {gender:'f', pitch:0.98, rate:0.92, tvoice:'Vivian',      instruct:'温和成熟女声，带学者的耐心与韧性'},
+  ],
+  _poolFemaleYoung: [
+    {gender:'f', pitch:1.05, rate:1.02, tvoice:'Bella',       instruct:'干脆利落带点小暴躁的女声，倔强直接'},
+    {gender:'f', pitch:1.03, rate:1.00, tvoice:'Chelsie',     instruct:'清亮灵动的年轻女声，好奇又专注'},
+    {gender:'f', pitch:1.04, rate:1.03, tvoice:'Momo',        instruct:'撒娇搞怪略带调皮的女声，鲜活跳脱'},
+  ],
+  registerMeta(){
+    if(META.guide_name && !this.profiles[META.guide_name]){
+      this.profiles[META.guide_name]={gender:'f',pitch:1.06,rate:0.90,tvoice:(META.guide_voice&&META.guide_voice.tvoice)||'Chelsie',
+        instruct:(META.guide_voice&&META.guide_voice.instruct)||'空灵、缓慢的女声，像在星空中低语，带轻微回响感'};
+    }
+    // 扫描全篇章 dialogues/afterChoice 里出现过的所有角色名，按 META.cast 查真实性别后从对应性别池分配
+    // （cast 缺失时默认按男性分配——历史科学家绝大多数是男性，这比瞎猜更准确）
+    const cast=META.cast||{};
+    const seen=new Set();
+    // 扫描历史幕 + 应用幕（与后端 resolve_voice_profiles 的 all_speech_nodes 对齐，
+    // 否则应用幕角色参与轮转导致同一角色前后音色错位）
+    ((window.STORY_DATA && window.STORY_DATA.STORY || [])
+      .concat(window.STORY_DATA && window.STORY_DATA.APP_STORY || [])).forEach(n=>{
+      ['dialogues','afterChoice'].forEach(key=>{
+        (n[key]||[]).forEach(d=>{
+          const who=d.who;
+          if(who && !['旁白','你','？？？'].includes(who) && who!==META.guide_name){ seen.add(who); }
+        });
+      });
+    });
+    const counters={};
+    [...seen].sort().forEach(name=>{
+      if(this.profiles[name]) return;
+      const raw=String(cast[name]||'m');
+      const isF=raw.startsWith('f');
+      const age=raw.endsWith('old')?'old':(raw.endsWith('young')?'young':'');
+      let pool,key;
+      if(age==='old'){ pool=isF?this._poolFemaleElder:this._poolMaleElder; key=(isF?'f':'m')+'-old'; }
+      else if(age==='young'){ pool=isF?this._poolFemaleYoung:this._poolMaleYoung; key=(isF?'f':'m')+'-young'; }
+      else{ pool=isF?this._poolFemale:this._poolMale; key=isF?'f':'m'; }
+      const i=counters[key]||0;
+      this.profiles[name]=pool[i%pool.length];
+      counters[key]=i+1;
+    });
+  },
+  getVoices(){
+    if(!this._voices && 'speechSynthesis' in window){
+      this._voices = speechSynthesis.getVoices().filter(v=>v.lang.startsWith('zh'));
+    }
+    return this._voices||[];
+  },
+  pickLocal(gender){
+    const vs=this.getVoices();
+    if(!vs.length) return null;
+    const fh=/ting|mei|hui|ya|female|sinji|lilian|sha|yu/i;
+    const f=vs.find(v=>fh.test(v.name));
+    const m=vs.find(v=>!fh.test(v.name));
+    return gender==='f' ? (f||vs[0]) : (m||vs[0]);
+  },
+  strip(html){ return html.replace(/<[^>]+>/g,''); },
+  stop(){
+    if(this._pendingDone){ const p=this._pendingDone; this._pendingDone=null; p(); }
+    if('speechSynthesis' in window) speechSynthesis.cancel();
+    if(this.audio){ try{ this.audio.pause(); }catch(e){} this.audio=null; }
+    $('dlg-name').classList.remove('speaking');
+  },
+  // 返回 { started, done } 双 Promise：
+  // started = 语音真正开始播放（文字应在此刻才开始弹出，声文起点对齐）
+  // done = 播放结束（播完才允许跳下一句）；关闭/失败/超时全部兜底 resolve，绝不卡死剧情
+  speak(html, who, audioPath){
+    this.stop();
+    const text=this.strip(html);
+    const idle={ started:Promise.resolve(), done:Promise.resolve() };
+    if(!this.enabled || !text) return idle;
+    const prof=this.profiles[who]||{gender:'f',pitch:1,rate:1,tvoice:'Cherry',instruct:''};
+    const cfg=loadAICfg();
+    const timeoutMs=Math.min(text.length*450 + 12000, 60000);
+    let startRes, doneRes;
+    const started=new Promise(r=>startRes=r);
+    const done=new Promise(r=>doneRes=r);
+    let startSettled=false, doneSettled=false;
+    const fireStart=()=>{ if(startSettled) return; startSettled=true; startRes(); };
+    const fireDone=()=>{ if(doneSettled) return; doneSettled=true; fireStart();
+      $('dlg-name').classList.remove('speaking');
+      if(this._pendingDone===fireDone) this._pendingDone=null;
+      doneRes(); };
+    this._pendingDone=fireDone;
+    setTimeout(fireDone, timeoutMs);
+    $('dlg-name').classList.add('speaking');
+    (async()=>{
+      // 通道 0：预渲染本地音频（生成时已合成，零等待；文件缺失/加载失败落回下一通道）
+      if(audioPath){
+        try{
+          const a=new Audio(audioPath);
+          a.onended=fireDone;
+          a.onerror=()=>{}; // 加载失败(404)不提前 fireDone，交给 play() reject 走 catch 降级到实时合成
+          a.onplaying=fireStart;
+          this.audio=a;
+          await a.play();
+          fireStart();
+          return;
+        }catch(e){ /* 落回下一通道 */ }
+      }
+      // 通道 1：本地代理 /api/demo/live-science/tts（server.py → DashScope / OpenAI 兼容）
+      if(Backend.tts){
+        try{
+          const resp=await fetch('/api/demo/live-science/tts',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({voice:prof.tvoice, instruct:prof.instruct||'', input:text.slice(0,600), speed:prof.rate})
+          });
+          const ct=resp.headers.get('Content-Type')||'';
+          if(resp.ok && ct.startsWith('audio')){
+            const blob=await resp.blob();
+            this.audio=new Audio(URL.createObjectURL(blob));
+            this.audio.onended=fireDone; this.audio.onerror=fireDone;
+            this.audio.onplaying=fireStart;
+            await this.audio.play();
+            fireStart();  // play 成功即视为开始
+            return;
+          }
+        }catch(e){ /* 落回下一通道 */ }
+      }
+      // 通道 2：⚙ 设置中的 TTS 直连
+      if(cfg.ttsUrl && cfg.llmKey){
+        try{
+          const resp=await fetch(cfg.ttsUrl.replace(/\/+$/,'')+'/audio/speech',{
+            method:'POST',
+            headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.llmKey},
+            body:JSON.stringify({model:'tts-1', voice:prof.tvoice, input:text.slice(0,600), speed:prof.rate})
+          });
+          if(resp.ok){
+            const blob=await resp.blob();
+            this.audio=new Audio(URL.createObjectURL(blob));
+            this.audio.onended=fireDone; this.audio.onerror=fireDone;
+            this.audio.onplaying=fireStart;
+            await this.audio.play();
+            fireStart();
+            return;
+          }
+        }catch(e){ /* 落回浏览器语音 */ }
+      }
+      // 通道 3：浏览器语音兜底
+      if('speechSynthesis' in window){
+        this._maybeToast();
+        const u=new SpeechSynthesisUtterance(text.slice(0,300));
+        u.lang='zh-CN'; u.pitch=prof.pitch; u.rate=prof.rate;
+        const v=this.pickLocal(prof.gender); if(v) u.voice=v;
+        u.onstart=fireStart;
+        u.onend=fireDone; u.onerror=fireDone;
+        speechSynthesis.speak(u);
+      } else {
+        fireDone();
+      }
+    })();
+    return { started, done };
+  },
+  _maybeToast(){
+    if(this._toasted) return; this._toasted=true;
+    if(loadAICfg().ttsUrl) return;
+    const t=document.createElement('div');
+    t.style.cssText='position:absolute;top:64px;left:50%;transform:translateX(-50%);z-index:90;'
+      +'background:rgba(10,8,20,.88);border:1px solid rgba(212,183,122,.4);border-radius:999px;'
+      +'padding:10px 22px;font-size:12.5px;color:#9a92a8;letter-spacing:.06em;backdrop-filter:blur(8px);'
+      +'transition:opacity .8s;pointer-events:none;';
+    t.innerHTML='当前为浏览器合成语音 · 在 ⚙ 设置中填入 TTS 接口可获得真人级配音';
+    document.getElementById('app').appendChild(t);
+    setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),900); }, 5200);
+  }
+};
+Voice.registerMeta();
+if('speechSynthesis' in window){ speechSynthesis.getVoices(); speechSynthesis.onvoiceschanged=()=>{ Voice._voices=null; }; }
+
+/* ============================================================
+   LLM 自由问答层：优先本地代理 /api/demo/live-science/llm（server.py 自动读项目 .env），
+   代理不可用时回退到 ⚙ 设置中的 OpenAI 兼容直连
+   ============================================================ */
+const Backend = { llm:false, tts:false, checked:false };
+async function checkBackend(){
+  try{
+    const r=await fetch('/api/demo/live-science/health');
+    const d=await r.json();
+    Backend.llm=!!d.llm; Backend.tts=!!d.tts;
+  }catch(e){ /* 纯静态模式，无代理 */ }
+  Backend.checked=true;
+}
+checkBackend();
+
+async function askLLM(persona, context, userText){
+  const sys='你正在一个教育叙事体验中扮演角色。角色设定：'+persona+'\n\n当前剧情背景：'+context+'\n\n要求：\n1. 完全以角色第一人称口吻回答，50-120字，口语化，有情感\n2. 绝对不得突破角色的知识边界；被问到边界外的问题时，用角色的困惑、推测或幽默回应，并自然把话题引回其时代的相关思考\n3. 鼓励学生继续追问，结尾可反问一个引导性问题\n4. 不要提及你是AI、不要出戏、不要用列表\n5. 只能输出纯文本口语化句子，禁止使用任何 Markdown 语法（**加粗**、# 标题、- 列表等）和 HTML 标签；涉及数学记号（如"由a生成的循环群"）必须用中文说清楚（"a生成的循环群"），不要用尖括号包裹字母（如<a>），那会被界面误判成网页标签导致内容丢失';
+  const messages=[{role:'system',content:sys},{role:'user',content:userText}];
+  // 通道 1：本地代理（server.py，零配置）
+  if(Backend.llm){
+    try{
+      const r=await fetch('/api/demo/live-science/llm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages})});
+      const d=await r.json();
+      if(d.ok && d.text) return d.text.trim();
+    }catch(e){ /* 落回直连 */ }
+  }
+  // 通道 2：⚙ 设置中的直连配置
+  const cfg=loadAICfg();
+  if(!cfg.llmUrl || !cfg.llmKey || !cfg.llmModel) return null;
+  const resp=await fetch(cfg.llmUrl.replace(/\/+$/,'')+'/chat/completions',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.llmKey},
+    body:JSON.stringify({model:cfg.llmModel, messages, temperature:0.8})
+  });
+  if(!resp.ok) throw new Error('LLM '+resp.status);
+  const data=await resp.json();
+  return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content||'').trim()||null;
+}
+
+/* 预加载 */
+const IMGS = ALL_NODES.map(s=>s.img);
+let loaded = 0;
+IMGS.forEach(src=>{ const im=new Image(); im.onload=im.onerror=()=>{ if(++loaded>=IMGS.length){ $('loader').style.opacity=0; setTimeout(()=>$('loader').remove(),850);} }; im.src=src; });
+
+/* 建场景与时间线 */
+const scenesEl = $('scenes');
+ALL_NODES.forEach((s,i)=>{
+  const d=document.createElement('div'); d.className='scene'; d.id='scene-'+s.id;
+  d.innerHTML=`<img src="${s.img}" alt="">`; scenesEl.appendChild(d);
+  const n=document.createElement('div'); n.className='node'; n.id='tl-'+i;
+  n.innerHTML=`<span class="tip">${s.eraTitle}</span>`;
+  n.onclick=()=>{ if(state.doneNodes.includes(i)) openExplore(i); };
+  $('timeline').appendChild(n);
+});
+
+function setScene(id){
+  document.querySelectorAll('.scene').forEach(el=>el.classList.remove('active'));
+  $('scene-'+id).classList.add('active');
+}
+function updateTimeline(){
+  ALL_NODES.forEach((s,i)=>{
+    const el=$('tl-'+i);
+    el.classList.toggle('done', state.doneNodes.includes(i));
+    el.classList.toggle('now', i===state.node);
+  });
+  $('tl-hint').classList.toggle('show', state.doneNodes.length>0);
+}
+function updateRes(delta){
+  if(delta){ state.resonance+=delta;
+    const f=document.createElement('div'); f.className='res-float'; f.textContent='+'+delta+' ✦';
+    $('hud').appendChild(f); setTimeout(()=>f.remove(),1650);
+  }
+  $('resonance-val').textContent=state.resonance;
+}
+
+/* 时代标题卡 */
+function showEra(s, cb){
+  $('era-en').textContent=s.eraEn; $('era-title').textContent=s.eraTitle;
+  const card=$('era-card'); card.classList.add('show');
+  setTimeout(()=>{ card.classList.remove('show'); cb&&cb(); }, 2400);
+}
+
+/* ---------- 幕前铺垫 ---------- */
+function runBriefing(pages){
+  return new Promise(resolve=>{
+    if(!pages || !pages.length){ resolve(); return; }
+    let idx=0;
+    const dots=$('brief-dots');
+    dots.innerHTML=pages.map(()=>'<i></i>').join('');
+    function render(){
+      $('brief-title').textContent=pages[idx].title;
+      $('brief-text').innerHTML=pages[idx].text;
+      dots.querySelectorAll('i').forEach((d,k)=>d.classList.toggle('on',k===idx));
+      $('brief-next').textContent = idx<pages.length-1 ? '继续 →' : '进入这一幕 →';
+      // 幕前铺垫为纯阅读环节，不配音
+    }
+    $('brief-next').onclick=()=>{
+      if(idx<pages.length-1){ idx++; render(); }
+      else { Voice.stop(); $('briefing').classList.remove('show'); resolve(); }
+    };
+    $('briefing').classList.add('show');
+    render();
+  });
+}
+
+/* ---------- 自由问答（LLM 实时扮演） ---------- */
+function runFreetalk(ft, s){
+  return new Promise(resolve=>{
+    if(!ft){ resolve(); return; }
+    $('dialogue').style.display='none';
+    const cfg=loadAICfg();
+    const aiOn = Backend.llm || !!(cfg.llmUrl && cfg.llmKey && cfg.llmModel);
+    $('talk-hint').innerHTML = aiOn ? ft.hint
+      : ft.hint + '<br><span style="color:var(--text-dim)">（此刻只能旁听 TA 的思绪——点击下方问题，或稍后再来）</span>';
+    const who=s.dialogues.filter(d=>!['旁白','你',META.guide_name].includes(d.who))[0]?.who||'？？？';
+    const presets=$('talk-presets'); presets.innerHTML='';
+    (ft.presets||[]).forEach(p=>{
+      const b=document.createElement('button'); b.className='talk-preset'; b.textContent=p.q;
+      b.onclick=()=>deliver(p.q, p.a, p.audio);
+      presets.appendChild(b);
+    });
+    const input=$('talk-input'), sendBtn=$('talk-send');
+    input.value='';
+    // 原神式分页：长回答按句切页，每页必须点击才翻页，全部读完才能继续
+    function paginate(text){
+      const sentences=text.split(/(?<=[。！？；!?])/);
+      const pages=[]; let cur='';
+      for(const s of sentences){
+        if((cur+s).length>80 && cur){ pages.push(cur); cur=s; }
+        else cur+=s;
+      }
+      if(cur.trim()) pages.push(cur);
+      return pages.length?pages:[text];
+    }
+    async function playPaged(text, who, audioPath){
+      const pages=paginate(text);
+      const v=Voice.speak(text, who, audioPath);  // 整段配音一次；预设问答优先用预渲染音频
+      await v.started;                 // 语音起播后文字才开始
+      // 语音同步自动翻页：按各页字数占比分配整段语音时长，到点自动翻（点击可提前）
+      const plainLen=p=>p.replace(/<[^>]+>/g,'').length;
+      const totalLen=pages.reduce((a,p)=>a+plainLen(p),0);
+      const durMs=(Voice.audio && Voice.audio.duration ? Voice.audio.duration*1000 : 0) || totalLen*230;
+      let acc=0; const ends=pages.map(p=>{ acc+=plainLen(p); return durMs*acc/totalLen; });
+      const t0=performance.now();
+      for(let i=0;i<pages.length;i++){
+        const auto = Voice.enabled && pages.length>1;
+        $('dlg-hint').textContent = pages.length>1
+          ? `第 ${i+1}/${pages.length} 页 · ${auto?'随语音自动翻页（点击可提前）':'点击翻页'}` : '点击继续';
+        await typeLine(pages[i]);
+        if(i<pages.length-1){
+          await new Promise(res=>{
+            if(auto){
+              const remain=ends[i]-(performance.now()-t0);
+              const timer=setTimeout(res, Math.max(remain, 500));
+              $('dlg-box').onclick=()=>{ clearTimeout(timer); res(); };
+            } else {
+              $('dlg-box').onclick=()=>res();
+            }
+          });
+        }
+      }
+      if(Voice.enabled){ $('dlg-hint').textContent='聆听中…'; }
+      await v.done;  // 语音播完才恢复问答栏
+      $('dlg-hint').textContent='点击继续';
+    }
+    async function deliver(q, presetA, presetAudio){
+      $('talk-bar').style.display='none';
+      $('dialogue').style.display='block';
+      $('dlg-name-text').textContent='你';
+      await typeLine(escapeForDialog(q));  // 用户手打输入同样需要转义——防止用户误打尖括号内容被当成标签吞掉
+      $('dlg-name-text').textContent=who;
+      if(presetA){ await playPaged(presetA, who, presetAudio); $('talk-bar').style.display='block'; return; }
+      sendBtn.disabled=true; sendBtn.textContent='思考中…';
+      $('dlg-text').innerHTML='<span style="color:var(--text-dim)">……（TA 沉吟片刻）</span>';
+      try{
+        const ctx=s.dialogues.map(d=>d.who+'：'+d.text.replace(/<[^>]+>/g,'')).join('\n').slice(0,800);
+        const a=await askLLM(ft.persona, ctx, q);
+        if(a){ await playPaged(escapeForDialog(a), who); }  // LLM实时回复必须转义，不受工厂端sanitize保护
+        else { await typeLine('（连线失败……TA 似乎陷入了沉思。试试预设问题，或检查 ⚙ 设置。）'); }
+      }catch(e){
+        await typeLine('（连线失败……TA 似乎陷入了沉思。试试预设问题，或检查 ⚙ 设置。）');
+      }
+      sendBtn.disabled=false; sendBtn.textContent='发问';
+      input.value='';
+      $('talk-bar').style.display='block';
+    }
+    sendBtn.onclick=()=>{
+      const q=input.value.trim(); if(!q) return;
+      if(!aiOn){ $('talk-hint').innerHTML='TA 此刻沉浸在自己的思绪里……先点击下方的问题，听听 TA 的回答吧。'; return; }
+      deliver(q, null);
+    };
+    input.onkeydown=e=>{ if(e.key==='Enter') sendBtn.onclick(); };
+    $('talk-bar').style.display='block';
+    $('talk-leave').onclick=()=>{
+      Voice.stop();
+      $('talk-bar').style.display='none';
+      $('dialogue').style.display='none';
+      resolve();
+    };
+  });
+}
+
+/* ---------- 知识长河收束页 ---------- */
+function showRiver(){
+  $('river-flow').innerHTML=RIVER.map(r=>
+    `<div class="river-node">
+      <div class="r-dot"></div>
+      <div class="r-stage">${r.stage}</div>
+      <div class="r-who">${r.who}<span class="r-era">${r.era}</span></div>
+      <div class="r-did">${r.did}</div>
+      <div class="r-pass">${r.pass}</div>
+    </div>`).join('');
+  $('rm-book').innerHTML=RIVER_BOOK;
+  $('river-apps').innerHTML=RIVER_APPS.map(a=>`<div class="app">${a}</div>`).join('');
+  $('river-quote').innerHTML=RIVER_QUOTE;
+  $('river').classList.add('show');
+  // 收束引言由本篇向导真人配音诵读（氛围背景音，不门控阅读）——内容取自本篇 RIVER_QUOTE，不是硬编码文案
+  Voice.speak(RIVER_QUOTE, META.guide_name || '旁白', RIVER_QUOTE_AUDIO);
+  $('river-enter').onclick=()=>{
+    Voice.stop();
+    $('river').classList.remove('show');
+    showEnding();
+  };
+}
+
+/* 自由问答安全净化：用户输入(q)和LLM实时回复(a)都不是工厂生成的受控HTML——
+   工厂台词经 sanitize_html_fields 清洗过，格式受控（只含约定的<b class="em">等白名单标签）；
+   但自由问答是运行时产生，用户可能手打任意字符，LLM可能输出Markdown或撞上HTML语法的数学记号
+   （如"由a生成的循环群"写成<a>，会被浏览器当成空标签吞掉整段文字——实测踩过的真实bug）。
+   转义规则：先把危险的 < > 转成实体，避免被解析成标签；再把明确安全的 Markdown 加粗转成真正的 <b> 高亮。 */
+function escapeForDialog(text){
+  if(!text) return '';
+  let t=String(text)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\n\s*\n/g,'<br><br>').replace(/\n/g,'<br>');
+  t=t.replace(/\*\*([^*]+)\*\*/g, '<b class="em">$1</b>');  // **加粗** → 真正高亮
+  t=t.replace(/^[-*]\s+/gm, '· ');  // markdown 列表符号转中文圆点，避免裸露 - / *
+  return t;
+}
+
+/* 打字机：速度按文本长度自适应，对齐朗读节奏（≈200ms/字，1.2s~9s） */
+function typeLine(text){
+  return new Promise(res=>{
+    const box=$('dlg-text'); box.innerHTML=''; state.typing=true;
+    // 预处理：把连续 Unicode 下标字符（₀₁₂…ₙₖₘₓᵢⱼ）包装成 <sub>，浏览器渲染为标准 HTML 下标，
+    // 避免 Unicode 字形在部分字体里下标不规则/和普通 n 混淆
+    text = text.replace(/([₀₁₂₃₄₅₆₇₈₉ₙₖₘₓᵢⱼ]+)/g, '<sub>$1</sub>').replace(/(<\/sub>)<sub>/g, '</sub>');
+    // token 切分支持 <b class="em"> 和 <sub>
+    const tokens=text.split(/(<b class="em">.*?<\/b>|<sub>.*?<\/sub>)/g).filter(Boolean);
+    let ci=0, plain=tokens.map(t=>t.replace(/<[^>]+>/g,''));
+    const total=plain.join('').length;
+    const interval=Math.min(Math.max(total*200,1200),9000)/Math.max(total,1);
+    const tick=()=>{
+      if(!state.typing){ res(); return; }
+      ci++;
+      let acc=0, html='';
+      for(let k=0;k<tokens.length;k++){
+        const p=plain[k], tok=tokens[k];
+        const isEm=tok.startsWith('<b'), isSub=tok.startsWith('<sub');
+        if(ci<=acc+p.length){
+          const part=p.slice(0,ci-acc);
+          html+= isEm? `<b class="em">${part}</b>` : isSub? `<sub>${part}</sub>` : part; break;
+        } else {
+          html+= isEm? `<b class="em">${p}</b>` : isSub? `<sub>${p}</sub>` : p; acc+=p.length;
+        }
+      }
+      box.innerHTML=html;
+      if(ci>=total){ state.typing=false; res(); }
+      else setTimeout(tick, interval);
+    };
+    tick();
+    $('dlg-box').onclick=()=>{ if(state.typing){ state.typing=false;
+      $('dlg-text').innerHTML=text; res(); } };
+  });
+}
+
+async function playDialogues(list){
+  $('dialogue').style.display='block';
+  for(const d of list){
+    $('dlg-name-text').textContent=d.who;
+    $('dlg-next').style.visibility='hidden';
+    const v=Voice.speak(d.text, d.who, d.audio);
+    $('dlg-hint').textContent='…';
+    await v.started;                               // 等语音真正开始播放
+    await typeLine(d.text);                        // 此刻文字才开始弹出——声文起点对齐
+    if(Voice.enabled){ $('dlg-hint').textContent='聆听中…'; }
+    await v.done;                                  // 播完才允许跳下一句
+    $('dlg-hint').textContent='点击继续';
+    $('dlg-next').style.visibility='visible';
+    await new Promise(res=>{ $('dlg-box').onclick=()=>res(); });
+  }
+  Voice.stop();
+}
+
+/* 决策点 */
+function showChoice(ch){
+  return new Promise(resolve=>{
+    $('choice-prompt').innerHTML=ch.prompt;
+    const box=$('choice-opts'); box.innerHTML='';
+    const keys=['A','B','C','D'];
+    ch.options.forEach((o,i)=>{
+      const div=document.createElement('div'); div.className='choice-opt';
+      div.innerHTML=`<span class="key">${keys[i]}</span>${o.t}`;
+      div.onclick=()=>{ $('choice-layer').classList.remove('show'); resolve(o); };
+      box.appendChild(div);
+    });
+    $('choice-layer').classList.add('show');
+  });
+}
+
+/* ============================================================
+   探究实验室：六个可操作实验
+   每个工厂签名：(host:HTMLElement, onDone:()=>void)
+   ============================================================ */
+function makeCanvas(host, w, h){
+  const wrap=document.createElement('div'); wrap.className='lab-canvas-wrap';
+  const cv=document.createElement('canvas');
+  const dpr=window.devicePixelRatio||1;
+  cv.width=w*dpr; cv.height=h*dpr; cv.style.width=w+'px'; cv.style.height=h+'px';
+  const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
+  wrap.appendChild(cv); host.appendChild(wrap);
+  return {cv, ctx, w, h};
+}
+function makeSlider(host, label, min, max, step, init){
+  const row=document.createElement('div'); row.className='slider-row';
+  row.innerHTML=`${label}<span class="val"></span>`;
+  const inp=document.createElement('input'); inp.type='range';
+  inp.min=min; inp.max=max; inp.step=Math.abs(step)||1; inp.value=init;
+  row.appendChild(inp); host.appendChild(row);
+  const val=row.querySelector('.val');
+  const sync=()=>{ val.textContent=inp.value;
+    inp.style.setProperty('--p', ((inp.value-min)/(max-min)*100)+'%'); };
+  sync();
+  return {inp, sync};
+}
+
+/* --- 实验1：倍立方 --- */
+function labVolumeCube(host, onDone){
+  host.innerHTML='';
+  const grid=document.createElement('div'); grid.className='lab-grid';
+  const left=document.createElement('div'), right=document.createElement('div');
+  grid.appendChild(left); grid.appendChild(right); host.appendChild(grid);
+
+  const {ctx,w,h}=makeCanvas(left,360,270);
+  const ctrls=document.createElement('div'); ctrls.className='lab-controls'; right.appendChild(ctrls);
+  const sl=makeSlider(ctrls,'新祭坛边长倍数 k',1.00,1.50,0.005,1.00);
+  const read=document.createElement('div'); read.className='lab-readout';
+  read.innerHTML=`<span class="k">体积倍数</span><span class="v" id="vc-vol">1.000</span>
+    <span style="margin-left:18px"><span class="k">目标</span><span class="v">2.000</span></span>
+    <span class="formula-big" id="vc-eq">k³ = 1.000</span>`;
+  ctrls.appendChild(read);
+  const verdict=document.createElement('div'); verdict.className='lab-verdict';
+  verdict.textContent='神谕要求：体积恰好 ×2。拖动滑块试试。';
+  ctrls.appendChild(verdict);
+  const note=document.createElement('div'); note.className='lab-note';
+  note.innerHTML='💡 提示：答案在 1.25 附近。但注意——你只能<span class="em">无限逼近</span>它。∛2 无法写成任何分数，也无法用尺规作出（1837 年 Wantzel 证明）。而两条圆锥曲线的交点，能精确抓住它。';
+  ctrls.appendChild(note);
+
+  function draw(k){
+    ctx.clearRect(0,0,w,h);
+    const cx1=95, cx2=255, cy=190;
+    const s1=52, s2=52*k;
+    function cube(cx,s,stroke,fill){
+      const dx=s*.42, dy=-s*.24;
+      ctx.beginPath();
+      // front
+      ctx.rect(cx-s/2, cy-s, s, s);
+      ctx.fillStyle=fill; ctx.fill(); ctx.strokeStyle=stroke; ctx.lineWidth=1.6; ctx.stroke();
+      // top
+      ctx.beginPath();
+      ctx.moveTo(cx-s/2,cy-s); ctx.lineTo(cx-s/2+dx,cy-s+dy);
+      ctx.lineTo(cx+s/2+dx,cy-s+dy); ctx.lineTo(cx+s/2,cy-s); ctx.closePath();
+      ctx.fillStyle='rgba(212,183,122,.14)'; ctx.fill(); ctx.stroke();
+      // side
+      ctx.beginPath();
+      ctx.moveTo(cx+s/2,cy-s); ctx.lineTo(cx+s/2+dx,cy-s+dy);
+      ctx.lineTo(cx+s/2+dx,cy+dy); ctx.lineTo(cx+s/2,cy); ctx.closePath();
+      ctx.fillStyle='rgba(212,183,122,.07)'; ctx.fill(); ctx.stroke();
+    }
+    cube(cx1,s1,'rgba(154,146,168,.8)','rgba(60,50,80,.5)');
+    cube(cx2,s2,'#d4b77a','rgba(90,70,40,.5)');
+    ctx.fillStyle='rgba(154,146,168,.9)'; ctx.font='13px Cormorant Garamond'; ctx.textAlign='center';
+    ctx.fillText('原祭坛 ×1',cx1,240);
+    ctx.fillStyle='#f0d9a8';
+    ctx.fillText('新祭坛 ×'+(k*k*k).toFixed(3),cx2,240);
+    // 目标虚线框（k=∛2）
+    ctx.setLineDash([4,4]); ctx.strokeStyle='rgba(127,200,216,.5)';
+    const st=52*Math.cbrt(2);
+    ctx.strokeRect(cx2-st/2, cy-st, st, st);
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(127,200,216,.8)'; ctx.font='11px Cormorant Garamond';
+    ctx.fillText('神谕之形 ×2.000',cx2,cy-st-10);
+  }
+  function refresh(){
+    const k=parseFloat(sl.inp.value);
+    sl.sync();
+    $('vc-vol').textContent=(k*k*k).toFixed(3);
+    $('vc-eq').textContent='k³ = '+(k*k*k).toFixed(3);
+    draw(k);
+    const diff=Math.abs(k*k*k-2);
+    if(diff<0.02){
+      verdict.className='lab-verdict win';
+      verdict.innerHTML='⚡ 体积恰好加倍！k ≈ '+k.toFixed(3)+' —— 但你发现了：滑块能到，<b>尺规到不了</b>。这就是为什么梅内克缪斯必须去切圆锥。';
+      onDone();
+    } else {
+      verdict.className='lab-verdict';
+      verdict.textContent = k*k*k<2 ? '还不够……再大一点。' : '超了，往回一点。神谕不接受"差不多"。';
+    }
+  }
+  sl.inp.oninput=refresh; refresh();
+}
+
+/* --- 实验2：切圆锥 --- */
+function labConeSlice(host, onDone){
+  host.innerHTML='';
+  const grid=document.createElement('div'); grid.className='lab-grid';
+  const left=document.createElement('div'), right=document.createElement('div');
+  grid.appendChild(left); grid.appendChild(right); host.appendChild(grid);
+
+  const cone=makeCanvas(left,360,300);
+  const curve=makeCanvas(right,360,300);
+  const ctrls=document.createElement('div'); ctrls.className='lab-controls';
+  ctrls.style.marginTop='14px'; host.appendChild(ctrls);
+  const ALPHA=32; // 圆锥半顶角
+  const sl=makeSlider(ctrls,'切割平面与轴线夹角 θ',20,90,1,55);
+  const read=document.createElement('div'); read.className='lab-readout';
+  read.innerHTML=`<span class="k">离心率</span><span class="v" id="cs-e">—</span>
+    <span style="margin-left:16px"><span class="k">曲线类型</span><span class="v" id="cs-type">—</span></span>`;
+  ctrls.appendChild(read);
+  const verdict=document.createElement('div'); verdict.className='lab-verdict';
+  ctrls.appendChild(verdict);
+  const note=document.createElement('div'); note.className='lab-note';
+  note.innerHTML='💡 圆锥半顶角 α = 32°。真实几何关系：<span class="em">e = cosθ / cosα</span>。θ=90° 时横切为圆（e=0）；θ 接近 α 时曲线"被拉向无穷远"。';
+  ctrls.appendChild(note);
+
+  const seen={ell:false,para:false,hyp:false};
+  const cx=180, cy=150, R=95;
+  function drawCone(theta){
+    const {ctx,w,h}=cone; ctx.clearRect(0,0,w,h);
+    // 双圆锥侧视（对顶三角形）
+    ctx.strokeStyle='rgba(212,183,122,.75)'; ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(cx,cy); ctx.lineTo(cx-R*Math.tan(ALPHA*Math.PI/180),cy-R);
+    ctx.moveTo(cx,cy); ctx.lineTo(cx+R*Math.tan(ALPHA*Math.PI/180),cy-R);
+    ctx.moveTo(cx,cy); ctx.lineTo(cx-R*Math.tan(ALPHA*Math.PI/180),cy+R);
+    ctx.moveTo(cx,cy); ctx.lineTo(cx+R*Math.tan(ALPHA*Math.PI/180),cy+R);
+    ctx.stroke();
+    ctx.strokeStyle='rgba(212,183,122,.35)';
+    ctx.beginPath();
+    ctx.ellipse(cx,cy-R,R*Math.tan(ALPHA*Math.PI/180),R*.22,0,0,Math.PI*2);
+    ctx.ellipse(cx,cy+R,R*Math.tan(ALPHA*Math.PI/180),R*.22,0,0,Math.PI*2);
+    ctx.stroke();
+    // 轴线
+    ctx.setLineDash([3,5]); ctx.strokeStyle='rgba(127,200,216,.4)';
+    ctx.beginPath(); ctx.moveTo(cx,cy-R-25); ctx.lineTo(cx,cy+R+25); ctx.stroke(); ctx.setLineDash([]);
+    // 切割线
+    const rad=theta*Math.PI/180;
+    const dx=Math.sin(rad)*135, dy=Math.cos(rad)*135;
+    ctx.strokeStyle='#f0d9a8'; ctx.lineWidth=2.4;
+    ctx.beginPath(); ctx.moveTo(cx-dx,cy-dy); ctx.lineTo(cx+dx,cy+dy); ctx.stroke();
+    ctx.fillStyle='#f0d9a8'; ctx.font='12px Cormorant Garamond'; ctx.textAlign='left';
+    ctx.fillText('θ = '+theta+'°',cx+dx*.55,cy+dy*.55-8);
+  }
+  function drawCurve(e){
+    const {ctx,w,h}=curve; ctx.clearRect(0,0,w,h);
+    const cx2=180, cy2=150;
+    ctx.strokeStyle='rgba(154,146,168,.25)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(20,cy2); ctx.lineTo(340,cy2); ctx.moveTo(cx2,20); ctx.lineTo(cx2,280); ctx.stroke();
+    ctx.strokeStyle='#f0d9a8'; ctx.lineWidth=2.2; ctx.shadowColor='rgba(240,217,168,.55)'; ctx.shadowBlur=10;
+    ctx.beginPath();
+    if(e<0.985){ // 椭圆
+      const rx=120, ry=rx*Math.sqrt(Math.max(0.06,1-e*e));
+      ctx.ellipse(cx2,cy2,rx,ry,0,0,Math.PI*2);
+    } else if(e<=1.03){ // 抛物线
+      const p=34; let first=true;
+      for(let y=-120;y<=120;y+=2){ const x=y*y/(4*p);
+        if(cx2-x<15) continue;
+        first?ctx.moveTo(cx2-x,cy2+y):ctx.lineTo(cx2-x,cy2+y); first=false; }
+    } else { // 双曲线
+      const a=46/Math.min(e,3), b=a*Math.sqrt(e*e-1);
+      for(const sgn of [-1,1]){
+        let first=true;
+        for(let t=-1.9;t<=1.9;t+=0.03){
+          const x=sgn*a*Math.cosh(t), y=b*Math.sinh(t);
+          first?ctx.moveTo(cx2+x,cy2+y):ctx.lineTo(cx2+x,cy2+y); first=false;
+        }
+      }
+    }
+    ctx.stroke(); ctx.shadowBlur=0;
+  }
+  function refresh(){
+    const theta=parseFloat(sl.inp.value); sl.sync();
+    const e=Math.cos(theta*Math.PI/180)/Math.cos(ALPHA*Math.PI/180);
+    drawCone(theta); drawCurve(e);
+    $('cs-e').textContent=e.toFixed(2);
+    let type;
+    if(e<0.985){ type='椭圆'+(e<0.15?'（近圆）':''); seen.ell=true; }
+    else if(e<=1.03){ type='抛物线'; seen.para=true; }
+    else { type='双曲线'; seen.hyp=true; }
+    $('cs-type').textContent=type;
+    const got=[seen.ell,seen.para,seen.hyp].filter(Boolean).length;
+    if(got>=3){
+      verdict.className='lab-verdict win';
+      verdict.innerHTML='⚡ 三种曲线都已在你刀下诞生——<b>一个圆锥，一个角度参数，三种命运</b>。阿波罗尼奥斯的八卷书，核心就在这块面板里。';
+      onDone();
+    } else {
+      verdict.className='lab-verdict';
+      verdict.textContent='已切出：'+[seen.ell?'椭圆':'',seen.para?'抛物线':'',seen.hyp?'双曲线':''].filter(Boolean).join('、')+'（'+got+'/3）——试着把 θ 推向两个极端。';
+    }
+  }
+  sl.inp.oninput=refresh; refresh();
+}
+
+/* --- 实验3：第谷数据表 --- */
+function labTychoData(host, onDone, interact){
+  host.innerHTML='';
+  // 行归一化：兼容对象（任意键名猜测）与数组（按列序）两种 rows 格式
+  const raw = (interact && interact.rows && interact.rows.length) ? interact.rows : TYCHO_DATA;
+  function norm(r){
+    if(Array.isArray(r)) return {c0:r[0], c1:r[1], c2:r[2], c3:r[3]};
+    const keys=Object.keys(r);
+    const pick=(cands)=>{ for(const c of cands){ if(r[c]!==undefined) return r[c]; } return undefined; };
+    return {
+      c0: pick(['date','label','name','title','item','id']) ?? r[keys[0]],
+      c1: pick(['obs','actual','measured','value','result','answer']) ?? r[keys[1]],
+      c2: pick(['pred','predicted','model','expected','check','verify']) ?? r[keys[2]],
+      c3: pick(['dev','diff','error','flag','mark','hit']) ?? r[keys[3]],
+    };
+  }
+  const DATA = raw.map(norm);
+  const COLS = (interact && interact.cols) || ['观测日期','实测值','模型预测','偏差'];
+  const hitWhen = interact && interact.hitWhen;  // 字符串标记命中（如 "X"）
+  const unit=(interact && interact.unit) || '';
+  // 动态阈值：最大间隔切分法——把 |dev| 降序排列，在 top1/top2 与 top2/top3 之间找差距最大的那道缝，
+  // 阈值取缝两侧中点。此法不会像"倍数阈值"那样在数据打平（如两行并列最大值）时失效判 0 命中。
+  const devs = DATA.map(r=>Math.abs(parseFloat(r.c3))).filter(d=>!isNaN(d));
+  const sorted = [...devs].sort((a,b)=>b-a);
+  let dynThresh = 4;
+  if(sorted.length>=2){
+    let bestGap=-1, bestI=1;
+    for(const i of [1,2]){
+      if(i>=sorted.length) continue;
+      const gap=sorted[i-1]-sorted[i];
+      if(gap>bestGap){ bestGap=gap; bestI=i; }
+    }
+    dynThresh = bestI<sorted.length ? (sorted[bestI-1]+sorted[bestI])/2 : sorted[bestI-1]-0.001;
+  } else if(sorted.length===1){
+    dynThresh = sorted[0]-0.001;
+  }
+  function isHit(r){
+    if(hitWhen!==undefined) return String(r.c3)===String(hitWhen);
+    const d=Math.abs(parseFloat(r.c3)); return !isNaN(d) && d>=dynThresh;
+  }
+  // 需要找到的异常行数：数据中实际突出的行数（1 或 2）
+  const hitCount = DATA.filter(isHit).length;
+  const needFind = Math.min(Math.max(hitCount, 1), 2);
+  function devText(r){
+    const d=parseFloat(r.c3);
+    return isNaN(d) ? String(r.c3 ?? '—') : d.toFixed(1)+unit;
+  }
+  const tbl=document.createElement('table'); tbl.className='tycho-table';
+  tbl.innerHTML=`<thead><tr><th>${COLS[0]}</th><th>${COLS[1]}</th><th>${COLS[2]}</th><th>${COLS[3]}</th></tr></thead>`;
+  const tb=document.createElement('tbody');
+  DATA.forEach((r,i)=>{
+    const tr=document.createElement('tr'); tr.dataset.idx=i;
+    tr.innerHTML=`<td>${r.c0}</td><td>${r.c1}</td><td>${r.c2}</td><td class="dev">点击查看</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); host.appendChild(tbl);
+  const comment=document.createElement('div'); comment.className='tycho-comment';
+  comment.innerHTML=(interact && interact.hint) || '逐行比对——绝大多数记录严丝合缝，但有几行藏着任何巧合都解释不了的东西。<i>把它们找出来。</i>';
+  host.appendChild(comment);
+
+  const found=new Set();
+  tb.querySelectorAll('tr').forEach(tr=>{
+    tr.onclick=()=>{
+      const r=DATA[parseInt(tr.dataset.idx)];
+      const cell=tr.querySelector('.dev');
+      tr.classList.add('revealed');
+      if(isHit(r)){
+        tr.classList.add('hit'); cell.textContent=devText(r)+' ⚠';
+        found.add(String(r.c0));
+        if(found.size < needFind){
+          comment.innerHTML='⚡ <span class="em">'+r.c0+'：'+devText(r)+'</span>——与其他记录截然不同！任何巧合都解释不了它。这样的记录<b>还有一条</b>……继续找。';
+        } else {
+          comment.innerHTML='⚡ 找到了：<span class="em">'+[...found].join('、')+'</span>。异常指向同一个结论——<span class="em">' + ((interact && interact.conclusion) || '旧模型是错的') + '</span>。你亲眼看见了这几行数字。';
+          onDone();
+        }
+      } else {
+        tr.classList.add('ok'); cell.textContent=devText(r);
+        comment.innerHTML=''+r.c0+'：'+devText(r)+'——在正常范围之内，<i>旧模型还活着</i>。它不是答案，继续比对。';
+      }
+    };
+  });
+}
+
+/* --- 实验4：椭圆参数 --- */
+function labEllipseParams(host, onDone){
+  host.innerHTML='';
+  const grid=document.createElement('div'); grid.className='lab-grid';
+  const left=document.createElement('div'), right=document.createElement('div');
+  grid.appendChild(left); grid.appendChild(right); host.appendChild(grid);
+
+  const {ctx,w,h}=makeCanvas(left,360,300);
+  const ctrls=document.createElement('div'); ctrls.className='lab-controls'; right.appendChild(ctrls);
+  const sa=makeSlider(ctrls,'长半轴 a',2,6,0.1,4);
+  const sb=makeSlider(ctrls,'短半轴 b',1,6,0.1,2.4);
+  const read=document.createElement('div'); read.className='lab-readout';
+  read.innerHTML=`<span class="formula-big" id="ep-eq">x²/16 + y²/5.8 = 1</span>
+    <span class="k">焦距 c</span><span class="v" id="ep-c">—</span>
+    <span style="margin-left:14px"><span class="k">离心率 e</span><span class="v" id="ep-e">—</span></span>`;
+  ctrls.appendChild(read);
+  const verdict=document.createElement('div'); verdict.className='lab-verdict';
+  ctrls.appendChild(verdict);
+  const note=document.createElement('div'); note.className='lab-note';
+  note.innerHTML='💡 保持 a 不变拖 b：b 越接近 a，椭圆越"圆"；<span class="em">b = a 时它就是圆</span>——圆是椭圆的特例，不是另一种曲线。';
+  ctrls.appendChild(note);
+
+  let touched=new Set();
+  function refresh(changed){
+    let a=parseFloat(sa.inp.value), b=parseFloat(sb.inp.value);
+    sa.sync(); sb.sync();
+    if(b>a){ // 交换，提示
+      verdict.className='lab-verdict';
+      verdict.innerHTML='注意：b 超过了 a——按约定 a ≥ b，已自动把长轴转到 y 轴方向。';
+      [a,b]=[b,a];
+    }
+    touched.add(changed);
+    const c=Math.sqrt(a*a-b*b), e=c/a;
+    $('ep-eq').textContent='x²/'+a.toFixed(1)+'² + y²/'+b.toFixed(1)+'² = 1';
+    $('ep-c').textContent=c.toFixed(2);
+    $('ep-e').textContent=e.toFixed(2);
+    // draw
+    ctx.clearRect(0,0,w,h);
+    const cx=180, cy=150, S=26;
+    ctx.strokeStyle='rgba(154,146,168,.25)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(15,cy); ctx.lineTo(345,cy); ctx.moveTo(cx,15); ctx.lineTo(cx,285); ctx.stroke();
+    ctx.fillStyle='rgba(154,146,168,.7)'; ctx.font='11px Cormorant Garamond'; ctx.textAlign='center';
+    ctx.fillText('x',338,cy-6); ctx.fillText('y',cx+10,24);
+    // 椭圆
+    ctx.strokeStyle='#f0d9a8'; ctx.lineWidth=2.2; ctx.shadowColor='rgba(240,217,168,.5)'; ctx.shadowBlur=9;
+    ctx.beginPath(); ctx.ellipse(cx,cy,a*S,b*S,0,0,Math.PI*2); ctx.stroke(); ctx.shadowBlur=0;
+    // 焦点
+    ctx.fillStyle='#d4b77a';
+    for(const sgn of [-1,1]){
+      ctx.beginPath(); ctx.arc(cx+sgn*c*S,cy,4,0,Math.PI*2); ctx.fill();
+      ctx.fillText('F'+(sgn<0?'₁':'₂'),cx+sgn*c*S,cy+18);
+    }
+    if(touched.size>=2){
+      verdict.className='lab-verdict win';
+      verdict.innerHTML='⚡ 你已经在"翻译"了：<b>方程里两个数字的变化，就是图形本身的呼吸</b>。课本推导标准方程的四步（建系-设点-列式-化简），终点就是你手上的这个面板。';
+      onDone();
+    } else if(!verdict.textContent.startsWith('注意')){
+      verdict.className='lab-verdict';
+      verdict.textContent='拖一拖 a 和 b，两个都试试。';
+    }
+  }
+  sa.inp.oninput=()=>refresh('a'); sb.inp.oninput=()=>refresh('b'); refresh();
+}
+
+/* --- 实验5：牛顿轨道模拟 --- */
+function labOrbitVelocity(host, onDone){
+  host.innerHTML='';
+  const grid=document.createElement('div'); grid.className='lab-grid';
+  const left=document.createElement('div'), right=document.createElement('div');
+  grid.appendChild(left); grid.appendChild(right); host.appendChild(grid);
+
+  const {ctx,w,h}=makeCanvas(left,360,330);
+  const ctrls=document.createElement('div'); ctrls.className='lab-controls'; right.appendChild(ctrls);
+  const sl=makeSlider(ctrls,'初速度 v（v₀ = 圆轨道速度）',0.60,1.80,0.01,1.00);
+  const read=document.createElement('div'); read.className='lab-readout';
+  read.innerHTML=`<span class="k">离心率 e = |v²−1|</span><span class="v" id="ov-e">0.00</span>
+    <span class="formula-big" id="ov-type">预测：正圆</span>`;
+  ctrls.appendChild(read);
+  const btnRow=document.createElement('div'); btnRow.style.cssText='display:flex;gap:10px;';
+  const btnLaunch=document.createElement('button'); btnLaunch.className='btn-panel'; btnLaunch.style.padding='10px 26px';
+  btnLaunch.textContent='🚀 发射';
+  const btnReset=document.createElement('button'); btnReset.className='btn-panel cyan'; btnReset.style.padding='10px 26px';
+  btnReset.textContent='重置';
+  btnRow.appendChild(btnLaunch); btnRow.appendChild(btnReset); ctrls.appendChild(btnRow);
+  const verdict=document.createElement('div'); verdict.className='lab-verdict';
+  verdict.textContent='调好初速度，点击发射。目标：让质点走出一条闭合椭圆轨道（不坠毁、不逃逸）。';
+  ctrls.appendChild(verdict);
+  const note=document.createElement('div'); note.className='lab-note';
+  note.innerHTML='💡 平方反比引力 F∝1/r² 实时数值积分。临界值：<span class="em">v = √2·v₀ ≈ 1.414</span>——低于它闭合（椭圆），等于它恰好逃逸（抛物线），高于它一去不回（双曲线）。';
+  ctrls.appendChild(note);
+
+  const CX=180, CY=170, S=78, SUN_R=0.10;
+  let anim=null, running=false;
+  function predict(){
+    const v=parseFloat(sl.inp.value); sl.sync();
+    const e=Math.abs(v*v-1);
+    $('ov-e').textContent=e.toFixed(2);
+    $('ov-type').textContent='预测：'+(v<0.995?'椭圆（会被压扁）':v<=1.005?'正圆':v<1.405?'椭圆':v<=1.425?'抛物线（临界逃逸）':'双曲线（逃逸）');
+  }
+  function drawStatic(){
+    ctx.clearRect(0,0,w,h);
+    // 太阳
+    const g=ctx.createRadialGradient(CX,CY,2,CX,CY,SUN_R*S*2.2);
+    g.addColorStop(0,'#f0d9a8'); g.addColorStop(0.4,'rgba(212,183,122,.8)'); g.addColorStop(1,'rgba(212,183,122,0)');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(CX,CY,SUN_R*S*2.2,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff7e0'; ctx.beginPath(); ctx.arc(CX,CY,SUN_R*S*0.55,0,Math.PI*2); ctx.fill();
+    // 发射点
+    ctx.strokeStyle='rgba(127,200,216,.6)'; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.arc(CX+S,CY,5,0,Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='rgba(127,200,216,.9)'; ctx.font='11px Cormorant Garamond'; ctx.textAlign='center';
+    ctx.fillText('发射点 r=1',CX+S,CY+20);
+    // 逃逸圈提示
+    ctx.fillStyle='rgba(154,146,168,.5)'; ctx.font='10px Cormorant Garamond';
+    ctx.fillText('v₀=1.00 正圆 · √2·v₀≈1.41 逃逸',CX,h-10);
+  }
+  function launch(){
+    if(anim) cancelAnimationFrame(anim);
+    drawStatic();
+    const v0=parseFloat(sl.inp.value);
+    let s={x:1,y:0,vx:0,vy:v0};
+    const dt=0.004, steps=12;
+    const path=[[s.x,s.y]];
+    let status='run';
+    running=true;
+    ctx.strokeStyle='#f0d9a8'; ctx.lineWidth=1.8;
+    function frame(){
+      for(let k=0;k<steps;k++){
+        const r=Math.hypot(s.x,s.y), a=1/(r*r*r);
+        s.vx-=s.x*a*dt; s.vy-=s.y*a*dt;
+        s.x+=s.vx*dt; s.y+=s.vy*dt;
+        path.push([s.x,s.y]);
+        if(r<SUN_R){ status='crash'; break; }
+        if(r>2.4){ status='escape'; break; }
+      }
+      // redraw
+      drawStatic();
+      ctx.beginPath();
+      ctx.moveTo(CX+path[0][0]*S, CY-path[0][1]*S);
+      for(let i=1;i<path.length;i++) ctx.lineTo(CX+path[i][0]*S, CY-path[i][1]*S);
+      ctx.strokeStyle = status==='crash'?'rgba(220,110,110,.9)':status==='escape'?'rgba(127,200,216,.9)':'#f0d9a8';
+      ctx.stroke();
+      // 质点
+      ctx.fillStyle='#fff';
+      ctx.beginPath(); ctx.arc(CX+s.x*S, CY-s.y*S, 3.4,0,Math.PI*2); ctx.fill();
+
+      if(status==='crash'){
+        running=false;
+        verdict.className='lab-verdict';
+        verdict.innerHTML='☄️ <b>坠毁了</b>——初速度不足，"行星"一头扎进太阳。牛顿会说：它下落得太快，来不及错过地面。加一点速度再试。';
+        return;
+      }
+      if(status==='escape'){
+        running=false;
+        verdict.className='lab-verdict';
+        const v=parseFloat(sl.inp.value);
+        verdict.innerHTML=(v<1.43?'🌠 恰好挣脱——<b>抛物线</b>，一去不回但不加速逃离。':'🌠 彻底逃逸——<b>双曲线</b>，太阳系留不住它（星际彗星 ʻOumuamua 走的就是这条）。')+' 想俘获一颗行星，把速度降到 √2·v₀ 以下。';
+        return;
+      }
+      if(path.length>2200){
+        running=false;
+        const e=Math.abs(v0*v0-1);
+        verdict.className='lab-verdict win';
+        verdict.innerHTML='⚡ <b>入轨成功</b>！e = '+e.toFixed(2)+' 的闭合椭圆——你的行星活下来了。牛顿的证明：这一切不是巧合，平方反比律<b>只允许</b>圆锥曲线。';
+        onDone();
+        return;
+      }
+      anim=requestAnimationFrame(frame);
+    }
+    frame();
+  }
+  sl.inp.oninput=()=>{ predict(); if(!running) drawStatic(); };
+  btnLaunch.onclick=launch;
+  btnReset.onclick=()=>{ if(anim) cancelAnimationFrame(anim); running=false; drawStatic(); verdict.className='lab-verdict'; verdict.textContent='调好初速度，点击发射。目标：闭合椭圆轨道。'; };
+  predict(); drawStatic();
+}
+
+/* --- 实验6：抛物面聚焦 --- */
+function labLightFocus(host, onDone){
+  host.innerHTML='';
+  const grid=document.createElement('div'); grid.className='lab-grid';
+  const left=document.createElement('div'), right=document.createElement('div');
+  grid.appendChild(left); grid.appendChild(right); host.appendChild(grid);
+
+  const {ctx,w,h}=makeCanvas(left,380,320);
+  const ctrls=document.createElement('div'); ctrls.className='lab-controls'; right.appendChild(ctrls);
+  const sl=makeSlider(ctrls,'入射光线数量',3,9,1,6);
+  const btnRow=document.createElement('div'); btnRow.style.cssText='display:flex;gap:10px;';
+  const bPara=document.createElement('button'); bPara.className='btn-panel'; bPara.style.padding='10px 22px'; bPara.textContent='抛物面';
+  const bSphere=document.createElement('button'); bSphere.className='btn-panel cyan'; bSphere.style.padding='10px 22px'; bSphere.textContent='球面（圆弧）';
+  btnRow.appendChild(bPara); btnRow.appendChild(bSphere); ctrls.appendChild(btnRow);
+  const verdict=document.createElement('div'); verdict.className='lab-verdict';
+  ctrls.appendChild(verdict);
+  const note=document.createElement('div'); note.className='lab-note';
+  note.innerHTML='💡 每条光线严格按反射定律绘制。抛物线的定义（到焦点与准线等距）保证<span class="em">所有平行光等光程到达焦点</span>；圆弧没有这条性质——偏差叫"球面像差"。';
+  ctrls.appendChild(note);
+
+  let mode='para'; const seenModes=new Set();
+  const f=1.15, XMAX=1.7; // 抛物线 y=x²/4f
+  const CX=190, CY=238, S=95;
+  const toPx=(x,y)=>[CX+x*S, CY-y*S];
+
+  function draw(){
+    ctx.clearRect(0,0,w,h);
+    const n=parseInt(sl.inp.value); sl.sync();
+    // 镜面曲线
+    ctx.strokeStyle='#f0d9a8'; ctx.lineWidth=2.6; ctx.shadowColor='rgba(240,217,168,.5)'; ctx.shadowBlur=8;
+    ctx.beginPath();
+    if(mode==='para'){
+      for(let x=-XMAX;x<=XMAX;x+=0.02){ const y=x*x/(4*f); const [px,py]=toPx(x,y);
+        x<=-XMAX+0.001?ctx.moveTo(px,py):ctx.lineTo(px,py); }
+    } else {
+      const R=2.6; ctx.arc(...toPx(0,R), R*S, Math.PI*0.5-Math.asin(XMAX/R), Math.PI*0.5+Math.asin(XMAX/R));
+    }
+    ctx.stroke(); ctx.shadowBlur=0;
+    // 焦点
+    const [fx,fy]=toPx(0, mode==='para'?f:1.3);
+    if(mode==='para'){
+      ctx.fillStyle='#7fc8d8'; ctx.beginPath(); ctx.arc(fx,fy,4.5,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='rgba(127,200,216,.95)'; ctx.font='12px Cormorant Garamond'; ctx.textAlign='left';
+      ctx.fillText('焦点 F',fx+9,fy+4);
+    }
+    // 光线
+    for(let i=0;i<n;i++){
+      const x=-XMAX*0.92 + (XMAX*1.84)*(n===1?0.5:i/(n-1));
+      let hit, refl;
+      if(mode==='para'){
+        const y=x*x/(4*f);
+        hit=[x,y];
+        const dx=0-x, dy=f-y, L=Math.hypot(dx,dy);
+        refl=[dx/L, dy/L];
+      } else {
+        const R=2.6; const y=R-Math.sqrt(Math.max(0,R*R-x*x));
+        hit=[x,y];
+        // 圆心 (0,R)，法线向外
+        let nx=x-0, ny=y-R; const nl=Math.hypot(nx,ny); nx/=nl; ny/=nl;
+        const d=[0,-1]; // 向下
+        const dot=d[0]*nx+d[1]*ny;
+        refl=[d[0]-2*dot*nx, d[1]-2*dot*ny];
+      }
+      const [hx,hy]=toPx(hit[0],hit[1]);
+      const topY=26;
+      // 入射
+      ctx.strokeStyle='rgba(232,226,213,.5)'; ctx.lineWidth=1.3;
+      ctx.beginPath(); ctx.moveTo(hx,topY); ctx.lineTo(hx,hy); ctx.stroke();
+      ctx.fillStyle='rgba(232,226,213,.6)';
+      ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(hx-3.4,hy-7); ctx.lineTo(hx+3.4,hy-7); ctx.closePath(); ctx.fill();
+      // 反射
+      const LEN=3.4;
+      const [ex,ey]=toPx(hit[0]+refl[0]*LEN, hit[1]+refl[1]*LEN);
+      ctx.strokeStyle = mode==='para' ? 'rgba(240,217,168,.85)' : 'rgba(220,150,110,.7)';
+      ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(ex,ey); ctx.stroke();
+    }
+    // 标注
+    ctx.fillStyle='rgba(154,146,168,.8)'; ctx.font='11px Cormorant Garamond'; ctx.textAlign='center';
+    ctx.fillText(mode==='para'?'抛物线 y = x²/4f':'圆弧形镜面（同口径）', CX, h-10);
+    // verdict
+    seenModes.add(mode);
+    if(mode==='para'){
+      verdict.className='lab-verdict';
+      verdict.innerHTML='✨ 抛物面：<b>每一束光都精确穿过焦点</b>——这就是你头顶那口"大锅"捕捉百亿光年外电波的原理。再切到球面看看会发生什么。';
+    } else {
+      verdict.className='lab-verdict';
+      verdict.innerHTML='🌀 球面：边缘光线明显<b>偏离中心</b>——光散了。同样的口径，只有抛物线能保证"等光程"。工程师选抛物面不是审美，是几何强制。';
+    }
+    if(seenModes.size>=2){
+      verdict.classList.add('win');
+      verdict.innerHTML='⚡ 两种镜面的对比完成：<b>聚焦不是工程技巧，是抛物线的定义在物理世界的显形</b>。';
+      onDone();
+    }
+  }
+  sl.inp.oninput=draw;
+  bPara.onclick=()=>{ mode='para'; draw(); };
+  bSphere.onclick=()=>{ mode='sphere'; draw(); };
+  draw();
+}
+
+/* --- 通用实验：custom-lab（声明式配置，工厂生成篇章的默认交互） ---
+   config: {
+     sliders:[{id,label,min,max,step,init,unit}],
+     ops:['+','-','×','÷'],                      // 可选：运算选择器
+     readouts:[{label, expr}],                   // expr 为 JS 表达式，变量=滑块 id 与 op
+     big:{label, expr},                          // 画布区大字读数
+     win:{expr, text},                           // 完成条件
+     note:'💡 提示文案'
+   } */
+function labCustom(host, onDone, interact){
+  host.innerHTML='';
+  const cfg=(interact && interact.config)||{};
+  // 从 win.expr 提取目标值，生成明确提示（避免用户要精确调多个值却不知道目标）
+  const winTargets = (()=>{
+    const e=(cfg.win&&cfg.win.expr)||'';
+    if(!/===/.test(e)) return '';
+    const items=e.split('&&').map(s=>s.trim()).filter(s=>/===/.test(s)).map(s=>{
+      const m=s.match(/(\w+)\s*===\s*(-?[\d.]+)/);
+      return m ? (m[1]+' = '+m[2]) : s;
+    });
+    return items.length ? ('目标：'+items.join('，')) : '';
+  })();
+  const grid=document.createElement('div'); grid.className='lab-grid';
+  const left=document.createElement('div'), right=document.createElement('div');
+  grid.appendChild(left); grid.appendChild(right); host.appendChild(grid);
+  const stage=makeCanvas(left,360,270);
+  const ctrls=document.createElement('div'); ctrls.className='lab-controls'; right.appendChild(ctrls);
+  const vals={}; let curOp=(cfg.ops&&cfg.ops[0])||'';
+  const touched={};  // 每个滑块用过的值集合（win 条件可用 touched.<id>.size）
+  const sliders=[];
+  (cfg.sliders||[]).forEach(s=>{
+    const sl=makeSlider(ctrls, s.label, s.min, s.max, s.step||1, s.init);
+    vals[s.id]=s.init; touched[s.id]=new Set([s.init]); sliders.push({...s, ...sl});
+    sl.inp.oninput=()=>{ vals[s.id]=parseFloat(sl.inp.value); touched[s.id].add(vals[s.id]); sl.sync(); refresh(); };
+  });
+  // 只有 ops 真被某个 expr 引用（含裸标识符 op）时才渲染运算按钮，避免无意义的装饰性 UI
+  const opsUsed = (cfg.ops && cfg.ops.length) && [
+    ...(cfg.readouts||[]).map(r=>r.expr),
+    (cfg.big||{}).expr, (cfg.win||{}).expr
+  ].some(e => e && /\bop\b/.test(e));
+  if(opsUsed){
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:8px;flex-wrap:wrap;';
+    cfg.ops.forEach(op=>{
+      const b=document.createElement('button');
+      b.textContent=op; b.dataset.op=op;
+      b.style.cssText='flex:1;padding:10px;border:1px solid rgba(212,183,122,.35);border-radius:10px;background:transparent;color:var(--gold-bright);font-size:18px;cursor:pointer;transition:all .25s;';
+      b.onclick=()=>{ curOp=op; row.querySelectorAll('button').forEach(x=>x.style.background='transparent');
+        b.style.background='rgba(212,183,122,.16)'; refresh(); };
+      if(op===curOp) b.style.background='rgba(212,183,122,.16)';
+      row.appendChild(b);
+    });
+    ctrls.appendChild(row);
+  }
+  const read=document.createElement('div'); read.className='lab-readout'; ctrls.appendChild(read);
+  const verdict=document.createElement('div'); verdict.className='lab-verdict'; ctrls.appendChild(verdict);
+  if(cfg.note){
+    const note=document.createElement('div'); note.className='lab-note'; note.innerHTML=cfg.note; ctrls.appendChild(note);
+  }
+  function ev(expr){
+    try{
+      const scope={...vals, op:curOp, Math, touched};
+      return Function(...Object.keys(scope), '"use strict";return ('+expr+')')(...Object.values(scope));
+    }catch(e){ return NaN; }
+  }
+  let won=false;
+  function drawStage(){
+    const {ctx,w,h}=stage; ctx.clearRect(0,0,w,h);
+    // 通用呈现：大字读数 + 状态光晕
+    if(cfg.big){
+      const v=ev(cfg.big.expr);
+      const winNow = cfg.win ? !!ev(cfg.win.expr) : false;
+      ctx.fillStyle='rgba(154,146,168,.8)'; ctx.font='13px Noto Serif SC'; ctx.textAlign='center';
+      ctx.fillText(cfg.big.label||'', w/2, 52);
+      ctx.font='44px Cormorant Garamond, Noto Serif SC';
+      ctx.fillStyle= winNow ? '#f0d9a8' : '#e8e2d5';
+      ctx.shadowColor= winNow ? 'rgba(240,217,168,.8)' : 'rgba(212,183,122,.35)';
+      ctx.shadowBlur= winNow ? 26 : 12;
+      const txt = (typeof v==='number' && !Number.isInteger(v)) ? v.toFixed(3) : String(v);
+      ctx.fillText(txt, w/2, h/2+16);
+      ctx.shadowBlur=0;
+      if(winNow){
+        ctx.strokeStyle='rgba(240,217,168,.6)'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.arc(w/2,h/2-6,86,0,Math.PI*2); ctx.stroke();
+      }
+    } else {
+      ctx.fillStyle='rgba(154,146,168,.6)'; ctx.font='14px Noto Serif SC'; ctx.textAlign='center';
+      ctx.fillText('调整右侧参数，观察读数变化', w/2, h/2);
+    }
+  }
+  function refresh(){
+    // 读数区
+    read.innerHTML=(cfg.readouts||[]).map(r=>{
+      const v=ev(r.expr);
+      const txt=(typeof v==='number' && !Number.isInteger(v))? v.toFixed(3): String(v);
+      return `<span class="k">${r.label}</span><span class="v">${txt}</span>`;
+    }).join('<span style="display:inline-block;width:18px"></span>');
+    drawStage();
+    if(cfg.win && ev(cfg.win.expr)){
+      verdict.className='lab-verdict win';
+      verdict.innerHTML=cfg.win.text;
+      if(!won){ won=true; onDone(); }
+    } else {
+      verdict.className='lab-verdict';
+      verdict.textContent=winTargets || cfg.hint || '继续调整参数，寻找答案。';
+    }
+  }
+  refresh();
+}
+
+/* --- 通用实验：law-finder（跨样本找恒定规律，如开普勒第三定律 T²/a³） ---
+   与 tycho-data（找反例/异常）是完全不同的科学推理：这里数据本身没有"坏行"，
+   任务是在多个候选公式里，找到那个"算出来的值在所有样本间几乎不变"的公式——
+   这正是"发现规律"的核心动作：反复代入验证，直到摸出恒定关系。
+   interact.rows: [{label, x, y}]（每行一个样本，如一颗行星的 a 和 T）
+   interact.candidates: [{expr, label}]（候选公式，expr 中可用 x,y，仅含加减乘除幂与括号）
+   interact.answerIdx: 正确候选在 candidates 中的下标（由代码验证过其方差最小，非 LLM 猜测） */
+function labLawFinder(host, onDone, interact){
+  host.innerHTML='';
+  const rows = (interact && interact.rows) || [];
+  const cands = (interact && interact.candidates) || [];
+  const xLabel = (interact && interact.xLabel) || 'x';
+  const yLabel = (interact && interact.yLabel) || 'y';
+  function evalExpr(expr, x, y){
+    try{
+      const js = expr.replace(/\^/g, '**');
+      return Function('x','y','"use strict";return ('+js+')')(x, y);
+    }catch(e){ return NaN; }
+  }
+  const grid=document.createElement('div'); grid.className='lab-grid'; host.appendChild(grid);
+  const left=document.createElement('div'), right=document.createElement('div');
+  grid.appendChild(left); grid.appendChild(right);
+
+  const tbl=document.createElement('table'); tbl.className='tycho-table';
+  tbl.innerHTML=`<thead><tr><th>样本</th><th>${xLabel}</th><th>${yLabel}</th><th id="law-col">试算值</th></tr></thead>`;
+  const tb=document.createElement('tbody');
+  rows.forEach((r,i)=>{
+    const tr=document.createElement('tr'); tr.dataset.idx=i;
+    tr.innerHTML=`<td>${r.label}</td><td>${r.x}</td><td>${r.y}</td><td class="law-val">—</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); left.appendChild(tbl);
+
+  const candBox=document.createElement('div');
+  candBox.style.cssText='display:flex;flex-direction:column;gap:8px;';
+  const comment=document.createElement('div'); comment.className='tycho-comment';
+  comment.innerHTML=(interact&&interact.hint)||'逐个试算候选公式——把每一行的数据代入，观察结果是不是几乎不变。恒定，就是规律。';
+  right.appendChild(candBox); right.appendChild(comment);
+
+  let solved=false;
+  cands.forEach((c,ci)=>{
+    const b=document.createElement('button');
+    b.textContent=c.label;
+    b.style.cssText='padding:10px 14px;border:1px solid rgba(212,183,122,.35);border-radius:10px;background:transparent;color:var(--gold-bright);cursor:pointer;text-align:left;transition:all .25s;';
+    b.onclick=()=>{
+      const vals=rows.map(r=>evalExpr(c.expr, r.x, r.y));
+      tb.querySelectorAll('tr').forEach((tr,i)=>{
+        const v=vals[i];
+        tr.querySelector('.law-val').textContent = (typeof v==='number'&&!isNaN(v)) ? v.toFixed(3) : '—';
+      });
+      const valid=vals.filter(v=>typeof v==='number'&&!isNaN(v)&&isFinite(v));
+      const mean=valid.reduce((a,b)=>a+b,0)/(valid.length||1);
+      const variance=valid.reduce((a,b)=>a+(b-mean)**2,0)/(valid.length||1);
+      const cv = mean!==0 ? Math.sqrt(variance)/Math.abs(mean) : 999;
+      candBox.querySelectorAll('button').forEach(x=>x.style.background='transparent');
+      if(cv < 0.05){
+        b.style.background='rgba(212,183,122,.22)';
+        comment.innerHTML='⚡ <span class="em">'+c.label+'</span> ——所有样本的试算值几乎完全一致（约 '+mean.toFixed(3)+'）！这就是隐藏在数据里的<span class="em">恒定规律</span>。';
+        if(!solved){ solved=true; onDone(); }
+      } else {
+        b.style.background='rgba(220,110,110,.12)';
+        comment.innerHTML=c.label+' 的试算值忽高忽低（波动 '+(cv*100).toFixed(0)+'%）——不是它，换一个再试。';
+      }
+    };
+    candBox.appendChild(b);
+  });
+  if(interact && interact.note){
+    const note=document.createElement('div'); note.className='lab-note'; note.innerHTML=interact.note;
+    right.appendChild(note);
+  }
+}
+
+const LABS = {
+  'volume-cube': labVolumeCube,
+  'cone-slice': labConeSlice,
+  'tycho-data': labTychoData,
+  'law-finder': labLawFinder,
+  'ellipse-params': labEllipseParams,
+  'orbit-velocity': labOrbitVelocity,
+  'light-focus': labLightFocus,
+  'custom-lab': labCustom
+};
+
+/* 探究面板流程 */
+function runLab(interact){
+  return new Promise(resolve=>{
+    $('lab-title').textContent=interact.title||'探究实验';
+    $('lab-intro').innerHTML=interact.intro||'';
+    $('lab-status').textContent='动手完成上面的探究，按钮将点亮';
+    $('lab-status').className='panel-status';
+    const btn=$('lab-done'); btn.disabled=true;
+    $('lab-overlay').classList.add('show');
+    LABS[interact.type]($('lab-host'), ()=>{
+      $('lab-status').textContent='✓ 探究完成';
+      $('lab-status').className='panel-status ok';
+      btn.disabled=false;
+    }, interact);
+    btn.onclick=()=>{ $('lab-overlay').classList.remove('show'); resolve(); };
+  });
+}
+
+/* 衔接课堂流程 */
+function runBridge(bridge){
+  return new Promise(resolve=>{
+    $('bridge-textbook').textContent=bridge.textbook;
+    $('bridge-map').innerHTML=bridge.mapping.map(m=>`<li>${m}</li>`).join('');
+    $('quiz-q').textContent=bridge.quiz.q;
+    $('quiz-explain').className='quiz-explain';
+    $('bridge-status').textContent='答对课本小题，共鸣度 +10';
+    $('bridge-status').className='panel-status';
+    const doneBtn=$('bridge-done'); doneBtn.disabled=true;
+    const box=$('quiz-opts'); box.innerHTML='';
+    const keys=['A','B','C','D'];
+    let answered=false;
+    bridge.quiz.options.forEach((o,i)=>{
+      const b=document.createElement('button'); b.className='quiz-opt';
+      b.innerHTML=`<span class="key">${keys[i]}</span>${String(o).replace(/^[A-D][.、．]\s*/,'')}`;
+      b.onclick=()=>{
+        if(answered) return; answered=true;
+        box.querySelectorAll('.quiz-opt').forEach(x=>x.disabled=true);
+        if(i===bridge.quiz.answer){
+          b.classList.add('right');
+          $('bridge-status').textContent='✓ 回答正确，共鸣度 +10';
+          $('bridge-status').className='panel-status ok';
+          updateRes(10);
+        } else {
+          b.classList.add('wrong');
+          box.querySelectorAll('.quiz-opt')[bridge.quiz.answer].classList.add('right');
+          $('bridge-status').textContent='看看解析，下次重返时答对它';
+        }
+        $('quiz-explain').innerHTML='📗 '+bridge.quiz.explain;
+        $('quiz-explain').className='quiz-explain show';
+        doneBtn.disabled=false;
+        saveGame();
+      };
+      box.appendChild(b);
+    });
+    $('bridge-overlay').classList.add('show');
+    doneBtn.onclick=()=>{ $('bridge-overlay').classList.remove('show'); resolve(); };
+  });
+}
+
+/* 图鉴 */
+function collectCard(card){
+  state.cards.push(card); saveGame();
+  const list=$('codex-list');
+  if(state.cards.length===1) list.innerHTML='';
+  const roman=['Ⅰ','Ⅱ','Ⅲ','Ⅳ','Ⅴ','Ⅵ'];
+  const el=document.createElement('div'); el.className='codex-card';
+  el.innerHTML=`<h3><span class="no">${roman[state.cards.length-1]||'◆'}</span>${card.title}</h3><p>${card.text}</p>
+    ${card.formula?`<span class="formula">${card.formula}</span>`:''}
+    ${card.textbook?`<span class="tb">📖 ${card.textbook}</span>`:''}`;
+  list.appendChild(el);
+  const btn=$('codex-btn'); btn.style.boxShadow='0 0 18px rgba(240,217,168,.9)';
+  setTimeout(()=>btn.style.boxShadow='',1600);
+}
+
+/* 探索面板（重返已完成节点） */
+let exploreCtx={};
+function openExplore(i){
+  const s=ALL_NODES[i];
+  exploreCtx={i};
+  setScene(s.id);
+  $('ex-era').textContent=s.eraEn;
+  $('ex-title').textContent=s.eraTitle;
+  // 对话回顾
+  const all=[...(s.dialogues||[])];
+  if(s.afterChoice) all.push(...s.afterChoice);
+  $('ex-dlg-list').innerHTML=all.length
+    ? all.map(d=>`<div class="ex-line"><span class="who">${d.who}</span>${d.text}</div>`).join('')
+    : '<div class="ex-line">此节点无对话记录</div>';
+  // 重玩探究
+  if(s.interact && LABS[s.interact.type]){
+    $('ex-lab-host').innerHTML=`<div class="panel-intro" style="margin-bottom:14px">${s.interact.intro}</div>`;
+    const labHost=document.createElement('div');
+    $('ex-lab-host').appendChild(labHost);
+    LABS[s.interact.type](labHost, ()=>{}, s.interact);
+  } else {
+    $('ex-lab-host').innerHTML='<div class="panel-intro">此节点没有探究实验。</div>';
+  }
+  // 知识卡
+  $('ex-card-host').innerHTML = s.card
+    ? `<div class="codex-card"><h3>${s.card.title}</h3><p>${s.card.text}</p>
+       ${s.card.formula?`<span class="formula">${s.card.formula}</span>`:''}
+       ${s.card.textbook?`<span class="tb">📖 ${s.card.textbook}</span>`:''}</div>
+       ${s.bridge?`<div class="bridge-book" style="margin-top:14px">📖 <span class="b">${s.bridge.textbook}</span></div>
+       <ul class="bridge-map">${s.bridge.mapping.map(m=>`<li>${m}</li>`).join('')}</ul>`:''}`
+    : '<div class="panel-intro">此节点没有知识卡。</div>';
+  // tabs 默认对话
+  document.querySelectorAll('.ex-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab==='dlg'));
+  document.querySelectorAll('.ex-body').forEach(b=>b.classList.toggle('active',b.id==='ex-dlg'));
+  $('explore').classList.add('show');
+}
+function closeExplore(){
+  $('explore').classList.remove('show');
+  setScene(ALL_NODES[state.node].id);
+}
+document.querySelectorAll('.ex-tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.ex-tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.querySelectorAll('.ex-body').forEach(b=>b.classList.toggle('active', b.id==='ex-'+t.dataset.tab));
+  };
+});
+$('explore-back').onclick=closeExplore;
+
+/* 节点主流程：铺垫 → 对话 → 决策 → 探究 → 收尾 → 自由问答 → 衔接课堂 → 图鉴 */
+async function playNode(i){
+  state.node=i; updateTimeline(); saveGame();
+  const s=ALL_NODES[i];
+  setScene(s.id);
+  await new Promise(r=>showEra(s,r));
+  if(s.briefing){ await runBriefing(s.briefing); }
+  await playDialogues(s.dialogues);
+  if(s.choice){
+    $('dialogue').style.display='none';
+    const opt=await showChoice(s.choice);
+    updateRes(opt.d); saveGame();
+    $('dialogue').style.display='block';
+    const who=s.dialogues.filter(d=>!['旁白','你',META.guide_name].includes(d.who))[0]?.who||'？？？';
+    await playDialogues([{who, text:opt.r, audio:opt.audio}]);
+  }
+  if(s.interact){
+    $('dialogue').style.display='none';
+    await runLab(s.interact);
+  }
+  if(s.afterChoice){
+    $('dialogue').style.display='block';
+    await playDialogues(s.afterChoice);
+  }
+  if(s.freetalk){
+    await runFreetalk(s.freetalk, s);
+  }
+  if(s.bridge){
+    $('dialogue').style.display='none';
+    await runBridge(s.bridge);
+  }
+  if(s.card){ collectCard(s.card); }
+  $('dialogue').style.display='none';
+  if(!state.doneNodes.includes(i)) state.doneNodes.push(i);
+  updateTimeline(); saveGame();
+  if(i+1<ALL_NODES.length){ playNode(i+1); }
+  else { showRiver(); }
+}
+
+/* 结局 */
+function showEnding(){
+  const e=ENDINGS.find(x=>state.resonance>=x.min);
+  setScene('finale');
+  $('ending').style.display='flex';
+  $('end-rank').textContent=e.rank;
+  $('end-title').textContent=e.title;
+  $('end-text').textContent=e.text;
+  $('end-score').textContent=`共鸣度 ${state.resonance} / 180`;
+  $('end-cards').textContent=`收集知识卡 ${state.cards.length} / 6 —— 已存入你的图鉴`;
+  clearSave();
+}
+
+/* 图鉴面板 */
+$('codex-btn').onclick=()=>$('codex-panel').classList.add('open');
+$('codex-close').onclick=()=>$('codex-panel').classList.remove('open');
+
+/* 入口 */
+function resetRun(){
+  state.resonance=0; state.cards=[]; state.doneNodes=[];
+  $('resonance-val').textContent='0';
+  $('codex-list').innerHTML='<div class="codex-empty">尚未收集任何知识卡<br>跟随时间线，与每一位伟大心灵相遇</div>';
+}
+$('btn-start').onclick=()=>{ clearSave(); resetRun();
+  $('cover').style.display='none'; playNode(0); };
+const sv=loadGame();
+if(sv){ $('btn-continue').style.display='inline-block';
+  $('btn-continue').onclick=()=>{
+    resetRun();
+    state.resonance=sv.resonance||0;
+    state.doneNodes=sv.doneNodes||[];
+    $('resonance-val').textContent=state.resonance;
+    (sv.cards||[]).forEach(c=>collectCard(c));
+    state.cards=sv.cards||[];
+    $('cover').style.display='none'; playNode(sv.node);
+  };
+}
+$('btn-restart').onclick=()=>{ $('ending').style.display='none'; resetRun();
+  $('cover').style.display='flex'; };
+
+/* ---------- 配音开关 ---------- */
+function syncVoiceBtn(){ $('voice-btn').classList.toggle('muted', !Voice.enabled); }
+$('voice-btn').onclick=()=>{
+  Voice.enabled=!Voice.enabled;
+  localStorage.setItem('live_science_voice', Voice.enabled?'on':'off');
+  if(!Voice.enabled) Voice.stop();
+  syncVoiceBtn();
+};
+syncVoiceBtn();
+
+/* ---------- AI 设置面板 ---------- */
+function openSettings(){
+  const c=loadAICfg();
+  $('set-llm-url').value=c.llmUrl||'';
+  $('set-llm-key').value=c.llmKey||'';
+  $('set-llm-model').value=c.llmModel||'';
+  $('set-tts-url').value=c.ttsUrl||'';
+  $('settings').classList.add('show');
+}
+$('settings-btn').onclick=openSettings;
+$('set-save').onclick=()=>{
+  saveAICfg({
+    llmUrl:$('set-llm-url').value.trim(),
+    llmKey:$('set-llm-key').value.trim(),
+    llmModel:$('set-llm-model').value.trim(),
+    ttsUrl:$('set-tts-url').value.trim()
+  });
+  $('settings').classList.remove('show');
+};
+$('set-close').onclick=()=>$('settings').classList.remove('show');
+$('set-test').onclick=()=>{
+  // 用当前表单值（未保存也可试听）
+  const tmp={llmKey:$('set-llm-key').value.trim(), ttsUrl:$('set-tts-url').value.trim()};
+  const saved=loadAICfg();
+  saveAICfg({...saved, ...tmp});
+  Voice._toasted=true; // 试听时不弹提示
+  Voice.enabled=true; localStorage.setItem('live_science_voice','on'); syncVoiceBtn();
+  Voice.speak('欢迎来到知识之境。我是'+(META.guide_name||'向导')+'——你的声音测试已经开始。', META.guide_name||'旁白');
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+.course-stars { --course-star-size:25px; --course-star-gap:5px; display:inline-flex; align-items:center; gap:var(--course-star-gap); line-height:1; }
+.course-stars.size-small { --course-star-size:18px; --course-star-gap:3px; }
+.course-stars.size-large { --course-star-size:38px; --course-star-gap:7px; }
+.course-star { width:var(--course-star-size); height:var(--course-star-size); position:relative; display:grid; place-items:center; font-style:normal; }
+.course-star span { position:relative; z-index:1; font-size:var(--course-star-size); line-height:1; transform-origin:center; }
+.course-star.earned span { color:#ffc928; text-shadow:0 2px 0 #d9950d,0 5px 10px rgba(175,112,5,.28),0 0 12px rgba(255,215,67,.34); animation:course-star-arrive .46s cubic-bezier(.2,.9,.3,1.25) both; }
+.course-star.earned:nth-child(2) span { animation-delay:.08s; }.course-star.earned:nth-child(3) span { animation-delay:.16s; }
+.course-star.unearned span { color:#d5ad3c; opacity:.58; text-shadow:0 1px 0 rgba(255,255,255,.9); }
+.course-star-count { margin-left:4px; padding:4px 7px; border-radius:8px; color:#6c5420; background:#fff1b9; font-size:10px; font-weight:900; }
+@keyframes course-star-arrive { from{opacity:0;transform:translateY(5px) scale(.35) rotate(-14deg)} to{opacity:1;transform:translateY(0) scale(1) rotate(0)} }
+@media (prefers-reduced-motion:reduce) { .course-star.earned span { animation:none!important; } }
+
+.course-completion { width:max-content; max-width:100%; padding:11px 14px; display:grid; grid-template-columns:auto auto; align-items:center; gap:6px 14px; border:1px solid #ead49a; border-radius:17px; color:#54466d; background:linear-gradient(135deg,#fffbe7,#fff0b8); box-shadow:0 12px 28px rgba(116,78,16,.12); }
+.course-completion>header { display:flex; align-items:center; gap:9px; text-align:left; }
+.course-completion>header>i { width:31px; height:31px; display:grid; place-items:center; border-radius:10px; color:#fff; background:linear-gradient(135deg,#65b184,#448a65); box-shadow:0 4px 10px rgba(50,116,79,.22); font-style:normal; font-weight:900; }
+.course-completion>header p,.course-completion-hint { margin:0; }
+.course-completion>header small,.course-completion>header strong { display:block; }
+.course-completion>header small { color:#8b7440; font-size:8px; font-weight:900; letter-spacing:.11em; }
+.course-completion>header strong { margin-top:2px; font:700 17px "Fredoka",sans-serif; }
+.course-completion-hint { grid-column:1/-1; color:#766a50; font-size:9px; font-weight:700; line-height:1.35; text-align:center; }
+.course-completion-home { grid-column:1/-1; min-height:38px; padding:8px 14px; display:flex; align-items:center; justify-content:center; gap:7px; border:1px solid rgba(101,83,151,.18); border-radius:12px; color:#5c4c8e; background:rgba(255,255,255,.7); box-shadow:0 5px 14px rgba(84,70,109,.08); font-size:11px; font-weight:900; text-decoration:none; transition:transform .18s ease,background .18s ease,box-shadow .18s ease; }
+.course-completion-home span { font-size:17px; line-height:1; }
+.course-completion-home:hover,.course-completion-home:focus-visible { background:#fff; box-shadow:0 8px 18px rgba(84,70,109,.14); outline:3px solid rgba(121,101,190,.22); outline-offset:2px; transform:translateY(-1px); }
+.course-completion.compact { padding:9px 11px; gap:4px 10px; border-radius:14px; }
+.course-completion.compact>header>i { width:25px; height:25px; border-radius:8px; }
+.course-completion.compact>header strong { font-size:14px; }
+.course-completion.compact .course-completion-hint { text-align:left; }
+.course-completion.compact .course-completion-home { min-height:34px; padding:6px 10px; font-size:10px; }
+@media (max-width:620px) { .course-completion { grid-template-columns:1fr; justify-items:center; }.course-completion-hint { grid-column:1; }.course-completion.compact { grid-template-columns:auto auto; }.course-completion.compact .course-completion-hint { grid-column:1/-1; } }

@@ -5,10 +5,13 @@ create_quiz：Agent 已出好题目后，将题目存入数据库
 from __future__ import annotations
 
 import json
+import logging
 
 from agent_core.tool.base import BaseTool
 from repositories.base import new_id, utcnow_str
 from database import get_db
+
+logger = logging.getLogger(__name__)
 
 
 class CreateQuizTool(BaseTool):
@@ -76,6 +79,33 @@ class CreateQuizTool(BaseTool):
         now = utcnow_str()
 
         with get_db() as conn:
+            # 校验 node_id：LLM 可能传入不存在/非本用户的节点 id，直接插入会触发
+            # 外键约束失败并抛异常。无效时回退到该用户的一个已有节点；
+            # 若用户没有任何节点，则优雅返回错误（交给 agent），不崩溃。
+            valid = conn.execute(
+                "SELECT id FROM nodes WHERE id=? AND user_id=?",
+                (node_id, self._user_id),
+            ).fetchone()
+            if valid is None:
+                fallback = conn.execute(
+                    "SELECT id FROM nodes WHERE user_id=? LIMIT 1",
+                    (self._user_id,),
+                ).fetchone()
+                if fallback is None:
+                    logger.warning(
+                        "create_quiz: 用户 %s 无可关联知识节点，跳过出题", self._user_id
+                    )
+                    return json.dumps(
+                        {"error": "当前没有可关联的知识节点，请先创建知识点后再出题。"},
+                        ensure_ascii=False,
+                    )
+                logger.warning(
+                    "create_quiz: node_id=%r 无效，回退到已有节点 %s",
+                    node_id,
+                    fallback[0],
+                )
+                node_id = fallback[0]
+
             conn.execute(
                 """
                 INSERT INTO quizzes

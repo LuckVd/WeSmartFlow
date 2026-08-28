@@ -20,10 +20,12 @@ concept 录入 KG（status=approved, origin=okf）：
 
 运行
 ====
-    conda run -n edu-agent python -m backend.ingest_okf            # 增量同步（默认）
-    conda run -n edu-agent python -m backend.ingest_okf --rebuild  # 全量重建
-    conda run -n edu-agent python -m backend.ingest_okf --dry-run  # 试运行
-    conda run -n edu-agent python -m backend.ingest_okf --root my_kb  # 指定根
+（cwd 必须为 backend/ 目录，与 FastAPI 启动方式保持一致：sys.path 含 backend/）
+
+    cd backend && conda run -n edu-agent python -m ingest_okf              # 增量同步（默认）
+    cd backend && conda run -n edu-agent python -m ingest_okf --rebuild    # 全量重建
+    cd backend && conda run -n edu-agent python -m ingest_okf --dry-run    # 试运行
+    cd backend && conda run -n edu-agent python -m ingest_okf --root my_kb # 指定根
 """
 
 from __future__ import annotations
@@ -38,20 +40,20 @@ from typing import Any
 
 import yaml
 
-from backend.kg.database import get_kg_db, init_kg_db
-from backend.kg.models import (
+from kg.database import get_kg_db, init_kg_db
+from kg.models import (
     VALID_RELATION_TYPES,
     ConceptAlias,
     ConceptCreate,
     ConceptEdgeCreate,
     FacetCreate,
 )
-from backend.kg.repositories import (
+from kg.repositories import (
     ConceptEdgeRepository,
     ConceptRepository,
     FacetRepository,
 )
-from backend.kg.repositories.base import (
+from kg.repositories.base import (
     derive_concept_id,
     derive_edge_id,
     derive_facet_id,
@@ -676,6 +678,284 @@ def _sync_incremental(
 
 
 # ============================================================
+# 单文件 ingest（写回 Agent 落盘后立即调用，KG 即时同步）
+# ============================================================
+
+
+def _resolve_single_edge_target(
+    src_subject: str,
+    tgt_ref: str,
+) -> tuple[str | None, str | None, list[str]]:
+    """单文件 ingest 专用：把 frontmatter 关系字段引用解析成 dst_cid（查 KG）。
+
+    与 _resolve_edge_target 区别：单文件 ingest 没有"全局 cid_index"，
+    所有 slug 引用都直接查 KG concept 表（前提：被引用的概念已经先 ingest 过了）。
+
+    返回 (dst_cid, error_kind, ambiguous_candidates)：
+      - 命中           → ("...", None, [])
+      - 找不到         → (None, "dangling", [])
+      - 同 slug 多 subject → (None, "ambiguous", [候选 cid 列表])
+    """
+    # 形如 "subject/slug" 的全名引用 → 直接派生 cid 验证存在性
+    if "/" in tgt_ref:
+        sub, slg = tgt_ref.split("/", 1)
+        sub = sub.strip()
+        slg = slg.strip()
+        if not sub or not slg:
+            return None, "dangling", []
+        cid = derive_concept_id(sub, slg)
+        with get_kg_db() as conn:
+            row = conn.execute("SELECT id FROM concept WHERE id=?", (cid,)).fetchone()
+        return (cid, None, []) if row else (None, "dangling", [])
+
+    # 裸 slug：先同 subject 优先；不命中则全局查
+    with get_kg_db() as conn:
+        row = conn.execute(
+            "SELECT id FROM concept WHERE slug=? AND subject=? LIMIT 1",
+            (tgt_ref, src_subject),
+        ).fetchone()
+        if row:
+            return row["id"], None, []
+        rows = conn.execute(
+            "SELECT id FROM concept WHERE slug=?", (tgt_ref,)
+        ).fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"], None, []
+    if len(rows) > 1:
+        return None, "ambiguous", [r["id"] for r in rows]
+    return None, "dangling", []
+
+
+def ingest_single_md(md_path: Path, root: Path | None = None) -> dict[str, Any]:
+    """同步单个 .md 文件到 KG（concept + facets + edges），增量。
+
+    设计目标：写回 Agent 写完一份新概念 md / 改完共性反馈段之后，立刻把这一个
+    文件的变更同步到 KG，让 RAG 端立即可检索，不必等下一次全量 ingest。
+
+    与全量 ingest 的差异：
+      - 不扫描全目录、不做"删除已下线 concept"的清理（单文件场景没有"被删的文件"）
+      - 关系解析直接查 KG（依赖被引用的概念已存在）；未命中 → dangling 警告但不阻塞
+      - 不写 stdout 报告，调用方自己根据返回 dict 决定怎么记录
+
+    Args:
+        md_path: 待同步的 .md 文件绝对路径或相对路径
+        root:    knowledge 根目录；不传则取 config.KNOWLEDGE_ROOT，再兜底 Path("knowledge")
+
+    Returns:
+        {
+            "ok":      bool,
+            "cid":     str | None,        # 同步成功的 concept id
+            "action":  "created"|"updated"|"unchanged"|None,
+            "facet":   {"created","updated","unchanged","deleted"},
+            "edge":    {"created","unchanged","deleted"},
+            "dangling": [(rel, tgt_ref), ...],
+            "ambiguous":[(rel, tgt_ref, cands), ...],
+            "selfloops":[(rel,), ...],
+            "error":   "" | "<错误消息>",
+        }
+
+    失败时 ok=False，error 写明原因；调用方自行决定是否阻塞主流程。
+    """
+    # ----- 解析 root -----
+    if root is None:
+        try:
+            from config import KNOWLEDGE_ROOT as _CFG_KR  # type: ignore
+
+            root = Path(_CFG_KR)
+        except Exception:  # pylint: disable=broad-except
+            root = Path("knowledge")
+    root = Path(root).resolve()
+    md_path = Path(md_path).resolve()
+
+    empty_facet = {"created": 0, "updated": 0, "unchanged": 0, "deleted": 0}
+    empty_edge = {"created": 0, "unchanged": 0, "deleted": 0}
+
+    def _fail(msg: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "cid": None,
+            "action": None,
+            "facet": dict(empty_facet),
+            "edge": dict(empty_edge),
+            "dangling": [],
+            "ambiguous": [],
+            "selfloops": [],
+            "error": msg,
+        }
+
+    if not md_path.exists():
+        return _fail(f"md 文件不存在: {md_path}")
+    try:
+        md_path.relative_to(root)
+    except ValueError:
+        return _fail(f"md 文件不在 knowledge_root 内: {md_path} (root={root})")
+
+    # ----- parse -----
+    try:
+        d = parse_md(md_path, root)
+    except Exception as exc:  # pylint: disable=broad-except
+        return _fail(f"parse 失败: {exc}")
+
+    # 校验关系类型合法
+    for rel in d["edges"]:
+        if rel not in VALID_RELATION_TYPES:
+            return _fail(f"非法 relation_type={rel}")
+
+    init_kg_db()  # 幂等
+
+    concept_repo = ConceptRepository()
+    facet_repo = FacetRepository()
+    edge_repo = ConceptEdgeRepository()
+
+    cid = derive_concept_id(d["subject"], d["slug"])
+
+    f_stats = dict(empty_facet)
+    e_stats = dict(empty_edge)
+    dangling: list[tuple[str, str]] = []
+    selfloops: list[tuple[str]] = []
+    ambiguous: list[tuple[str, str, list[str]]] = []
+
+    # ----- Phase A: concept upsert -----
+    try:
+        _, action = concept_repo.upsert(
+            ConceptCreate(
+                id=cid,
+                slug=d["slug"],
+                canonical_name=d["name"],
+                summary=d["summary"],
+                subject=d["subject"],
+                difficulty=d["difficulty"],
+                aliases=[ConceptAlias(**a) for a in d["aliases"]],
+                tags=d["tags"],
+                status="approved",
+                source_hash=d["source_hash"],
+                created_by="okf",
+            )
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("ingest_single_md: concept upsert 失败 cid=%s", cid)
+        return _fail(f"concept upsert 失败: {exc}")
+
+    # source_hash 没变（即从外部触发但文件其实没动）→ 整文件跳过 facet/edge diff
+    if action == "unchanged":
+        return {
+            "ok": True,
+            "cid": cid,
+            "action": action,
+            "facet": dict(empty_facet),
+            "edge": dict(empty_edge),
+            "dangling": [],
+            "ambiguous": [],
+            "selfloops": [],
+            "error": "",
+        }
+
+    brief = concept_repo.get_by_id(cid)
+
+    # ----- Phase B: facet diff -----
+    expected_fids = {
+        derive_facet_id(cid, title): (title, content)
+        for title, content in d["sections"]
+    }
+    existing_facets = {
+        f.id: f for f in facet_repo.list_by_concept_and_origin(cid, origin="okf")
+    }
+
+    for fid in set(existing_facets) - set(expected_fids):
+        try:
+            if facet_repo.delete(fid):
+                f_stats["deleted"] += 1
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("ingest_single_md: facet 删除失败 fid=%s", fid)
+
+    for fid, (title, content) in expected_fids.items():
+        try:
+            _, sub_action = facet_repo.upsert(
+                FacetCreate(
+                    id=fid,
+                    concept_id=cid,
+                    kind=title,
+                    content=content,
+                    origin="okf",
+                    origin_ref={"source": d["source"]},
+                    status="active",
+                    confidence=1.0,
+                    created_by="okf",
+                ),
+                concept_brief=brief,
+            )
+            f_stats[sub_action] += 1
+        except Exception:  # pylint: disable=broad-except
+            logger.exception(
+                "ingest_single_md: facet upsert 失败 cid=%s kind=%s", cid, title
+            )
+
+    # ----- Phase C: edge diff -----
+    expected_eids: dict[str, tuple[str, str]] = {}
+    for rel, targets in d["edges"].items():
+        for tgt_ref in targets:
+            dst_cid, err, cands = _resolve_single_edge_target(d["subject"], tgt_ref)
+            if err == "ambiguous":
+                ambiguous.append((rel, tgt_ref, cands))
+                continue
+            if not dst_cid:
+                dangling.append((rel, tgt_ref))
+                continue
+            if cid == dst_cid:
+                selfloops.append((rel,))
+                continue
+            expected_eids[derive_edge_id(cid, dst_cid, rel)] = (dst_cid, rel)
+
+    existing_edges = {
+        e.id: e for e in edge_repo.list_by_origin_and_src(cid, origin="okf")
+    }
+
+    for eid in set(existing_edges) - set(expected_eids):
+        try:
+            if edge_repo.delete(eid):
+                e_stats["deleted"] += 1
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("ingest_single_md: edge 删除失败 eid=%s", eid)
+
+    for eid, (dst_cid, rel) in expected_eids.items():
+        try:
+            _, sub_action = edge_repo.upsert(
+                ConceptEdgeCreate(
+                    id=eid,
+                    src_id=cid,
+                    dst_id=dst_cid,
+                    relation_type=rel,
+                    weight=1.0,
+                    status="approved",
+                    origin="okf",
+                    origin_ref={"source": d["source"]},
+                    created_by="okf",
+                )
+            )
+            e_stats[sub_action] += 1
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "ingest_single_md: edge upsert 失败 %s -[%s]-> %s: %s",
+                d["slug"],
+                rel,
+                dst_cid,
+                exc,
+            )
+
+    return {
+        "ok": True,
+        "cid": cid,
+        "action": action,
+        "facet": f_stats,
+        "edge": e_stats,
+        "dangling": dangling,
+        "ambiguous": ambiguous,
+        "selfloops": selfloops,
+        "error": "",
+    }
+
+
+# ============================================================
 # 顶层 ingest 入口
 # ============================================================
 
@@ -810,11 +1090,19 @@ def _parse_args(argv: list[str] | None = None) -> Any:
     ap = argparse.ArgumentParser(
         description="OKF Bundle → KG 同步器（默认增量；--rebuild 全量重建）"
     )
+    # --root 默认从 config.KNOWLEDGE_ROOT 读，锚定到仓库根，
+    # 避免在 backend/ 下跑命令时把 cwd 当成根而找不到 md。
+    try:
+        from config import KNOWLEDGE_ROOT as _CFG_KR  # type: ignore
+
+        _default_root = Path(_CFG_KR)
+    except Exception:  # pylint: disable=broad-except
+        _default_root = Path("knowledge")
     ap.add_argument(
         "--root",
         type=Path,
-        default=Path("knowledge"),
-        help="OKF Bundle 根目录（默认 knowledge/）",
+        default=_default_root,
+        help="OKF Bundle 根目录（默认取 config.KNOWLEDGE_ROOT，锚定仓库根）",
     )
     ap.add_argument(
         "--dry-run",

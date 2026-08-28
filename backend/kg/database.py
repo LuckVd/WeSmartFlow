@@ -160,10 +160,17 @@ CREATE TABLE IF NOT EXISTS proposal (
     reviewer_id         TEXT NOT NULL DEFAULT '',
     review_note         TEXT NOT NULL DEFAULT '',
     created_at          TEXT NOT NULL,
-    reviewed_at         TEXT
+    reviewed_at         TEXT,
+    -- 异步落盘流水线（approved → queued → running → done/aborted/failed）
+    -- approve 时打 queued；worker 协程取出来跑 MdAuthorService 后写终态
+    apply_status        TEXT NOT NULL DEFAULT 'idle',  -- idle|queued|running|done|aborted|failed
+    apply_error         TEXT NOT NULL DEFAULT '',
+    apply_started_at    TEXT,
+    apply_finished_at   TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_proposal_status ON proposal(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_proposal_op     ON proposal(op);
+CREATE INDEX IF NOT EXISTS idx_proposal_status        ON proposal(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_proposal_op            ON proposal(op);
+CREATE INDEX IF NOT EXISTS idx_proposal_apply_status  ON proposal(apply_status, created_at);
 """
 
 # --------------------------------------------------------------------------
@@ -195,6 +202,32 @@ def init_kg_db() -> None:
                 )
         except Exception:  # pylint: disable=broad-except
             logger.exception("检查/补加 concept.source_hash 列失败，忽略继续")
+
+        # 老库兼容：proposal 异步落盘流水线 4 列（archive 模式幂等 ALTER）
+        try:
+            pcols = [
+                r[1] for r in conn.execute("PRAGMA table_info(proposal)").fetchall()
+            ]
+            if "apply_status" not in pcols:
+                conn.execute(
+                    "ALTER TABLE proposal "
+                    "ADD COLUMN apply_status TEXT NOT NULL DEFAULT 'idle'"
+                )
+            if "apply_error" not in pcols:
+                conn.execute(
+                    "ALTER TABLE proposal "
+                    "ADD COLUMN apply_error TEXT NOT NULL DEFAULT ''"
+                )
+            if "apply_started_at" not in pcols:
+                conn.execute("ALTER TABLE proposal ADD COLUMN apply_started_at TEXT")
+            if "apply_finished_at" not in pcols:
+                conn.execute("ALTER TABLE proposal ADD COLUMN apply_finished_at TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_proposal_apply_status "
+                "ON proposal(apply_status, created_at)"
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("检查/补加 proposal.apply_* 列失败，忽略继续")
 
         # 老库清理：如果老库还有 concept_build_queue 表，保留不动（不再读写），
         # 避免启动时丢失历史记录。如需彻底删除请手动迁移。

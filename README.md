@@ -127,6 +127,17 @@ Agent 可自主生成基于 EduViz SDK 的交互式可视化，支持多种教�
 - **状态对比** — 前后状态可视化对比
 - **时间演化** — 时间轴动画展示变化过程
 
+### 五、WeClaw 微信助手接入
+
+> 把学习助手接入微信，随时随地对话学习。
+
+将 edu-agent 作为一个消息通道接入 **WeClaw（微信 clawbridge）**，让微信里的对话直接由你的 AI 学习助手回复：
+
+- **扫码绑定** — 网页端「微信助手」页扫码，将你的微信 bot 与账号绑定（每个用户绑定自己的 bot）
+- **多租户长轮询** — 每个 bot 一个 async httpx 长轮询协程（≈ 一条 idle 长连接，而非线程），由 ChannelManager 统一调度，单机可承载大量在线 bot
+- **复用对话大脑** — 微信消息直接走 `TutorService`，与网页端共享同一套 ReAct 辅导能力、知识图谱与用户画像
+- **卡片转图片** — HTML 知识卡片 / 交互式可视化 / 测验卡片用无头浏览器（Playwright）渲染成图片发送，并附网页端交互链接
+
 ## 🏗️ 架构设计
 
 <p align="center">
@@ -140,6 +151,7 @@ Agent 可自主生成基于 EduViz SDK 的交互式可视化，支持多种教�
 | Agent 基础库 | `backend/agent_core/` | 通用 Agent 框架，可独立复用 | [README](./backend/agent_core/README.md) |
 | 后端服务 | `backend/` | FastAPI 业务服务 | [README](./backend/README.md) |
 | 前端应用 | `frontend/` | Vue 3 单页应用 | [README](./frontend/README.md) |
+| 探索示例 | `examples/` | 可独立开发、由主站统一构建的学习体验 | [README](./examples/README.md) |
 
 ## 🚀 快速开始
 
@@ -164,7 +176,7 @@ git clone https://github.com/Tencent/WeSmartFlow.git
 cd WeSmartFlow
 
 # 推荐使用 Conda 统一管理
-conda env create -f environment.yml && conda activate edu-agent
+conda env create -f environment.yml && conda activate agent
 
 # 安装后端依赖
 pip install -r backend/requirements.txt
@@ -223,7 +235,40 @@ cd backend && python main.py
 cd frontend && npm run dev
 ```
 
-启动成功后浏览器访问 **http://localhost:5173** 即可使用。
+后端启动后可访问 **http://localhost:8080/health** 检查状态；前端访问
+**http://localhost:5173** 即可使用。
+
+### 启用 WeClaw 微信助手（可选）
+
+把学习助手接入微信，需要额外几步：
+
+**1. 安装 Playwright + Chromium**（卡片渲染成图片所需）
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+**2. 配置环境变量**（`backend/.env`）
+
+```bash
+WECLAW_ENABLED=true                 # 开启 WeClaw 通道
+PUBLIC_BASE_URL=https://你的域名     # 对外可访问地址，用于拼卡片/讲义链接
+# WECLAW_RENDER_CARDS=true          # 卡片渲染成图片（默认开）
+```
+
+**3. 扫码绑定**
+
+重启后端后，登录网页端进入 **「微信助手」** 页 → 点「开始绑定」→ 用微信扫码。绑定成功后，该微信 bot 收到的消息就会由你的 AI 学习助手回复。
+
+| 变量 | 说明 | 默认 |
+|------|------|------|
+| `WECLAW_ENABLED` | 是否启用 WeClaw 通道 | `false` |
+| `PUBLIC_BASE_URL` | 对外基础 URL（卡片/讲义链接） | 空 |
+| `WECLAW_RENDER_CARDS` | 卡片渲染成图片发送 | `true` |
+| `WECLAW_RENDER_WIDTH` | 截图视口宽度(px) | `480` |
+
+> 说明：HTML 卡片 / 可视化 / 测验会被渲染成图片发送，并附网页端交互链接；PDF 讲义以链接形式发送。
 
 ## 🧩 项目结构
 
@@ -243,6 +288,7 @@ WeSmartFlow/
 │   │   └── prompts/         #   Agent 提示词与技能定义
 │   ├── services/            # 业务服务层
 │   │   └── immersive/       #   沉浸式课程服务（Multi-Agent）
+│   ├── channels/            # WeClaw 微信通道（扫码登录 / 长轮询 / 卡片渲染）
 │   ├── routers/             # FastAPI 路由
 │   ├── repositories/        # 数据访问层
 │   ├── models/              # Pydantic 数据模型
@@ -258,6 +304,10 @@ WeSmartFlow/
 │   │   ├── api/             # API 客户端（含 SSE 流式）
 │   │   └── composables/     # Vue 组合式函数
 │   └── package.json
+├── examples/                  # 独立学习 Demo 与探索目录
+│   ├── explore-catalog.json   # 门户内容和构建契约
+│   ├── build.mjs              # 本地 Demo 统一构建编排
+│   └── Magic_English_Town/    # 魔法英语小镇独立应用
 ├── environment.yml          # Conda 环境定义
 └── README.md                # 本文件
 ```
@@ -269,6 +319,7 @@ WeSmartFlow/
 | ✅ | **交互式可视化** | EduViz SDK 沙盒渲染教学可视化 |
 | ✅ | **多登录方式** | GitHub OAuth · 邮箱验证码 · 微信小程序 |
 | ✅ | **HTML 知识卡片** | 替代 LaTeX 卡片，更轻量、更美观 |
+| ✅ | **WeClaw 微信接入** | 扫码绑定 · 多租户长轮询 · 卡片渲染成图片发送 |
 | ✅ | **用量配额管理** | 免费额度控制（LLM / 搜索 / 图片） |
 | 🎯 | **Agent Benchmark** | 围绕教育任务建设评测体系 |
 | 🎯 | **Reflection 反馈调整** | 围绕学习表现和测验结果进行反思 |
@@ -291,6 +342,7 @@ WeSmartFlow/
 | Agent 基础库 | `agent_core` 自研 · ReAct / Reflection / Plan-and-Solve · `@tool` · Agent-as-Tool · MCP |
 | LLM | OpenAI 兼容协议（支持任意兼容网关） |
 | 内容生成 | HTML 知识卡片 · EduViz 交互式可视化 · XeLaTeX + Beamer (SimplePlus) · macOS `say` (Tingting) |
+| 消息通道 | WeClaw 微信接入（clawbridge 长轮询 · async httpx 协程池 · Playwright 卡片渲染） |
 | 搜索 | Tavily · arXiv · DuckDuckGo |
 | 图像 | OpenAI 兼容图像接口 |
 | 文档解析 | pdfplumber · pdfminer |

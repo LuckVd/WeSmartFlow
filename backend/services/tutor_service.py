@@ -47,7 +47,7 @@ from agent_core.agent.events import (
     MasteryUpdatedEvent,
 )
 from agent_core.tool.registry import ToolRegistry
-from agent_core.tool.web import TavilySearch, ArxivSearch, WebFetch
+from services.smart_search import SmartSearchTool
 from agent_core.tool.filesystem import ReadFileTool, ListDirTool
 from agent_core.tool.decorator import tool
 from agent_core.builtins import BUILTIN_SKILLS_DIR
@@ -479,10 +479,10 @@ class TutorService:
         session = self._assert_owner(user_id, session_id)
         if not session:
             raise ValueError(f"会话 {session_id} 不存在")
-        # 允许所有会话继续对话（包括 completed 状态），自动重新激活
-        if session.status != "active":
-            self.session_repo.update_status(session_id, "active")
-            session.status = "active"
+        # AI课程（completed）允许继续对话（智流Agent），其他已结束会话拒绝
+        is_immersive = (session.title or "").startswith("[AI课程]")
+        if session.status != "active" and not is_immersive:
+            raise ValueError("会话已结束")
         return session
 
     @staticmethod
@@ -513,15 +513,16 @@ class TutorService:
                     if file_id:
                         while len(state["ordered_files"]) <= index:
                             state["ordered_files"].append(None)
-                        file_title = params.get("title", "")
                         state["ordered_files"][index] = {
                             "file_id": file_id,
-                            "title": file_title,
+                            "title": params.get("title", ""),
                             "file_type": file_type,
                         }
                         event_queue.put_nowait(
                             FileCreatedEvent(
-                                file_id=file_id, title=file_title, file_type=file_type
+                                file_id=file_id,
+                                title=params.get("title", ""),
+                                file_type=file_type,
                             )
                         )
 
@@ -630,10 +631,12 @@ class TutorService:
         )
         tools.extend(
             [
-                # 内置网络工具（TavilySearch 注入额度 hook）
-                TavilySearch(api_key=tavily_key, before_call_hook=_search_hook),
-                ArxivSearch(),
-                WebFetch(),
+                # 多源智能搜索（替代单一 TavilySearch，内部自动路由+并行+筛选）
+                SmartSearchTool(
+                    tavily_key=tavily_key,
+                    anysearch_key=os.getenv("ANYSEARCH_API_KEY", ""),
+                    before_call_hook=_search_hook,
+                ),
                 # 文件系统工具（限 skills 目录，供 Agent 动态加载 SKILL.md）
                 ReadFileTool(
                     allowed_dir=BUILTIN_SKILLS_DIR,

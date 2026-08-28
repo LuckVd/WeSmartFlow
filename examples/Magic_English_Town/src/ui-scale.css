@@ -1,0 +1,118 @@
+/*
+ * Keep the browser viewport truthful.
+ *
+ * The lessons combine viewport units, fixed HUD controls and responsive media
+ * queries. Document-level CSS zoom makes those systems use different effective
+ * viewport sizes, so tablet widths can enter the desktop layout while a 100dvh
+ * scene is painted shorter than the visible window. Compact individual UI
+ * components in their own styles instead of scaling the document.
+ */
+:root {
+  --magic-town-ui-scale: 1;
+  /* `vh` is the safe fallback for Safari/Firefox versions without `dvh`. */
+  --magic-town-viewport-height: 100vh;
+  --magic-town-small-viewport-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+  :root { --magic-town-viewport-height: 100dvh; }
+}
+
+@supports (height: 100svh) {
+  :root { --magic-town-small-viewport-height: 100svh; }
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: var(--magic-town-viewport-height);
+}
+
+button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.hud {
+  top: max(18px, env(safe-area-inset-top));
+  left: max(clamp(16px, 2vw, 32px), env(safe-area-inset-left));
+  right: max(clamp(16px, 2vw, 32px), env(safe-area-inset-right));
+}
+
+.moon-header.floating-hud {
+  top: max(18px, env(safe-area-inset-top));
+  left: max(clamp(16px, 2vw, 32px), env(safe-area-inset-left));
+  right: max(clamp(16px, 2vw, 32px), env(safe-area-inset-right));
+}
+
+.word-pocket,
+.learning-modal,
+.exploration-board,
+.surprise-panel,
+.moon-memory,
+.moon-quest-map,
+.moon-reward-reveal,
+.moon-memory-studio,
+.moon-book-cover,
+.moon-book-chapter,
+.moon-book-review {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+@media (max-width:900px) {
+  .hud,
+  .moon-header.floating-hud {
+    top: max(10px, env(safe-area-inset-top));
+    left: max(10px, env(safe-area-inset-left));
+    right: max(10px, env(safe-area-inset-right));
+  }
+
+  .town-home-link {
+    width:190px;
+    min-width:0;
+  }
+
+  .town-home-copy small { display:none; }
+  .town-home-copy strong {
+    overflow:hidden;
+    font-size:13px;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+}
+
+@media (max-width:720px) {
+  .quest-pill {
+    top: calc(max(10px, env(safe-area-inset-top)) + 57px);
+  }
+}
+
+@media (max-width:480px) {
+  .hud-tools .word-pocket-button {
+    width:45px;
+    min-height:45px;
+    padding:6px;
+  }
+  .hud-tools .word-pocket-button > div { display:none; }
+  .town-home-link { width:min(250px,calc(100vw - 125px)); }
+  .first-steps-card {
+    grid-template-columns:42px minmax(0,1fr);
+  }
+  .first-steps-card > div strong { overflow-wrap:anywhere; }
+  .first-steps-go {
+    grid-column:1/-1;
+    min-height:48px;
+  }
+  .first-steps-free { grid-column:1/-1; }
+}
+
+/* Course books remain deliberately generous inside the compact interface. */
+.lesson-one-cover-stars {
+  margin-top: 10px;
+  position: relative;
+  z-index: 8;
+}

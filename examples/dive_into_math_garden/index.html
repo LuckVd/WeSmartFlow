@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>走进数学花园</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a class="back-explore" id="backExplore" href="/#/explore" hidden>← 返回探索</a>
+      <span class="brand-dot"></span>
+      <h1>走进数学花园</h1>
+      <span class="badge" id="gardenBadge">空间想象能力培养</span>
+    </div>
+    <nav class="garden-switch" id="gardenSwitch">
+      <button class="garden-btn active" data-garden="spatial">🧊 空间想象能力培养</button>
+      <button class="garden-btn" data-garden="algebra">🔢 代数能力培养</button>
+    </nav>
+  </header>
+
+  <!-- 空间想象能力培养：原 4 模式（认识三视图 / 闯关数格子 / 搭一搭·AI 猜 / 算式炮弹-已移走） -->
+  <div class="garden-scope" id="spatialGarden">
+    <nav class="mode-switch" id="modeSwitch">
+      <button class="mode-btn active" data-mode="learn">👀 认识三视图</button>
+      <button class="mode-btn" data-mode="challenge">🧮 闯关数格子</button>
+      <button class="mode-btn" data-mode="create">🧱 搭一搭 · AI 猜</button>
+    </nav>
+
+    <main class="layout">
+      <section class="stage">
+        <div class="stage-header">
+          <div>
+            <div class="level-info" id="levelInfo">认识三视图 · 拖动画布旋转</div>
+            <p class="stage-subtitle" id="stageSubtitle">正视图、俯视图、左视图是三个被锁死的观察方向。</p>
+          </div>
+          <div class="toolbar" id="toolbar">
+            <button class="tool-btn compact" id="viewFrontBtn">正视</button>
+            <button class="tool-btn compact" id="viewSideBtn">左视</button>
+            <button class="tool-btn compact" id="viewBackBtn">背面</button>
+            <button class="tool-btn compact" id="viewResetBtn">立体</button>
+          </div>
+        </div>
+        <div class="stage-body" id="stageBody">
+          <div class="stage-half" id="userStageHalf">
+            <div class="stage-label" id="userStageLabel">🧒 你搭的图形</div>
+            <div id="canvasHost" class="canvas-host"></div>
+          </div>
+          <div class="stage-half ai" id="aiStageWrap" hidden>
+            <div class="stage-label">🤖 AI 恢复区</div>
+            <div id="canvasHostAI" class="canvas-host"></div>
+          </div>
+        </div>
+
+        <div class="hint-banner" id="hintBanner"></div>
+      </section>
+
+      <aside class="panel">
+        <section class="card" id="learnCard">
+          <h2>搭积木玩一玩</h2>
+          <div class="tool-row">
+            <button class="tool-btn" id="prevShapeBtn">上一个图形</button>
+            <button class="tool-btn" id="nextShapeBtn">换个图形</button>
+          </div>
+          <div class="tool-row">
+            <button class="tool-btn active" id="learnPlaceBtn">＋ 搭积木</button>
+            <button class="tool-btn" id="learnRemoveBtn">－ 拿掉</button>
+            <button class="tool-btn" id="learnClearBtn">清空</button>
+          </div>
+        </section>
+
+        <section class="card" id="challengeCard" hidden>
+          <h2>第二部分：闯关数格子</h2>
+          <p class="task-text" id="challengeText">先只看正视图：至少需要几个小立方体？</p>
+          <div class="answer-row">
+            <input type="number" id="answerInput" min="1" max="999" placeholder="填数量" inputmode="numeric" />
+            <button class="primary" id="submitBtn">提交</button>
+          </div>
+          <div class="tool-row challenge-actions">
+            <button class="primary" id="nextLevelBtn" hidden>下一关 →</button>
+          </div>
+        </section>
+
+        <section class="card" id="createCard" hidden>
+          <h2>第三部分：搭好后让 AI 猜</h2>
+          <p class="task-text">搭一个立体图形：让 AI 绕着三视图推理数数，或者把你的图形清空后从三视图一块一块恢复出来——跟着它的思路，你也能学会！</p>
+          <div class="tool-row">
+            <button class="tool-btn active" id="toolPlace">＋ 放置</button>
+            <button class="tool-btn" id="toolRemove">－ 移除</button>
+            <button class="tool-btn" id="toolClear">清空</button>
+          </div>
+          <div class="tool-row">
+            <button class="primary" id="aiGuessBtn">🤖 让 AI 猜一猜</button>
+            <button class="primary" id="aiRestoreBtn">🧩 让 AI 恢复图形</button>
+            <button class="voice-toggle" id="voiceToggle" title="AI 语音开关">🔊</button>
+          </div>
+          <div class="ai-speech" id="aiSpeech" hidden>
+            <div class="ai-avatar">🤖</div>
+            <div class="ai-bubble" id="aiBubble"></div>
+          </div>
+        </section>
+
+        <section class="card" id="viewCard">
+          <h2>三视图 <span class="hint-tip" id="viewTip">（三个固定方向）</span></h2>
+          <div class="views-grid" id="viewsGrid"></div>
+        </section>
+
+        <section class="card" id="progressCard">
+          <h2>成长记录</h2>
+          <div class="progress-stats" id="progressStats"></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <!-- 代数能力培养：算式炮弹独立顶层花园 -->
+  <div class="garden-scope" id="algebraGarden" hidden>
+    <main class="layout">
+      <section class="stage">
+        <div class="stage-header">
+          <div>
+            <div class="level-info" id="algebraLevelInfo">算式炮弹 · 选择难度开始</div>
+            <p class="stage-subtitle" id="algebraSubtitle">手牌从 0 开始；每回合在当前三座塔的底牌中选一张生效，然后三张底牌同时碎掉。查看越少，同分时越好。</p>
+          </div>
+        </div>
+
+        <div class="cannon-stage" id="cannonStage">
+          <div class="cannon-hud">
+            <span class="cannon-score" id="mcHudScore">0 / 0 · 0 回合</span>
+            <span class="cannon-hand-val" id="mcHudEats">🃏 手牌</span>
+            <span class="cannon-group" id="mcHudGroup">—</span>
+            <span class="cannon-lives" id="mcHudLives">最优：—</span>
+            <span class="cannon-peek" id="mcHudPeek">🔍 查看次数：0</span>
+          </div>
+          <div class="cannon-board">
+            <div class="cannon-tower" id="mcTower"></div>
+            <div class="cannon-side">
+              <div class="cannon-hand" id="mcHand"></div>
+              <div class="cannon-eaten">
+                <div class="mc-pile-title">已选择生效的牌</div>
+                <div class="mc-eaten-list" id="mcEatenList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <section class="card">
+          <h2>算式炮弹</h2>
+          <p class="task-text">手牌从 0 开始。每回合只能在当前三座塔的最底牌中选 1 张生效；选完后三张底牌同时碎掉，塔有几层就操作几次。</p>
+          <div class="cannon-modes" id="cannonModes">
+            <button class="cannon-mode-btn active" data-mc-mode="max">最大值挑战</button>
+            <button class="cannon-mode-btn" data-mc-mode="target">目标值挑战</button>
+          </div>
+          <div class="cannon-difficulty" id="cannonDifficulty">
+            <button class="cannon-diff-btn" data-mc-diff="easy">Easy · 1-2 层</button>
+            <button class="cannon-diff-btn" data-mc-diff="medium">Medium · 3-4 层</button>
+            <button class="cannon-diff-btn active" data-mc-diff="hard">Hard · 5 层</button>
+          </div>
+          <div class="cannon-stats" id="cannonStats">选择难度组开打</div>
+          <div class="cannon-levels" id="cannonLevels"></div>
+          <button class="primary cannon-finish" id="mcFinishBtn" disabled>结束并评分</button>
+        </section>
+
+        <section class="card">
+          <h2>玩法</h2>
+          <p class="task-text">
+            <b>最大值挑战</b>：完成所有层后，最终数值越接近本局理论最大值越高分。<br>
+            <b>目标值挑战</b>：系统给出一个可由逐层三选一得到的目标，最终越接近目标越高分。<br>
+            <b>运算规则</b>：底牌写着 +、−、×、÷；每层只选一张作用到手牌，三座塔底牌随后同时碎掉。<br>
+            <b>提示</b>：理论最大值会在出题时提前算好；点击查看次数越少，同分时排名越高。
+          </p>
+        </section>
+
+        <section class="card">
+          <div class="card-headline">
+            <h2>历史题面</h2>
+            <button class="mini-link" id="mcClearHistoryBtn">清空</button>
+          </div>
+          <div class="mc-records" id="mcRecords">暂无历史</div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-box" id="modalBox">
+      <div class="modal-emoji" id="modalEmoji">🎉</div>
+      <h2 id="modalTitle">答对啦！</h2>
+      <p id="modalText"></p>
+      <button class="primary" id="modalBtn">继续</button>
+    </div>
+  </div>
+
+  <script src="js/generator.js"></script>
+  <script src="js/guide.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/mathcannon.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    // 从 WeSmartFlow 探索入口进入时显示「返回探索」；直接访问则隐藏。
+    (function () {
+      var params = new URLSearchParams(location.search);
+      if (params.get("source") === "wesmartflow") {
+        var back = document.getElementById("backExplore");
+        if (back) back.hidden = false;
+      }
+    })();
+  </script>
+</body>
+</html>

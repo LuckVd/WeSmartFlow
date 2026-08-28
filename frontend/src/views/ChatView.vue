@@ -3965,44 +3965,44 @@ onUnmounted(() => {
 .msg-bubble.assistant .msg-text {
   line-height: 1.7;
 }
-.msg-bubble.assistant .msg-text p {
+.msg-bubble.assistant .msg-text :deep(p) {
   margin: 0 0 8px;
 }
-.msg-bubble.assistant .msg-text p:last-child {
+.msg-bubble.assistant .msg-text :deep(p:last-child) {
   margin-bottom: 0;
 }
-.msg-bubble.assistant .msg-text h1,
-.msg-bubble.assistant .msg-text h2,
-.msg-bubble.assistant .msg-text h3 {
+.msg-bubble.assistant .msg-text :deep(h1),
+.msg-bubble.assistant .msg-text :deep(h2),
+.msg-bubble.assistant .msg-text :deep(h3) {
   font-weight: 600;
   margin: 12px 0 6px;
   line-height: 1.4;
 }
-.msg-bubble.assistant .msg-text h1 {
+.msg-bubble.assistant .msg-text :deep(h1) {
   font-size: 15px;
 }
-.msg-bubble.assistant .msg-text h2 {
+.msg-bubble.assistant .msg-text :deep(h2) {
   font-size: 14px;
 }
-.msg-bubble.assistant .msg-text h3 {
+.msg-bubble.assistant .msg-text :deep(h3) {
   font-size: 13px;
 }
-.msg-bubble.assistant .msg-text ul,
-.msg-bubble.assistant .msg-text ol {
+.msg-bubble.assistant .msg-text :deep(ul),
+.msg-bubble.assistant .msg-text :deep(ol) {
   padding-left: 1.5em;
   margin: 6px 0;
   list-style-position: outside;
 }
-.msg-bubble.assistant .msg-text ul {
+.msg-bubble.assistant .msg-text :deep(ul) {
   list-style-type: disc;
 }
-.msg-bubble.assistant .msg-text ol {
+.msg-bubble.assistant .msg-text :deep(ol) {
   list-style-type: decimal;
 }
-.msg-bubble.assistant .msg-text li {
+.msg-bubble.assistant .msg-text :deep(li) {
   margin: 3px 0;
 }
-.msg-bubble.assistant .msg-text code {
+.msg-bubble.assistant .msg-text :deep(code) {
   background: rgba(99, 102, 241, 0.15);
   color: #a5b4fc;
   padding: 1px 5px;
@@ -4010,7 +4010,7 @@ onUnmounted(() => {
   font-size: 12px;
   font-family: "JetBrains Mono", monospace;
 }
-.msg-bubble.assistant .msg-text pre {
+.msg-bubble.assistant .msg-text :deep(pre) {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -4018,48 +4018,48 @@ onUnmounted(() => {
   margin: 8px 0;
   overflow-x: auto;
 }
-.msg-bubble.assistant .msg-text pre code {
+.msg-bubble.assistant .msg-text :deep(pre code) {
   background: none;
   color: #e2e8f0;
   padding: 0;
   font-size: 12px;
 }
-.msg-bubble.assistant .msg-text blockquote {
+.msg-bubble.assistant .msg-text :deep(blockquote) {
   border-left: 3px solid var(--brand-light);
   padding-left: 10px;
   margin: 8px 0;
   color: var(--text-muted);
   font-style: italic;
 }
-.msg-bubble.assistant .msg-text strong {
+.msg-bubble.assistant .msg-text :deep(strong) {
   font-weight: 600;
   color: var(--text-primary);
 }
-.msg-bubble.assistant .msg-text em {
+.msg-bubble.assistant .msg-text :deep(em) {
   color: var(--text-muted);
 }
-.msg-bubble.assistant .msg-text a {
+.msg-bubble.assistant .msg-text :deep(a) {
   color: var(--brand-light);
   text-decoration: underline;
 }
-.msg-bubble.assistant .msg-text hr {
+.msg-bubble.assistant .msg-text :deep(hr) {
   border: none;
   border-top: 1px solid var(--border);
   margin: 10px 0;
 }
-.msg-bubble.assistant .msg-text table {
+.msg-bubble.assistant .msg-text :deep(table) {
   border-collapse: collapse;
   width: 100%;
   margin: 8px 0;
   font-size: 12px;
 }
-.msg-bubble.assistant .msg-text th,
-.msg-bubble.assistant .msg-text td {
+.msg-bubble.assistant .msg-text :deep(th),
+.msg-bubble.assistant .msg-text :deep(td) {
   border: 1px solid var(--border);
   padding: 5px 8px;
   text-align: left;
 }
-.msg-bubble.assistant .msg-text th {
+.msg-bubble.assistant .msg-text :deep(th) {
   background: var(--bg-hover);
   font-weight: 600;
 }

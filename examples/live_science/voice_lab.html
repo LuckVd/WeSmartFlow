@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>音色实验室 · qwen3-tts-instruct-flash</title>
+<style>
+body{margin:0;min-height:100vh;background:#0b0714;color:#e8e2d5;font-family:'Noto Serif SC',serif;
+  display:flex;flex-direction:column;align-items:center;padding:48px 20px;}
+h1{font-size:30px;letter-spacing:.3em;color:#fff;margin-bottom:8px;}
+.sub{color:#9a92a8;font-size:13px;letter-spacing:.15em;margin-bottom:40px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;width:min(94vw,1000px);}
+.card{border:1px solid rgba(212,183,122,.25);border-radius:14px;padding:18px 22px;
+  background:linear-gradient(160deg,rgba(40,28,60,.35),rgba(14,10,24,.5));transition:border-color .3s;}
+.card:hover{border-color:#d4b77a;}
+.card h3{color:#f0d9a8;font-size:17px;letter-spacing:.1em;margin-bottom:4px;font-weight:600;}
+.card .desc{font-size:12px;color:#9a92a8;margin-bottom:12px;letter-spacing:.05em;}
+.card button{padding:9px 26px;border:1px solid #d4b77a;border-radius:999px;background:transparent;
+  color:#f0d9a8;font-family:inherit;font-size:13px;letter-spacing:.2em;cursor:pointer;transition:all .3s;}
+.card button:hover{background:rgba(212,183,122,.14);box-shadow:0 0 20px rgba(212,183,122,.3);}
+.card.playing{border-color:#f0d9a8;box-shadow:0 0 26px rgba(240,217,168,.25);}
+.note{margin-top:36px;font-size:12.5px;color:#9a92a8;line-height:2;text-align:center;max-width:640px;}
+.note b{color:#f0d9a8;}
+</style>
+</head>
+<body>
+<h1>音 色 实 验 室</h1>
+<div class="sub">qwen3-tts-instruct-flash · DashScope · 点击试听同一句话</div>
+<div class="grid" id="grid"></div>
+<div class="note">
+试听台词：「我是被人类追逐了两千三百年的存在。想真正认识我吗？」<br>
+选定角色音色后告诉我映射方案，我接进 Voice 层。<b>提示</b>：instruct-flash 支持语气指令（如"苍老低沉""空灵缓慢"），同一音色也能演出不同年龄感。
+</div>
+<script>
+const VOICES = [
+  {name:'Chelsie_spirit', desc:'⭐ 曲线之灵 · 终章台词（空灵指令）', file:'Chelsie_spirit.wav'},
+  {name:'Cherry',  desc:'清亮女声'},
+  {name:'Serena',  desc:'温柔女声'},
+  {name:'Vivian',  desc:'明亮女声'},
+  {name:'Bella',   desc:'女声'},
+  {name:'Stella',  desc:'女声'},
+  {name:'Momo',    desc:'女声'},
+  {name:'Maia',    desc:'女声'},
+  {name:'Chelsie', desc:'女声'},
+  {name:'Ethan',   desc:'男声'},
+  {name:'Nofish',  desc:'男声'}
+];
+let cur=null;
+const grid=document.getElementById('grid');
+VOICES.forEach(v=>{
+  const c=document.createElement('div'); c.className='card'; c.id='c-'+v.name;
+  c.innerHTML=`<h3>${v.name}</h3><div class="desc">${v.desc}</div><button>▶ 试听</button>`;
+  c.querySelector('button').onclick=()=>{
+    if(cur){ cur.audio.pause(); cur.card.classList.remove('playing'); }
+    const audio=new Audio('assets/voice_samples/'+(v.file||v.name+'.wav'));
+    c.classList.add('playing');
+    audio.onended=()=>{ c.classList.remove('playing'); cur=null; };
+    audio.play();
+    cur={audio, card:c};
+  };
+  grid.appendChild(c);
+});
+</script>
+</body>
+</html>

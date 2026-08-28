@@ -128,6 +128,17 @@ The Agent can autonomously generate interactive visualizations based on the EduV
 - **State Comparison** — Visual before/after state comparison
 - **Time Evolution** — Timeline animations showing change over time
 
+### 5. WeClaw WeChat Assistant Integration
+
+> Bring the learning assistant into WeChat — study anytime, anywhere.
+
+edu-agent can act as a message channel that plugs into **WeClaw (WeChat clawbridge)**, so conversations in WeChat are answered directly by your AI learning assistant:
+
+- **QR-code binding** — Bind your WeChat bot to your account by scanning a QR code on the "WeChat Assistant" page (each user binds their own bot)
+- **Multi-tenant long polling** — One async httpx long-polling coroutine per bot (≈ one idle long connection instead of a thread), scheduled by a ChannelManager; a single machine can host many online bots
+- **Shared reasoning brain** — WeChat messages go straight through `TutorService`, sharing the same ReAct tutoring capabilities, knowledge graph, and user profile as the web app
+- **Cards as images** — HTML knowledge cards / interactive visualizations / quiz cards are rendered into images via a headless browser (Playwright) and sent as pictures, with a link back to the web app for interaction
+
 ## 🏗️ Architecture
 
 <p align="center">
@@ -165,7 +176,7 @@ git clone https://github.com/Tencent/WeSmartFlow.git
 cd WeSmartFlow
 
 # Recommended: use Conda for unified management
-conda env create -f environment.yml && conda activate edu-agent
+conda env create -f environment.yml && conda activate agent
 
 # Install backend dependencies
 pip install -r backend/requirements.txt
@@ -226,6 +237,38 @@ cd frontend && npm run dev
 
 Once started, visit **http://localhost:5173** in your browser.
 
+### Enable WeClaw WeChat Assistant (optional)
+
+To plug the learning assistant into WeChat, a few extra steps are needed:
+
+**1. Install Playwright + Chromium** (required for rendering cards as images)
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+**2. Configure environment variables** (`backend/.env`)
+
+```bash
+WECLAW_ENABLED=true                    # enable the WeClaw channel
+PUBLIC_BASE_URL=https://your-domain    # public base URL for card/slide links
+# WECLAW_RENDER_CARDS=true             # render cards as images (on by default)
+```
+
+**3. Bind via QR code**
+
+After restarting the backend, log into the web app and open the **"WeChat Assistant"** page → click "Start Binding" → scan the QR code with WeChat. Once bound, messages received by that WeChat bot are answered by your AI learning assistant.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `WECLAW_ENABLED` | Enable the WeClaw channel | `false` |
+| `PUBLIC_BASE_URL` | Public base URL (card/slide links) | empty |
+| `WECLAW_RENDER_CARDS` | Render cards as images | `true` |
+| `WECLAW_RENDER_WIDTH` | Screenshot viewport width (px) | `480` |
+
+> Note: HTML cards / visualizations / quizzes are rendered as images with a link back to the web app for interaction; PDF slides are sent as links.
+
 ## 🧩 Project Structure
 
 ```
@@ -244,6 +287,7 @@ WeSmartFlow/
 │   │   └── prompts/         #   Agent prompts & skill definitions
 │   ├── services/            # Business service layer
 │   │   └── immersive/       #   Immersive course service (Multi-Agent)
+│   ├── channels/            # WeClaw WeChat channel (QR login / long polling / card rendering)
 │   ├── routers/             # FastAPI routes
 │   ├── repositories/        # Data access layer
 │   ├── models/              # Pydantic data models
@@ -270,6 +314,7 @@ WeSmartFlow/
 | ✅ | **Interactive Visualization** | EduViz SDK sandboxed educational visualizations |
 | ✅ | **Multiple Login Methods** | GitHub OAuth · Email verification · WeChat Mini Program |
 | ✅ | **HTML Knowledge Cards** | Replacing LaTeX cards with lighter, more beautiful HTML |
+| ✅ | **WeClaw WeChat Integration** | QR-code binding · multi-tenant long polling · cards rendered as images |
 | ✅ | **Usage Quota Management** | Free tier control (LLM / Search / Image) |
 | 🎯 | **Agent Benchmark** | Build evaluation system around educational tasks |
 | 🎯 | **Reflection & Adjustment** | Reflect on learning performance and quiz results |
@@ -292,6 +337,7 @@ WeSmartFlow/
 | Agent Core | `agent_core` (custom) · ReAct / Reflection / Plan-and-Solve · `@tool` · Agent-as-Tool · MCP |
 | LLM | OpenAI-compatible protocol (supports any compatible gateway) |
 | Content Generation | HTML Knowledge Cards · EduViz Interactive Viz · XeLaTeX + Beamer (SimplePlus) · macOS `say` (Tingting) |
+| Message Channel | WeClaw WeChat integration (clawbridge long polling · async httpx coroutine pool · Playwright card rendering) |
 | Search | Tavily · arXiv · DuckDuckGo |
 | Image | OpenAI-compatible image API |
 | Document Parsing | pdfplumber · pdfminer |

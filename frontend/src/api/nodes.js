@@ -20,6 +20,9 @@ export const nodeApi = {
   // 获取单个节点详情
   getById: (id) => api.get(`/api/nodes/${id}`),
 
+  // 获取节点来源证据（origins + quiz + study logs）
+  getEvidence: (id) => api.get(`/api/nodes/${id}/evidence`),
+
   // 创建节点
   create: (data) => api.post("/api/nodes", data),
 

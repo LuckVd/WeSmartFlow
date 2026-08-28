@@ -1,0 +1,300 @@
+:root {
+  --lesson-dock-height: calc(var(--magic-town-viewport-height, 100vh) * 2 / 7);
+  --lesson-dock-bg: linear-gradient(110deg,#fffdf7,#f5efe6 62%,#eee8f7);
+  --lesson-dock-line: rgba(118,96,174,.2);
+  --lesson-dock-purple: #6751ba;
+  --lesson-dock-ink: #443a5b;
+  --lesson-dock-muted: #746c78;
+}
+
+/* Shared operation surface for Lesson 1 and Lesson 2. */
+.lesson-action-dock {
+  box-sizing: border-box;
+  color: var(--lesson-dock-ink);
+  border: 1px solid rgba(255,255,255,.92);
+  border-top: 3px solid rgba(126,101,194,.28);
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at 7% 15%,rgba(255,232,164,.3),transparent 26%),
+    radial-gradient(circle at 94% 88%,rgba(193,178,238,.25),transparent 27%),
+    var(--lesson-dock-bg);
+  box-shadow: 0 20px 58px rgba(28,20,58,.19),0 0 0 7px rgba(255,255,255,.16),inset 0 1px rgba(255,255,255,.98);
+  backdrop-filter: blur(18px);
+}
+
+.lesson-dock-guide {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0,1fr);
+  gap: 13px;
+  align-items: center;
+}
+
+.lesson-dock-guide .guide-avatar,
+.moon-dock-guide > span {
+  width:58px;
+  height:58px;
+  display:grid;
+  place-items:center;
+  border:1px solid rgba(255,255,255,.78);
+  border-radius:19px 22px 18px 21px;
+  background:linear-gradient(145deg,#7863df,#5843b3);
+  box-shadow:0 10px 22px rgba(72,52,153,.2),inset 0 1px rgba(255,255,255,.25);
+}
+.moon-dock-guide > span { color:#fff; font-size:25px; }
+
+.lesson-dock-guide .guide-copy,
+.lesson-dock-guide > p { min-width: 0; }
+.lesson-dock-guide .guide-copy h2,
+.lesson-dock-guide .guide-copy p,
+.lesson-dock-guide > p strong,
+.lesson-dock-guide > p em { overflow-wrap:anywhere; }
+.lesson-dock-guide .guide-copy h2,
+.lesson-dock-guide > p strong { margin-top: 5px; font: 700 20px/1.18 "Fredoka"; }
+.lesson-dock-guide .guide-copy p,
+.lesson-dock-guide > p em { margin-top: 7px; color: var(--lesson-dock-muted); font-size: 12px; line-height: 1.45; }
+.lesson-dock-guide .guide-copy > small,
+.lesson-dock-guide > p > small { color:#7863b1; font-size:9px; font-weight:900; letter-spacing:.09em; }
+.lesson-dock-guide > p > small { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+.lesson-task-card {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 2px solid #d4c4ee;
+  border-radius: 20px 23px 19px 22px;
+  background: linear-gradient(138deg,rgba(255,255,255,.96),#f7f2ff);
+  box-shadow: 0 10px 24px rgba(67,48,107,.1),inset 0 1px rgba(255,255,255,.92);
+}
+.lesson-task-card.kind-explore,
+.lesson-task-card.kind-tap { border-color:#e7c962; background:linear-gradient(135deg,#fffdf3,#fff6cd); }
+.lesson-task-card.kind-ready,
+.lesson-task-card.kind-complete { border-color:#8bc7a6; background:linear-gradient(135deg,#f7fff9,#e5f5eb); }
+.lesson-task-card > header { display:flex; align-items:center; justify-content:space-between; gap:9px; }
+.lesson-task-card > header small { overflow:hidden; color:#705bb4; font-size:9px; font-weight:900; letter-spacing:.1em; text-overflow:ellipsis; white-space:nowrap; }
+.lesson-task-card > header b { flex:none; padding:5px 8px; border-radius:8px; color:#6552a5; background:#eee6ff; font-size:9px; }
+.lesson-task-card > h2 { margin:7px 0; display:flex; align-items:center; gap:9px; font:700 22px/1.08 "Fredoka"; }
+.lesson-task-card > h2 > span { width:34px; height:34px; flex:none; display:grid; place-items:center; border-radius:11px; background:#ffe395; font-size:18px; }
+.lesson-task-card > p { margin:0 0 8px; color:var(--lesson-dock-muted); font-size:11px; line-height:1.4; }
+.lesson-task-steps { display:flex; flex-wrap:wrap; gap:6px; }
+.lesson-task-steps > span { padding:6px 9px; border:1px solid rgba(117,94,177,.08); border-radius:9px; color:#5e5569; background:rgba(238,232,223,.82); font-size:9px; font-weight:800; }
+.lesson-task-primary { width:100%; min-height:42px; margin-top:9px; padding:8px 11px; display:flex; align-items:center; justify-content:space-between; border:0; border-radius:13px; color:#fff; background:var(--lesson-dock-purple); box-shadow:0 8px 16px rgba(91,70,174,.2); font-size:10px; font-weight:900; cursor:pointer; }
+.lesson-task-primary > span { width:24px; height:24px; display:grid; place-items:center; border-radius:8px; background:rgba(255,255,255,.16); }
+
+.lesson-dock-actions { min-width:0; display:flex; flex-direction:column; justify-content:center; gap:7px; }
+.lesson-dock-actions .voice-example { min-height:0; padding:9px 12px; border:1px solid #ded4eb; border-left:4px solid #8872d8; border-radius:13px 17px 13px 16px; background:linear-gradient(145deg,rgba(255,255,255,.88),#f1ebfb); box-shadow:0 6px 15px rgba(66,48,100,.06); }
+.lesson-dock-actions .voice-example.heard { border-left-color:#5bab7c; background:linear-gradient(145deg,#f5fcf7,#eaf7ef); }
+.lesson-dock-actions .voice-example > span { display:block; overflow:hidden; font-size:13px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
+.lesson-dock-actions .voice-composer { margin:0; padding:10px 11px 8px; display:block; border:1px solid #ddd3e8; border-radius:16px 19px 16px 18px; background:rgba(255,255,255,.86); box-shadow:0 8px 20px rgba(58,42,88,.07); }
+.lesson-input-label { margin:0 2px 7px; display:flex!important; align-items:baseline; justify-content:space-between; gap:10px; color:#564777!important; letter-spacing:0!important; text-transform:none!important; }
+.lesson-input-label strong { font-size:11px; font-weight:900; }
+.lesson-input-label span { overflow:hidden; color:#8a8190; font-size:9px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.lesson-input-row { display:grid!important; grid-template-columns:minmax(0,1fr) 92px!important; gap:8px!important; align-items:center; }
+.lesson-text-field { min-width:0; position:relative; }
+.lesson-dock-actions .voice-composer .lesson-text-field input { width:100%; height:52px; padding:0 72px 0 15px; border:1px solid #d5cbe1; border-radius:15px; color:var(--lesson-dock-ink); background:#fff; box-shadow:inset 0 1px 2px rgba(50,35,76,.03); font-size:15px; transition:border-color .18s ease,box-shadow .18s ease; }
+.lesson-dock-actions .voice-composer .lesson-text-field input:focus { outline:none; border-color:#9c89d6; box-shadow:0 0 0 4px rgba(118,91,191,.13),0 7px 18px rgba(54,38,84,.06); }
+.lesson-dock-actions .enter-hint { width:auto; height:24px; position:absolute; z-index:2; right:10px; top:50%; padding:0 7px; display:flex; align-items:center; border:1px solid #e2dce8; border-radius:7px; color:#857a8d; background:#f5f1f7; font-size:9px; font-weight:900; pointer-events:none; transform:translateY(-50%); }
+.lesson-dock-actions .mic-button { width:100%; height:52px; margin:0; padding:0 12px; display:flex; align-items:center; justify-content:center; gap:7px; border:1px solid #cfc2ea; border-radius:15px 18px 15px 17px; color:#5843b4; background:linear-gradient(145deg,#f1edff,#e8e0ff); box-shadow:0 7px 16px rgba(76,55,156,.11); transition:transform .18s ease,box-shadow .18s ease,background .18s ease; }
+.lesson-dock-actions .mic-button:hover:not(:disabled) { background:linear-gradient(145deg,#f7f4ff,#e4dbff); box-shadow:0 10px 20px rgba(76,55,156,.16); transform:translateY(-1px); }
+.lesson-dock-actions .mic-button:focus-visible { outline:3px solid rgba(105,79,190,.2); outline-offset:2px; }
+.lesson-dock-actions button[hidden] { display:none!important; }
+.lesson-dock-actions .voice-status { position:static; min-height:12px; margin:6px 2px 0; display:block; color:#817987; font-size:9px; }
+.lesson-dock-actions .scene-practice { margin-top:5px; padding:5px 7px; }
+.lesson-dock-actions .scene-practice small { display:none; }
+.optional-challenge-slot .scene-practice.surprise-challenge { margin:0; padding:7px 9px; display:grid; grid-template-columns:30px minmax(0,1fr) auto; gap:8px; align-items:center; border:2px solid #8cc8e8; color:#244f68; background:linear-gradient(135deg,#f2fbff,#d9f0ff); box-shadow:0 7px 17px rgba(55,126,166,.12); }
+.optional-challenge-slot .scene-practice.surprise-challenge>span { width:30px; height:30px; display:grid; place-items:center; border-radius:10px; background:#fff; font-size:16px; }
+.optional-challenge-slot .scene-practice.surprise-challenge p { min-width:0; margin:0; }
+.optional-challenge-slot .scene-practice.surprise-challenge small { display:block; overflow:hidden; color:#52758a; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.optional-challenge-slot .scene-practice.surprise-challenge i { color:#315d75; font-size:8px; font-style:normal; font-weight:900; white-space:nowrap; }
+.optional-challenge-slot .scene-practice.surprise-challenge:hover { color:#fff; border-color:#4e93bf; background:linear-gradient(135deg,#68add5,#3f82ae); }
+.optional-challenge-slot .scene-practice.surprise-challenge:hover small,.optional-challenge-slot .scene-practice.surprise-challenge:hover i { color:#eaf8ff; }
+.quest-stack { width:min(560px,100%); min-width:0; position:relative; justify-self:center; }
+.quest-stack .quest-pill { width:100%; }
+.moon-quest-stack { width:350px; min-width:0; position:relative; justify-self:end; pointer-events:none; }
+.moon-quest-stack .main-story-pill { width:100%; pointer-events:auto; }
+.hud-optional-challenge { width:calc(100% - 64px); position:absolute; left:50%; top:calc(100% + 10px); pointer-events:auto; transform:translateX(-50%); }
+.dock-optional-challenge { display:none; }
+.lesson-dock-actions .input-credit,
+.lesson-dock-actions .scene-practice-complete { margin-top:4px; }
+
+@media (min-width:901px) {
+  .immersive-app .open-town-stage,
+  .immersive-app .world-location-stage,
+  .immersive-app .community-stage {
+    height:var(--magic-town-viewport-height, 100vh);
+    min-height:0;
+    grid-template-rows:minmax(0,calc(var(--magic-town-viewport-height, 100vh) - var(--lesson-dock-height))) var(--lesson-dock-height);
+    overflow:hidden;
+  }
+  .immersive-app .open-town-stage > .scene-world,
+  .immersive-app .world-location-stage > .scene-world,
+  .immersive-app .community-stage > .scene-world { min-height:0; height:100%; }
+
+  .moon-layout {
+    height:var(--magic-town-viewport-height, 100vh);
+    min-height:0;
+    grid-template-columns:minmax(0,1fr);
+    grid-template-rows:minmax(0,calc(var(--magic-town-viewport-height, 100vh) - var(--lesson-dock-height))) var(--lesson-dock-height);
+  }
+  .moon-world,.moon-world > .festival-scene { min-height:0; height:100%; }
+
+  .world-dock.lesson-action-dock,
+  .moon-world-dock.lesson-action-dock {
+    width:80%;
+    height:calc(var(--lesson-dock-height) - 20px);
+    min-height:0;
+    max-height:none;
+    margin:auto;
+    padding-block:clamp(13px,1.7vh,19px);
+    padding-inline:clamp(18px,2.2vw,36px);
+    overflow:auto;
+    display:grid;
+    grid-template-columns:minmax(150px,.72fr) minmax(220px,1fr) minmax(240px,1.1fr);
+    gap:clamp(12px,1.35vw,20px);
+    align-items:stretch;
+  }
+
+  .lesson-action-dock > .lesson-dock-guide { align-content:center; }
+  .lesson-action-dock > .lesson-task-card { height:100%; align-self:stretch; overflow:auto; }
+  .lesson-action-dock > .lesson-dock-actions { height:100%; align-self:stretch; overflow:auto; }
+
+  .world-nav { bottom:calc(var(--lesson-dock-height) + 10px); }
+  .immersive-app .first-steps-card,
+  .moon-app .first-steps-card {
+    /* Clear both the 2/7 operation dock and the floating 62px town nav. */
+    bottom:calc(var(--lesson-dock-height) + 84px);
+  }
+  .moon-rail { bottom:10px; }
+  .world-nav { width:min(640px,calc(100% - 28px)); min-height:54px; }
+  .moon-rail { width:min(780px,calc(100% - 28px)); min-height:62px; }
+  .moon-header.floating-hud { right:clamp(16px,2vw,32px); }
+}
+
+@media (min-width:1440px) and (min-height:720px) {
+  .world-dock.lesson-action-dock,
+  .moon-world-dock.lesson-action-dock {
+    grid-template-columns:minmax(230px,.74fr) minmax(330px,1.05fr) minmax(360px,1.12fr);
+  }
+  .lesson-dock-guide .guide-copy h2,
+  .lesson-dock-guide > p strong { font-size:22px; }
+  .lesson-dock-guide .guide-copy p,
+  .lesson-dock-guide > p em { font-size:14px; }
+  .lesson-task-card > header small,
+  .lesson-task-card > header b,
+  .lesson-task-steps > span { font-size:10px; }
+  .lesson-task-card > h2 { font-size:24px; }
+  .lesson-task-card > p { font-size:13px; }
+  .lesson-task-primary { font-size:12px; }
+  .lesson-dock-actions .voice-example > span { font-size:15px; }
+}
+
+@media (max-width:900px) {
+  .hud-optional-challenge { display:none; }
+  .dock-optional-challenge { display:block; }
+  .lesson-action-dock { width:calc(100% - 20px); height:auto; min-height:0; margin:10px auto; border-radius:22px; }
+  .world-dock.lesson-action-dock,
+  .moon-world-dock.lesson-action-dock { padding:16px 12px calc(90px + env(safe-area-inset-bottom)); display:grid; grid-template-columns:1fr; gap:12px; overflow:visible; }
+  .lesson-dock-guide,.lesson-task-card,.lesson-dock-actions { grid-column:1; }
+  .lesson-dock-actions .lesson-input-row { grid-template-columns:minmax(0,1fr) 92px!important; }
+  .immersive-app .open-town-stage,
+  .immersive-app .world-location-stage,
+  .immersive-app .community-stage {
+    height:auto;
+    min-height:0;
+    grid-template-rows:auto auto;
+    overflow:visible;
+  }
+  .immersive-app .open-town-stage > .scene-world,
+  .immersive-app .world-location-stage > .scene-world,
+  .immersive-app .community-stage > .scene-world {
+    height:auto;
+    min-height:clamp(540px,72vh,720px);
+  }
+  .world-nav,.moon-rail { bottom:max(9px,env(safe-area-inset-bottom)); }
+}
+
+@media (max-width:1180px) {
+  .moon-quest-stack { width:52px; }
+  .moon-hud-optional-challenge { display:none; }
+  .moon-dock-optional-challenge.dock-optional-challenge { display:block; }
+}
+
+@media (max-width:600px) {
+  .lesson-dock-actions .lesson-input-row { grid-template-columns:minmax(0,1fr) 76px!important; }
+  .lesson-dock-actions .mic-button { padding-inline:8px; }
+  .lesson-dock-actions .mic-button b { font-size:9px; }
+}
+
+@media (max-width:720px) {
+  /* Preserve the authored mobile canvases used by the absolute scene art. */
+  .immersive-app .open-town-stage > .town-world { min-height:970px; }
+  .immersive-app .world-location-stage > .scene-world { min-height:470px; }
+  .immersive-app .community-stage > .community-world { min-height:670px; }
+  /* Lesson 2's guide belongs to its 632px scene, not to the viewport or dock. */
+  .moon-app .first-steps-card {
+    position:absolute;
+    top:410px;
+    bottom:auto;
+  }
+}
+
+@media (min-width:721px) and (max-width:900px) {
+  .immersive-app .first-steps-card {
+    position:absolute;
+    top:calc(clamp(540px,72vh,720px) - 170px);
+    bottom:auto;
+  }
+  .moon-app .first-steps-card {
+    position:absolute;
+    top:442px;
+    bottom:auto;
+  }
+}
+
+@media (min-width:901px) and (max-height:820px) {
+  .world-dock.lesson-action-dock,
+  .moon-world-dock.lesson-action-dock { padding-block:10px; }
+  .lesson-dock-guide { grid-template-columns:48px minmax(0,1fr); gap:9px; }
+  .lesson-dock-guide .guide-avatar,
+  .moon-dock-guide > span { width:48px; height:48px; }
+  .lesson-dock-guide .guide-copy h2,
+  .lesson-dock-guide > p strong { margin-top:3px; font-size:17px; }
+  .lesson-dock-guide .guide-copy p,
+  .lesson-dock-guide > p em { margin-top:3px; font-size:10px; line-height:1.3; }
+  .lesson-task-card { padding:9px 11px; }
+  .lesson-task-card > h2 { margin:4px 0; font-size:18px; }
+  .lesson-task-card > h2 > span { width:29px; height:29px; font-size:15px; }
+  .lesson-task-card > p { margin-bottom:4px; font-size:10px; line-height:1.25; }
+  .lesson-task-steps { gap:4px; }
+  .lesson-task-steps > span { padding:4px 6px; font-size:8px; }
+  .lesson-task-primary { min-height:32px; margin-top:5px; padding-block:4px; }
+  .lesson-dock-actions { gap:4px; }
+  .lesson-dock-actions .voice-example { padding:6px 9px; }
+  .lesson-dock-actions .voice-composer { padding:7px 8px 5px; }
+  .lesson-dock-actions .voice-composer .lesson-text-field input,
+  .lesson-dock-actions .mic-button { height:44px; }
+  .lesson-input-label { margin-bottom:4px; }
+  .lesson-dock-actions .voice-status { min-height:9px; margin-top:3px; font-size:8px; }
+  .lesson-dock-actions .scene-practice.surprise-challenge { padding:5px 7px; }
+}
+
+/* Course cards expose both safe resume and explicit restart choices. */
+.lesson-card-actions { margin-top:20px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:9px; }
+.lesson-card-copy .lesson-card-actions > a { min-height:50px; padding:10px 12px 10px 16px; display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:15px; font-size:12px; font-weight:900; text-decoration:none; transition:transform .2s ease,box-shadow .2s ease; }
+.lesson-card-actions a > b { width:29px; height:29px; flex:none; display:grid; place-items:center; border-radius:10px; }
+.lesson-card-actions .lesson-continue { color:#fff; background:var(--moon-violet); box-shadow:0 12px 24px rgba(91,71,181,.2); }
+.tone-mint .lesson-card-actions .lesson-continue { background:#4e8d72; }
+.lesson-card-actions .lesson-continue > b { background:rgba(255,255,255,.15); }
+.lesson-card-actions .lesson-restart { color:#66577a; border:1px solid #d9cfe6; background:#f4eef7; }
+.lesson-card-actions .lesson-restart > b { color:#725eb2; background:#e7def2; }
+.lesson-card-actions > a:hover,.lesson-card-actions > a:focus-visible { outline:3px solid rgba(255,255,255,.7); outline-offset:-4px; box-shadow:0 15px 28px rgba(72,52,112,.2); transform:translateY(-2px); }
+
+@media (max-width:600px) {
+  .lesson-card-actions { grid-template-columns:1fr; }
+  .lesson-card-copy .lesson-card-actions > a { width:100%; }
+}
+/* Shared locked-event notice used by both lesson docks. */
+.scene-practice-locked { min-height:52px; padding:9px 12px; display:grid; grid-template-columns:auto 1fr; column-gap:9px; align-items:center; border:1px dashed #d9cda9; border-radius:14px; color:#756e62; background:#f5f1e8; font-style:normal; }
+.scene-practice-locked>span { grid-row:1/3; font-size:18px; filter:grayscale(.25); }
+.scene-practice-locked>b,.scene-practice-locked>small { display:block; text-align:left; }
+.scene-practice-locked>b { font-size:10px; }
+.scene-practice-locked>small { margin-top:2px; font-size:9px; line-height:1.25; }

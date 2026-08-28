@@ -349,3 +349,283 @@ class KGRecordObservationTool(BaseTool):
             )
             return f"Error: kg_record_observation 异常 {exc}"
         return json.dumps(result, ensure_ascii=False)
+
+
+# ============================================================
+# kg.resolve_for_authoring — 写回 Agent 专用：解析术语并直接给出 verdict
+# ============================================================
+#
+# 与 kg_resolve 的区别（不要混用）:
+#   - kg_resolve 给教学 Agent 用，返回原始 match_type/score，由 Agent 自己解读
+#   - kg_resolve_for_authoring 给「内部写回 Agent」(任务 2: 新增概念建档) 用，
+#     由工具直接给出 verdict，避免 Agent 误判 score 阈值导致重复建档。
+# ============================================================
+
+# 写回场景判定阈值
+# - exact / alias 命中                       → 已存在
+# - vector 命中且 score >= STRONG (强阈值)    → 视为已存在 (高度疑似)
+# - vector 命中且 WEAK <= score < STRONG     → 疑似存在,人工复核
+# - vector 命中且 score < WEAK (弱阈值)       → 视为不匹配,可建档
+# - 其它                                     → 不存在,可建档
+_AUTHORING_RESOLVE_STRONG_VEC = 0.85
+_AUTHORING_RESOLVE_WEAK_VEC = 0.65
+
+
+class KGResolveForAuthoringTool(BaseTool):
+    name = "kg_resolve_for_authoring"
+    description = (
+        "【写回 Agent 专用】把术语链接到 KG 概念，并直接给出 verdict（已存在/疑似/不存在），"
+        "用于「新增概念建档」前的查重。"
+        "返回 JSON："
+        "{verdict: exists|suspected|not_found, "
+        "concept_id?, canonical_name?, slug?, score?, match_type?, advice}"
+        "  - exists:    KG 中已有该概念，**禁止建档**，advice 提示 Agent 中止"
+        "  - suspected: 疑似已有，**禁止直接建档**，advice 提示 Agent 报人工复核"
+        "  - not_found: 不存在，可以继续走建档流程"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "term": {
+                "type": "string",
+                "description": "要查重的概念名（自然语言原话即可）",
+            },
+        },
+        "required": ["term"],
+    }
+
+    def run(self, term: str = "", **kwargs) -> str:
+        from services import kg_facade
+
+        term = (term or "").strip()
+        if not term:
+            return json.dumps(
+                {"verdict": "not_found", "advice": "term 为空，按未找到处理"},
+                ensure_ascii=False,
+            )
+
+        try:
+            items = kg_facade.resolve_terms([term], top_k=1)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("kg_resolve_for_authoring 失败 term=%s", term)
+            return f"Error: kg_resolve_for_authoring 异常 {exc}"
+
+        if not items:
+            return json.dumps(
+                {
+                    "verdict": "not_found",
+                    "advice": "KG 中未找到该概念，可继续建档流程",
+                },
+                ensure_ascii=False,
+            )
+
+        it = items[0]
+        match_type = it.match_type
+        score = float(it.score or 0.0)
+
+        if match_type in ("exact", "alias"):
+            return json.dumps(
+                {
+                    "verdict": "exists",
+                    "concept_id": it.concept_id,
+                    "canonical_name": it.canonical_name,
+                    "slug": it.slug,
+                    "score": score,
+                    "match_type": match_type,
+                    "advice": (
+                        f"KG 已存在概念「{it.canonical_name}」"
+                        f"(id={it.concept_id})，禁止重复建档，请中止本次建档任务。"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
+        if match_type == "vector" and score >= _AUTHORING_RESOLVE_STRONG_VEC:
+            return json.dumps(
+                {
+                    "verdict": "exists",
+                    "concept_id": it.concept_id,
+                    "canonical_name": it.canonical_name,
+                    "slug": it.slug,
+                    "score": score,
+                    "match_type": match_type,
+                    "advice": (
+                        f"向量高度相似(score={score:.3f} ≥ {_AUTHORING_RESOLVE_STRONG_VEC})"
+                        f"已视为存在，匹配到「{it.canonical_name}」(id={it.concept_id})，禁止建档。"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
+        if match_type == "vector" and score >= _AUTHORING_RESOLVE_WEAK_VEC:
+            return json.dumps(
+                {
+                    "verdict": "suspected",
+                    "concept_id": it.concept_id,
+                    "canonical_name": it.canonical_name,
+                    "slug": it.slug,
+                    "score": score,
+                    "match_type": match_type,
+                    "advice": (
+                        f"向量疑似命中「{it.canonical_name}」"
+                        f"(score={score:.3f}，落在 [{_AUTHORING_RESOLVE_WEAK_VEC}, "
+                        f"{_AUTHORING_RESOLVE_STRONG_VEC}) 区间)，禁止直接建档，请上报人工复核。"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
+        if match_type == "vector":
+            # score < WEAK: 相似度太弱,视为不匹配,放行建档
+            return json.dumps(
+                {
+                    "verdict": "not_found",
+                    "score": score,
+                    "match_type": match_type,
+                    "advice": (
+                        f"向量召回最高分仅 {score:.3f} (< {_AUTHORING_RESOLVE_WEAK_VEC})，"
+                        f"视为 KG 中不存在该概念，可继续建档流程。"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
+        # match_type == "none" 或其它
+        return json.dumps(
+            {
+                "verdict": "not_found",
+                "advice": "KG 中未找到该概念，可继续建档流程",
+            },
+            ensure_ascii=False,
+        )
+
+
+# ============================================================
+# kg.search_for_authoring — 写回 Agent 专用：邻居召回 + subject 分布
+# ============================================================
+#
+# 与 kg_search 的区别（不要混用）:
+#   - kg_search 走 RetrieveService(Graph RAG，会做关系扩展、facet 召回，
+#     副作用是更新 edge support_count，且响应较重)
+#   - kg_search_for_authoring 直接打 vector_store.search(COLLECTION_CONCEPT)，
+#     **零副作用**，只返回 concept 列表 + subject 分布(用于 Agent 决定 front matter
+#     里 subject 该填什么)
+# ============================================================
+
+
+class KGSearchForAuthoringTool(BaseTool):
+    name = "kg_search_for_authoring"
+    description = (
+        "【写回 Agent 专用】对一个概念名做向量近邻检索，返回相似概念列表 + 学科分布。"
+        "用于「新增概念建档」时确定 subject 字段(取分布众数)与潜在 related_concepts。"
+        "无副作用(不更新任何 KG 状态)。"
+        "返回 JSON：{concepts: [{id, canonical_name, subject, difficulty, score}], "
+        "subject_distribution: {subject_name: count}}"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "检索词，通常是要建档的概念名",
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "返回多少个相似概念（默认 8，最大 20）",
+                "default": 8,
+            },
+            "min_score": {
+                "type": "number",
+                "description": "相似度阈值(余弦)，默认 0.5，低于此值的命中会被过滤",
+                "default": 0.5,
+            },
+        },
+        "required": ["query"],
+    }
+
+    def run(
+        self,
+        query: str = "",
+        top_k: int = 8,
+        min_score: float = 0.5,
+        **kwargs,
+    ) -> str:
+        query = (query or "").strip()
+        if not query:
+            return json.dumps(
+                {"concepts": [], "subject_distribution": {}},
+                ensure_ascii=False,
+            )
+        top_k = max(1, min(int(top_k or 8), 20))
+        min_score = float(min_score if min_score is not None else 0.5)
+
+        try:
+            from kg.repositories import ConceptRepository
+            from kg.vector_store import COLLECTION_CONCEPT, get_vector_store
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("kg_search_for_authoring 导入失败")
+            return f"Error: kg_search_for_authoring 导入异常 {exc}"
+
+        store = get_vector_store()
+        if not store.enabled:
+            return json.dumps(
+                {
+                    "concepts": [],
+                    "subject_distribution": {},
+                    "degraded": True,
+                    "reason": "向量库未启用",
+                },
+                ensure_ascii=False,
+            )
+
+        try:
+            hits = store.search(COLLECTION_CONCEPT, query, top_k=top_k)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("kg_search_for_authoring 向量召回失败 query=%s", query)
+            return f"Error: kg_search_for_authoring 异常 {exc}"
+
+        if not hits:
+            return json.dumps(
+                {"concepts": [], "subject_distribution": {}},
+                ensure_ascii=False,
+            )
+
+        repo = ConceptRepository()
+        concepts: list[dict] = []
+        subject_dist: dict[str, int] = {}
+
+        for h in hits:
+            score = float(h.get("score") or 0.0)
+            if score < min_score:
+                continue
+            payload = h.get("payload") or {}
+            cid = payload.get("concept_id") or h.get("biz_id") or ""
+            if not cid:
+                continue
+            try:
+                c = repo.get_by_id(cid)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("kg_search_for_authoring get_by_id 失败 cid=%s", cid)
+                continue
+            if not c or c.status != "approved":
+                continue
+            concepts.append(
+                {
+                    "id": c.id,
+                    "canonical_name": c.canonical_name,
+                    "subject": c.subject or "",
+                    "difficulty": c.difficulty or "",
+                    "score": round(score, 4),
+                }
+            )
+            subj = (c.subject or "").strip()
+            if subj:
+                subject_dist[subj] = subject_dist.get(subj, 0) + 1
+
+        return json.dumps(
+            {
+                "concepts": concepts,
+                "subject_distribution": subject_dist,
+            },
+            ensure_ascii=False,
+        )

@@ -37,6 +37,7 @@
 <script setup>
 import { ref, watch, onMounted } from "vue";
 import EduVizSandbox from "../EduViz/EduVizSandbox.vue";
+import { api } from "../../api/base.js";
 
 const props = defineProps({
   /** 可视化 ID（viz_id），格式为 UUID 字符串 */
@@ -61,8 +62,6 @@ async function fetchCode() {
   code.value = "";
 
   try {
-    const { api } = await import("../../api/base.js");
-
     // 并行拉取代码和 meta（meta 用于获取标题）
     const [codeRes, metaRes] = await Promise.all([
       api.getRaw(`/api/documents/${props.vizId}/raw`),

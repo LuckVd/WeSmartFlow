@@ -666,12 +666,14 @@ class GenerateHtmlCardTool(BaseTool):
 
             # 透传 HtmlCardWriterAgent 的所有流式事件
             body_html = ""
+            finish_reason = ""
             try:
                 async for event in agent.async_stream(instruction):
                     yield event
                     # 收集最终输出（AgentFinalEvent.content）
                     if isinstance(event, AgentFinalEvent):
                         body_html = event.content or ""
+                        finish_reason = event.finish_reason or ""
             except Exception as e:  # pylint: disable=broad-except
                 logger.exception(
                     "[GenerateHtmlCardTool] HtmlCardWriterAgent 流式运行异常"
@@ -680,7 +682,10 @@ class GenerateHtmlCardTool(BaseTool):
                 return
 
             if not body_html or len(body_html) < 50:
-                yield "Error: 卡片生成失败 — HTML 内容为空"
+                yield (
+                    "Error: 卡片生成失败 — HTML 内容为空，Finish reason: "
+                    + finish_reason.value
+                )
                 return
 
             # 清理 body HTML，并做一次轻量 critique→repair（无额外 LLM 调用，尽量不影响速度）

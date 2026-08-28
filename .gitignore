@@ -215,20 +215,31 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-
-
+# Project-generated data and reports
 output/
-
 data/
-# Generated files
 generated_courses/
 generated_pdfs/
 core/tools/test_results/
 
-test_dir/.DS_Store
-
+# Editors and operating-system files
 .vscode/
-
+.codebuddy/
 *.DS_Store
 
+# Generated presentation themes
 *SimplePlus-BeamerTheme/
+
+# living_history 运行时生成的案件与插画
+backend/court/cases/forge_*
+examples/living_history/assets/
+examples/living_history/dist/
+
+# living_history 运行时生成的图片（与 frontend 路径解耦）
+backend/court/.assets/
+
+# 本地一键启动脚本（个人便利脚本，不入库）
+start.sh
+
+# 知识之境预渲染音频资产（不入 git，体验时本地缺失则按需实时合成，音色已在 cast/音色池定好）
+examples/live_science/assets/audio/

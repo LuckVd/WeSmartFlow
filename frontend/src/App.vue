@@ -1,6 +1,6 @@
 <template>
-  <!-- 登录页：全屏展示，不显示侧边栏 -->
-  <router-view v-if="isLoginPage" />
+  <!-- 登录页 / Admin 审核台：全屏展示，不显示侧边栏 -->
+  <router-view v-if="isStandalonePage" />
 
   <!-- 主布局：侧边栏 + 内容区 -->
   <div
@@ -207,7 +207,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { useRoute, useRouter } from "vue-router";
 import { useTheme } from "./composables/useTheme.js";
@@ -223,10 +223,30 @@ const {
   isAuthenticated,
   setUserProfile,
 } = useAuth();
-const sidebarCollapsed = ref(false);
+const compactViewport = window.matchMedia("(max-width: 700px)");
+const sidebarCollapsed = ref(compactViewport.matches);
 
-// 是否在登录页
+function syncSidebarToViewport(event) {
+  sidebarCollapsed.value = event.matches;
+}
+
+onMounted(() => {
+  if (compactViewport.addEventListener)
+    compactViewport.addEventListener("change", syncSidebarToViewport);
+  else compactViewport.addListener(syncSidebarToViewport);
+});
+
+onBeforeUnmount(() => {
+  if (compactViewport.removeEventListener)
+    compactViewport.removeEventListener("change", syncSidebarToViewport);
+  else compactViewport.removeListener(syncSidebarToViewport);
+});
+
+// 是否在登录页 / Admin 审核台 → 走全屏布局
 const isLoginPage = computed(() => route.path === "/login");
+const isStandalonePage = computed(
+  () => route.path === "/login" || route.path.startsWith("/admin"),
+);
 
 // ── 用户信息（使用全局共享的 userProfile） ──────────────────────
 const userName = computed(() => authUserName.value || "User");
@@ -246,9 +266,11 @@ async function fetchUserInfo() {
 }
 
 // 监听认证状态和路由变化，登录后自动拉取用户信息
+// admin 路由下完全不碰普通用户 API，避免 401 把页面冲到 /login
 watch(
-  () => [isLoginPage.value, isAuthenticated.value],
-  ([onLogin, authed]) => {
+  () => [isLoginPage.value, isAuthenticated.value, route.path],
+  ([onLogin, authed, path]) => {
+    if (path && path.startsWith("/admin")) return;
     if (!onLogin && authed) {
       fetchUserInfo();
     }
@@ -279,6 +301,13 @@ const learnNav = [
     path: "/sessions",
     label: "学习历史",
     icon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+  },
+  {
+    path: "/explore",
+    label: "探索",
+    badge: "NEW",
+    badgeType: "hot",
+    icon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><polygon points="16 8 14 14 8 16 10 10 16 8"/></svg>`,
   },
 ];
 
@@ -312,6 +341,11 @@ const personalNav = [
     path: "/profile",
     label: "我的档案",
     icon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+  },
+  {
+    path: "/weclaw",
+    label: "微信助手",
+    icon: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>`,
   },
   {
     path: "/settings",
@@ -514,6 +548,11 @@ const personalNav = [
   padding: 1px 5px;
   border-radius: var(--radius-full);
 }
+.nav-badge.hot {
+  color: #fff7ed;
+  background: linear-gradient(135deg, #f97316, #ef4444);
+  box-shadow: 0 0 14px rgb(249 115 22 / 35%);
+}
 
 /* Footer */
 .sidebar-footer {
@@ -633,6 +672,7 @@ const personalNav = [
 /* Main */
 .main-content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   background: var(--bg-base);
 }

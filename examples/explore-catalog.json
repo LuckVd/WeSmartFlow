@@ -1,0 +1,628 @@
+{
+  "version": 2,
+  "categories": [
+    {
+      "id": "school-english",
+      "title": "中小学英语",
+      "kicker": "LEARNING THEME",
+      "icon": "Aa",
+      "description": "在 Agent 对话、故事任务和世界探索中主动开口，让英语成为发现和创造的工具。"
+    },
+    {
+      "id": "school-science",
+      "title": "中小学科学",
+      "kicker": "LEARNING THEME",
+      "icon": "⚗",
+      "description": "在自由组合、真实条件和可观察现象中提出猜想、验证推理；也可以沿历史时间线回到科学诞生的现场，与科学家对话、亲手重做他们的实验。"
+    },
+    {
+      "id": "school-math",
+      "title": "中小学数学",
+      "kicker": "LEARNING THEME",
+      "icon": "∑",
+      "description": "通过搭积木、三视图和算式炮弹等动手游戏，训练空间想象与代数策略。"
+    },
+    {
+      "id": "school-history",
+      "title": "中小学历史",
+      "kicker": "LEARNING THEME",
+      "icon": "史",
+      "description": "在活的历史世界里理解事件、立场与史料。"
+    }
+  ],
+  "topics": [
+    {
+      "id": "magic-english-town",
+      "categoryId": "school-english",
+      "title": "魔法英语小镇",
+      "type": "Agent 口语互动英语",
+      "author": "Zexi Jia",
+      "badge": "NEW",
+      "summary": "和会回应、会陪伴的 Agent 伙伴探索魔法小镇，在找线索、交朋友和创造故事中自然开口使用英语。",
+      "href": "/magic-english-town/index.html?source=wesmartflow",
+      "launchLabel": "进入魔法英语小镇",
+      "facts": [
+        "8–16 岁",
+        "Agent 口语陪伴",
+        "2 节故事课"
+      ],
+      "tags": [
+        "Agent 口语陪伴",
+        "故事世界探索",
+        "语音或键盘均可"
+      ],
+      "hero": {
+        "kicker": "MAGIC ENGLISH TOWN",
+        "description": "Agent 角色全程口语陪伴，孩子用英语探索世界、解决任务，让每一句表达都推动故事发生。",
+        "symbol": "✦",
+        "sparkles": "✦ · ✧"
+      },
+      "cover": {
+        "kind": "storybook"
+      },
+      "theme": {
+        "primary": "#7059d3",
+        "primaryDark": "#5944a8",
+        "skyStart": "#50457f",
+        "skyEnd": "#725da7",
+        "land": "#547064",
+        "landAlt": "#5d806d",
+        "moon": "#ffe18e"
+      },
+      "sections": [
+        {
+          "title": "主要学习内容",
+          "layout": "grid",
+          "items": [
+            {
+              "label": "💬",
+              "title": "Agent 口语陪伴",
+              "detail": "角色会听、会回应，也会记住故事"
+            },
+            {
+              "label": "🧭",
+              "title": "世界探索",
+              "detail": "用英语找线索、解决真实任务"
+            },
+            {
+              "label": "✨",
+              "title": "有趣表达",
+              "detail": "在故事情境中自然开口，而不是背答案"
+            },
+            {
+              "label": "📖",
+              "title": "故事创作",
+              "detail": "把选择与表达写进自己的故事书"
+            }
+          ]
+        },
+        {
+          "title": "当前故事课程",
+          "layout": "list",
+          "items": [
+            {
+              "label": "01",
+              "title": "寻找走失的小狗",
+              "detail": "与 Agent 角色对话，描述位置、寻找线索并照顾朋友"
+            },
+            {
+              "label": "02",
+              "title": "月光节欢迎故事",
+              "detail": "筹备节日，在请求、设计、引导和邀请中使用英语"
+            }
+          ]
+        }
+      ],
+      "audience": {
+        "title": "适合怎样的学习者？",
+        "description": "适合希望在角色陪伴、世界探索和真实任务中使用英语的 8–16 岁孩子。麦克风不是必需，键盘输入也能完成全部主线。"
+      },
+      "persistence": "学习进度会保存在当前浏览器",
+      "build": {
+        "runner": "npm",
+        "script": "build:wesmartflow",
+        "packageDir": "Magic_English_Town",
+        "outputDir": "magic-english-town",
+        "entryFile": "index.html"
+      }
+    },
+    {
+      "id": "dive-into-math-garden",
+      "categoryId": "school-math",
+      "title": "走进数学花园",
+      "type": "动手数学素养训练",
+      "author": "Shipeng Cen",
+      "badge": "NEW",
+      "summary": "搭积木看三视图、闯关数格子、让 AI 猜图形，再用算式炮弹练运算顺序——在动手和策略中建立空间感与代数直觉。",
+      "href": "/dive-into-math-garden/index.html?source=wesmartflow",
+      "launchLabel": "进入数学花园",
+      "facts": [
+        "6–12 岁",
+        "2 大花园",
+        "空间想象 + 代数策略"
+      ],
+      "tags": [
+        "空间想象",
+        "三视图",
+        "代数策略",
+        "动手操作"
+      ],
+      "hero": {
+        "kicker": "MATH GARDEN",
+        "description": "用积木搭出立体图形、从三个方向观察它，再让算式炮弹轰出正确的结果。",
+        "symbol": "🧊",
+        "sparkles": "· ✦ ·"
+      },
+      "cover": {
+        "kind": "symbol"
+      },
+      "theme": {
+        "primary": "#2e7d5b",
+        "primaryDark": "#205e44",
+        "skyStart": "#1f5a46",
+        "skyEnd": "#3aa876",
+        "surface": "#f6fffb",
+        "surfaceText": "#173e32"
+      },
+      "sections": [
+        {
+          "title": "你会玩到什么",
+          "layout": "grid",
+          "items": [
+            {
+              "label": "🧊",
+              "title": "空间想象",
+              "detail": "三视图、数格子、让 AI 猜图形"
+            },
+            {
+              "label": "🔢",
+              "title": "代数策略",
+              "detail": "算式炮弹、目标逼近、运算顺序"
+            },
+            {
+              "label": "🧱",
+              "title": "动手搭建",
+              "detail": "搭积木、拖拽旋转、从视图恢复结构"
+            },
+            {
+              "label": "🤖",
+              "title": "AI 推理",
+              "detail": "看 AI 只凭三视图把图形拼回来"
+            }
+          ]
+        },
+        {
+          "title": "花园分区",
+          "layout": "list",
+          "items": [
+            {
+              "label": "01",
+              "title": "空间想象能力培养",
+              "detail": "认识三视图、闯关数格子、搭一搭让 AI 猜"
+            },
+            {
+              "label": "02",
+              "title": "代数能力培养",
+              "detail": "算式炮弹：最大值挑战与目标值挑战"
+            }
+          ]
+        }
+      ],
+      "audience": {
+        "title": "适合怎样的学习者？",
+        "description": "适合 6–12 岁、喜欢动手搭积木和策略挑战的孩子，在游戏中建立空间感与运算直觉。"
+      },
+      "persistence": "算式炮弹历史会保存在当前浏览器",
+      "build": {
+        "runner": "npm",
+        "script": "build:wesmartflow",
+        "packageDir": "dive_into_math_garden",
+        "outputDir": "dive-into-math-garden",
+        "entryFile": "index.html"
+      }
+    },
+    {
+      "id": "bingemate",
+      "categoryId": "school-english",
+      "title": "追剧搭子 BingeMate",
+      "type": "剧集精读英语",
+      "author": "Jingwei Li",
+      "badge": "NEW",
+      "summary": "追剧的时候，旁边有个懂英语的搭子。该讲的地方它招呼你一声：表达怎么用、梗从哪儿来、音是怎么连怎么吞的，都在剧情里当场拆开。",
+      "href": "/bingemate/index.html?source=wesmartflow",
+      "launchLabel": "进入追剧搭子",
+      "facts": [
+        "8 岁以上",
+        "2 段真实剧集"
+      ],
+      "tags": [
+        "兴趣驱动",
+        "剧集原声发音",
+        "AI 提示可忽略"
+      ],
+      "hero": {
+        "kicker": "BINGEMATE",
+        "description": "挑一段你想追的剧，照平时那样看。遇到值得说两句的地方，旁边这位会招呼你一声，讲完就退回旁边继续陪看。",
+        "symbol": "🍿",
+        "sparkles": "· ✦ ·"
+      },
+      "cover": {
+        "kind": "symbol"
+      },
+      "theme": {
+        "primary": "#6366f1",
+        "primaryDark": "#4f46e5",
+        "skyStart": "#1e1b4b",
+        "skyEnd": "#4c1d95"
+      },
+      "sections": [
+        {
+          "title": "你会学到什么",
+          "layout": "grid",
+          "items": [
+            {
+              "label": "💬",
+              "title": "地道表达",
+              "detail": "习语和口语缩合，放在剧情里当场拆开"
+            },
+            {
+              "label": "🔊",
+              "title": "连读与吞音",
+              "detail": "用演员原声当标准发音，不做合成语音"
+            },
+            {
+              "label": "🎭",
+              "title": "文化梗",
+              "detail": "典故、双关和语域反差背后的意思"
+            },
+            {
+              "label": "📐",
+              "title": "句子结构",
+              "detail": "只讲「不讲就真看不懂」的那几句"
+            }
+          ]
+        },
+        {
+          "title": "当前片段",
+          "layout": "list",
+          "items": [
+            {
+              "label": "01",
+              "title": "老友记 · 沙发抬不上去",
+              "detail": "S5E16「PIVOT!」2 分 14 秒，重点是生活口语与吐槽的说法"
+            },
+            {
+              "label": "02",
+              "title": "复仇者联盟 · 谁能举起雷神之锤",
+              "detail": "奥创纪元 1 分 58 秒，重点是反讽语气、文化梗与故意造错的古英语腔"
+            }
+          ]
+        }
+      ],
+      "audience": {
+        "title": "适合怎样的学习者？",
+        "description": "适合已有基础语法、想把英语用在真实内容上的学习者。全程不需要麦克风，键盘和鼠标就能走完；AI 的提示可以直接忽略，主导权在你手里。"
+      },
+      "persistence": "看过的片段和收下的表达会保存在当前浏览器",
+      "build": {
+        "runner": "npm",
+        "script": "build:wesmartflow",
+        "packageDir": "English_clip_mate",
+        "outputDir": "bingemate",
+        "entryFile": "index.html"
+      }
+    },
+    {
+      "id": "chemistry-lab",
+      "categoryId": "school-science",
+      "title": "化学实验室",
+      "type": "Agent 裁决自由实验",
+      "author": "Rony Yuan",
+      "badge": "NEW",
+      "summary": "把任意物质放进烧杯、任意搭配反应条件，由 Agent 现场裁决会发生什么；旁边还有个实验助手陪你追问为什么。",
+      "href": "/chemistry-lab/index.html?source=wesmartflow",
+      "launchLabel": "进入化学实验室",
+      "facts": [
+        "12–18 岁",
+        "Agent 反应裁决",
+        "11 个探索目标"
+      ],
+      "tags": [
+        "自由组合实验",
+        "浓稀与条件辨析",
+        "边做边问"
+      ],
+      "hero": {
+        "kicker": "CHEMISTRY LAB",
+        "description": "组合是爆炸的，规则表写不完。Agent 当这个世界的化学法则，学生负责提出猜想、改变条件、看现象说话。",
+        "symbol": "⚗",
+        "sparkles": "· ✦ ·"
+      },
+      "cover": {
+        "kind": "symbol"
+      },
+      "theme": {
+        "primary": "#0e9aa0",
+        "primaryDark": "#0b7d82",
+        "skyStart": "#174b63",
+        "skyEnd": "#27879a",
+        "surface": "#f6fffc",
+        "surfaceText": "#16202b",
+        "panel": "#f0fafb",
+        "muted": "#5a6875",
+        "line": "#dfe6ee"
+      },
+      "sections": [
+        {
+          "title": "主要学习内容",
+          "layout": "grid",
+          "items": [
+            {
+              "label": "🧪",
+              "title": "自由组合",
+              "detail": "任意物质任意条件，不被预设实验清单限制"
+            },
+            {
+              "label": "🌡",
+              "title": "条件意识",
+              "detail": "逐条核对哪个条件必需、哪个多余、哪个矛盾"
+            },
+            {
+              "label": "⚖️",
+              "title": "浓稀之辨",
+              "detail": "同一个化学式，浓和稀是两种完全不同的试剂"
+            },
+            {
+              "label": "💬",
+              "title": "边做边问",
+              "detail": "有个懂化学的助手随时追问你的理由"
+            }
+          ]
+        },
+        {
+          "title": "探索目标",
+          "layout": "list",
+          "items": [
+            {
+              "label": "01",
+              "title": "做出气体与沉淀",
+              "detail": "让气泡升起、让溶液沉下一层"
+            },
+            {
+              "label": "02",
+              "title": "验证金属活动性",
+              "detail": "做成一个置换反应，看谁把谁换了下来"
+            },
+            {
+              "label": "03",
+              "title": "凑齐必要条件",
+              "detail": "找到一个非得两个以上条件才肯发生的反应"
+            },
+            {
+              "label": "04",
+              "title": "连锁合成",
+              "detail": "把产物加回材料库，用它做下一次实验"
+            }
+          ]
+        }
+      ],
+      "audience": {
+        "title": "适合怎样的学习者？",
+        "description": "适合已经接触过化学式和基本反应类型、想动手验证自己猜想的 12–18 岁学习者。全部操作都可用键盘和点击完成，不需要拖拽或额外设备。"
+      },
+      "persistence": "实验记录、合成出来的材料和探索进度会保存在当前浏览器",
+      "build": {
+        "runner": "npm",
+        "script": "build:wesmartflow",
+        "packageDir": "chemastry_lab",
+        "outputDir": "chemistry-lab",
+        "entryFile": "index.html"
+      }
+    },
+    {
+      "id": "live-science",
+      "categoryId": "school-science",
+      "title": "知识之境",
+      "type": "沉浸式科学史探索",
+      "author": "Shipeng Cen",
+      "badge": "NEW",
+      "summary": "回到知识诞生的现场，与伟大心灵对话、亲手重做他们的实验——每一幕有铺垫、有配音、有困境、有课本衔接。",
+      "href": "/live-science/index.html?source=wesmartflow",
+      "launchLabel": "进入知识之境",
+      "facts": [
+        "中小学",
+        "4 个篇章",
+        "科学史沉浸体验"
+      ],
+      "tags": [
+        "科学史",
+        "沉浸体验",
+        "AI 生成",
+        "实验探究"
+      ],
+      "hero": {
+        "kicker": "REALM OF KNOWLEDGE",
+        "description": "穿越到知识诞生的现场，在历史困境中做选择，亲手重做改变世界的实验。",
+        "symbol": "✦",
+        "sparkles": "· ✦ ·"
+      },
+      "cover": {
+        "kind": "symbol"
+      },
+      "theme": {
+        "primary": "#7059d3",
+        "primaryDark": "#5944a8",
+        "skyStart": "#2e1e4e",
+        "skyEnd": "#6d4bb8",
+        "surface": "#faf7ff",
+        "surfaceText": "#2c2350"
+      },
+      "sections": [
+        {
+          "title": "你会体验什么",
+          "layout": "grid",
+          "items": [
+            {
+              "label": "⏳",
+              "title": "历史穿越",
+              "detail": "沿时间线回到科学诞生的现场"
+            },
+            {
+              "label": "💬",
+              "title": "与科学家对话",
+              "detail": "在历史困境中做关键选择"
+            },
+            {
+              "label": "🔬",
+              "title": "亲手做实验",
+              "detail": "重做改变世界的探究实验"
+            },
+            {
+              "label": "📖",
+              "title": "课本衔接",
+              "detail": "每一站回到课本完成知识闭环"
+            }
+          ]
+        },
+        {
+          "title": "当前篇章",
+          "layout": "list",
+          "items": [
+            {
+              "label": "01",
+              "title": "圆锥曲线 · 两千三百年的六次重生",
+              "detail": "从神谕到尺规，六次重生的几何传奇"
+            },
+            {
+              "label": "02",
+              "title": "万有引力 · 从苹果到星辰",
+              "detail": "一场横跨三百年的宇宙称重实验"
+            },
+            {
+              "label": "03",
+              "title": "进化论 · 生命之树的年轮",
+              "detail": "从拉马克的藤蔓到现代综合的根系"
+            },
+            {
+              "label": "04",
+              "title": "群之形 · 从方程求根到对称本质",
+              "detail": "当数学家第一次听见结构在说话"
+            }
+          ]
+        }
+      ],
+      "audience": {
+        "title": "适合怎样的学习者？",
+        "description": "适合喜欢故事、愿意动手的中小学生，在科学史的情境中理解知识的来龙去脉。"
+      },
+      "persistence": "学习进度会保存在当前浏览器",
+      "build": {
+        "runner": "npm",
+        "script": "build:wesmartflow",
+        "packageDir": "live_science",
+        "outputDir": "live-science",
+        "entryFile": "index.html"
+      }
+    },
+    {
+      "id": "living-history",
+      "categoryId": "school-history",
+      "title": "生成世界 · 历史",
+      "type": "沉浸式历史探究",
+      "author": "pengcluo",
+      "badge": "NEW",
+      "summary": "输入任意一段历史，几分钟后它变成活着的世界：当事人在社区里发帖吵架，你来当史官——围观、质询、对照史实、推演『如果』。",
+      "href": "/living-history/index.html?source=wesmartflow",
+      "launchLabel": "进入生成世界 · 历史",
+      "facts": [
+        "中小学",
+        "任意历史事件可生成",
+        "史料实证训练"
+      ],
+      "tags": [
+        "历史",
+        "史料实证",
+        "多智能体",
+        "AI 生成"
+      ],
+      "hero": {
+        "kicker": "LIVING HISTORY",
+        "description": "让一段历史变成活着的世界，你来当史官。",
+        "symbol": "史",
+        "sparkles": "· ◈ ·"
+      },
+      "cover": {
+        "kind": "symbol"
+      },
+      "theme": {
+        "primary": "#c9a45c",
+        "primaryDark": "#a0772b",
+        "skyStart": "#241a10",
+        "skyEnd": "#5a4626",
+        "surface": "#f7efdc",
+        "surfaceText": "#2d2317"
+      },
+      "sections": [
+        {
+          "title": "你会体验什么",
+          "layout": "grid",
+          "items": [
+            {
+              "label": "🏛",
+              "title": "活的历史社区",
+              "detail": "当事人发帖、吵架、站队、过日子"
+            },
+            {
+              "label": "🔍",
+              "title": "质询当事人",
+              "detail": "追问+出示物证，戳到有人破防"
+            },
+            {
+              "label": "📜",
+              "title": "学 · 史实对照",
+              "detail": "每条发言一键验真：立场修饰一眼看穿"
+            },
+            {
+              "label": "🌀",
+              "title": "推演『如果』",
+              "detail": "改写一个变量，看历史另一种可能"
+            }
+          ]
+        },
+        {
+          "title": "三种探究入口",
+          "layout": "list",
+          "items": [
+            {
+              "label": "01",
+              "title": "重演",
+              "detail": "六帧画卷+语音，罗生门式多视角记忆"
+            },
+            {
+              "label": "02",
+              "title": "代入",
+              "detail": "附身当事人做真实抉择，AI 推演此后一生"
+            },
+            {
+              "label": "03",
+              "title": "圆桌",
+              "detail": "升堂听审、写结案陈词"
+            }
+          ]
+        }
+      ],
+      "audience": {
+        "title": "适合怎样的学习者？",
+        "description": "适合能读懂事件脉络、愿意追问『他说的是真的吗』的中小学及以上学习者。"
+      },
+      "persistence": "案件与进度保存在当前浏览器会话",
+      "build": {
+        "runner": "npm",
+        "script": "build:wesmartflow",
+        "packageDir": "living_history",
+        "outputDir": "living-history",
+        "entryFile": "index.html"
+      }
+    }
+  ]
+}

@@ -38,6 +38,7 @@ from services.immersive.agents import build_sub_agents
 from services.immersive.node_extractor import extract_and_persist_nodes
 from services.immersive.persistence import (
     create_session,
+    read_workspace,
     register_chapter_audio,
     register_chapter_exercises,
     register_chapter_notes,
@@ -245,6 +246,57 @@ def _audit_resume_chapters(
     return audited_state, pending_ids, generated_chapters
 
 
+def _backfill_chapter_block_doc_ids(session_id: str, chapters_state: list[dict]) -> int:
+    """回填 canvas_blocks 里 pdf/quiz 块缺失的 doc_id。
+
+    早期生成的章节（尤其第 1 章）存在 canvas_blocks 中 pdf_chX.doc_id、
+    quiz_chX_bank.doc_id 为空的历史数据（chapters_state 里 pdf_doc_id /
+    exercises_doc_id 其实已登记）。前端 PDF 渲染和习题拉取都依赖这些 doc_id，
+    缺失会导致"PDF 不可用 / 习题不显示"。此处在 resume 时统一补齐。
+    """
+    state_by_id = {
+        c.get("chapter_id"): c
+        for c in (chapters_state or [])
+        if c.get("chapter_id") is not None
+    }
+    blocks = read_workspace(session_id).get("canvas_blocks", []) or []
+    by_id = {b.get("id"): b for b in blocks}
+    backfilled = 0
+
+    for ch_id, st in state_by_id.items():
+        pdf_block = by_id.get(f"pdf_ch{ch_id}")
+        if pdf_block:
+            data = dict(pdf_block.get("data") or {})
+            changed = False
+            if not data.get("doc_id") and st.get("pdf_doc_id"):
+                data["doc_id"] = st["pdf_doc_id"]
+                data.setdefault("url", f"/api/documents/{st['pdf_doc_id']}/raw")
+                changed = True
+            if not data.get("audio_doc_id") and st.get("audio_doc_id"):
+                data["audio_doc_id"] = st["audio_doc_id"]
+                changed = True
+            if changed:
+                upsert_canvas_block(session_id, {**pdf_block, "data": data})
+                backfilled += 1
+                logger.info("回填 pdf_ch%s 的 doc_id=%s", ch_id, data.get("doc_id"))
+
+        quiz_block = by_id.get(f"quiz_ch{ch_id}_bank")
+        if quiz_block:
+            data = dict(quiz_block.get("data") or {})
+            if not data.get("doc_id") and st.get("exercises_doc_id"):
+                data["doc_id"] = st["exercises_doc_id"]
+                data["exercises_doc_id"] = st["exercises_doc_id"]
+                upsert_canvas_block(session_id, {**quiz_block, "data": data})
+                backfilled += 1
+                logger.info(
+                    "回填 quiz_ch%s_bank 的 doc_id=%s",
+                    ch_id,
+                    data.get("doc_id"),
+                )
+
+    return backfilled
+
+
 def _difficulty_label(value: str) -> str:
     mapping = {
         "easy": "基础",
@@ -414,10 +466,20 @@ async def build_personalized_plan(
             {"role": "user", "content": user_prompt},
         ]
         response = await llm.async_think(
-            messages, config={"temperature": 0.7, "max_tokens": 1024}
+            messages, config={"temperature": 0.7, "max_tokens": 2048}
         )
 
         if response and response.content and not response.is_error:
+            # deepseek 对超长输出会返回 finish_reason=length 硬截断（末句残缺）；
+            # 检测到就用更大额度重试一次，避免建议被拦腰截断。
+            if getattr(response, "finish_reason", "stop") == "length":
+                logger.warning("个性化学习建议被 max_tokens 截断，用 3072 重试一次")
+                try:
+                    response = await llm.async_think(
+                        messages, config={"temperature": 0.7, "max_tokens": 3072}
+                    )
+                except Exception as retry_err:  # pylint: disable=broad-except
+                    logger.warning("学习建议截断重试失败: %s", retry_err)
             content = _clean_plan_markdown(response.content, topic)
             return content
         else:
@@ -1243,6 +1305,8 @@ async def immersive_generate(
             plan_block["data"]["doc_id"] = plan_doc_id
             if outline_doc_id:
                 outline_block["data"]["plan_doc_id"] = plan_doc_id
+            # 前面 upsert 时还没拿到 doc_id，这里补持久化，避免 workspace 里 plan block 缺 doc_id
+            upsert_canvas_block(session_id, plan_block, current=True, stage="planned")
             append_session_file(
                 session_id, plan_doc_id, f"{topic} 个性化学习建议", "course_plan"
             )
@@ -1277,6 +1341,7 @@ async def immersive_generate(
 
         tts_llm = get_llm(user_id) if enable_audio else None
         chapter_results = []
+        all_extracted_nodes = []  # 每章增量抽取的知识图谱节点（跨章按 id 去重）
         all_files_for_session = []
         pct_per_chapter = 75.0 / max(total_ch, 1)  # 15% ~ 90%
 
@@ -1888,21 +1953,61 @@ async def immersive_generate(
             except Exception as e:  # pylint: disable=broad-except
                 logger.warning("章节 %d 打包失败: %s", ch_id, e)
 
-        # ── 3. 知识图谱节点抽取 ──────────────────────────────────
+            # ★ 每章完成后立即增量抽取知识图谱节点（生成一章更新一些）
+            try:
+                single_ch = {
+                    "title": ch_title,
+                    "knowledge_points": ch_info.get("knowledge_points", []),
+                }
+                ch_nodes = await asyncio.to_thread(
+                    extract_and_persist_nodes,
+                    session_id,
+                    topic,
+                    [single_ch],
+                    tts_llm or get_llm(user_id),
+                    user_id,
+                )
+                if ch_nodes:
+                    all_extracted_nodes.extend(ch_nodes)
+                    ch_new = sum(1 for n in ch_nodes if not n.get("existed"))
+                    logger.info(
+                        "第%d章知识图谱抽取: %d 个节点（新 %d）",
+                        ch_id,
+                        len(ch_nodes),
+                        ch_new,
+                    )
+                    yield sse_event(
+                        "nodes_extracted",
+                        chapter_id=ch_id,
+                        nodes=[{"id": n["id"], "title": n["title"]} for n in ch_nodes],
+                        new_count=ch_new,
+                    )
+            except Exception as e:  # pylint: disable=broad-except
+                logger.warning("第%d章知识图谱抽取失败（不阻塞）: %s", ch_id, e)
+
+        # ── 3. 知识图谱节点汇总（每章已增量抽取）──────────────
         yield sse_event(
-            "progress", stage="nodes", pct=92, message="🧠 正在抽取知识图谱节点..."
+            "progress", stage="nodes", pct=92, message="🧠 正在汇总知识图谱节点..."
         )
 
-        # 知识图谱抽取与音频开关解耦，保证 LLM 实例始终可用
-        extractor_llm = tts_llm or get_llm(user_id)
-        created_nodes = await asyncio.to_thread(
-            extract_and_persist_nodes,
-            session_id,
-            topic,
-            chapters,
-            extractor_llm,
-            user_id,
-        )
+        # 每章已增量抽取，这里按 id 去重汇总；若增量全失败则全量兜底补抽一次
+        created_nodes = []
+        seen_node_ids = set()
+        for n in all_extracted_nodes:
+            if n.get("id") and n["id"] not in seen_node_ids:
+                seen_node_ids.add(n["id"])
+                created_nodes.append(n)
+
+        if not created_nodes:
+            extractor_llm = tts_llm or get_llm(user_id)
+            created_nodes = await asyncio.to_thread(
+                extract_and_persist_nodes,
+                session_id,
+                topic,
+                chapters,
+                extractor_llm,
+                user_id,
+            )
 
         node_ids = [n["id"] for n in created_nodes]
         new_node_count = sum(1 for n in created_nodes if not n.get("existed"))
@@ -2090,6 +2195,10 @@ async def immersive_resume(
             enable_audio=enable_audio,
             enable_exercises=enable_exercises,
         )
+        # 回填早期章节缺失的 pdf/quiz block doc_id（修复 PDF 不可用/习题不显示）
+        backfilled = _backfill_chapter_block_doc_ids(session_id, chapters_state)
+        if backfilled:
+            logger.info("resume: 回填 %d 个章节 block 的 doc_id", backfilled)
         pending_chapters = [
             (i, ch)
             for i, ch in enumerate(chapters)
@@ -2152,11 +2261,17 @@ async def immersive_resume(
         )
 
         # ── 推送已完成章节的产物到前端（避免已完成章节在前端不可见）──
+        state_by_id = {
+            c.get("chapter_id"): c
+            for c in chapters_state
+            if c.get("chapter_id") is not None
+        }
         for idx_done, ch_done in enumerate(chapters):
             ch_done_id = ch_done.get("chapter_id", idx_done + 1)
             if ch_done_id in pending_ids:
                 continue
             ch_done_title = ch_done.get("title", f"第{ch_done_id}章")
+            ch_done_state = state_by_id.get(ch_done_id, {})
             artifact = _chapter_artifact_status(
                 course,
                 ch_done,
@@ -2194,9 +2309,8 @@ async def immersive_resume(
             pdf_done_path = course.pdf_file(ch_done_id)
             if artifact["checks"].get("pdf"):
                 pdf_rel_done = to_rel_path(str(pdf_done_path))
-                # 这里是从磁盘扫出来的已完成章节，没有现成的 doc_id，推送后由
-                # _audit_resume_chapters / chapters_state 补上。这里只先留空，前端在
-                # workspace.chapters[].pdf_doc_id 有值时会走 documents 接口。
+                # 从 chapters_state 取已登记的 doc_id，避免用空值覆盖导致 PDF 不可用
+                pdf_doc_id_done = ch_done_state.get("pdf_doc_id", "") or ""
                 pdf_block_done = {
                     "id": f"pdf_ch{ch_done_id}",
                     "type": "pdf",
@@ -2204,13 +2318,17 @@ async def immersive_resume(
                     "status": "ready",
                     "chapter_id": ch_done_id,
                     "data": {
-                        "url": "",
+                        "url": (
+                            f"/api/documents/{pdf_doc_id_done}/raw"
+                            if pdf_doc_id_done
+                            else ""
+                        ),
                         "pdf_path": pdf_rel_done,
-                        "doc_id": "",
+                        "doc_id": pdf_doc_id_done,
                         "num_pages": artifact["num_frames"],
                         "audio_enabled": enable_audio,
                         "audio_files": artifact["audio_files"],
-                        "audio_doc_id": "",
+                        "audio_doc_id": ch_done_state.get("audio_doc_id", "") or "",
                     },
                 }
                 upsert_canvas_block(session_id, pdf_block_done)
@@ -2224,6 +2342,7 @@ async def immersive_resume(
             exercises_done_path = course.exercises_file(ch_done_id)
             if artifact["checks"].get("exercises") and enable_exercises:
                 ex_rel_done = to_rel_path(str(exercises_done_path))
+                ex_doc_id_done = ch_done_state.get("exercises_doc_id", "") or ""
                 quiz_block_done = {
                     "id": f"quiz_ch{ch_done_id}_bank",
                     "type": "quiz_batch",
@@ -2233,6 +2352,8 @@ async def immersive_resume(
                     "data": {
                         "source": "exercises_md",
                         "exercises_path": ex_rel_done,
+                        "doc_id": ex_doc_id_done,
+                        "exercises_doc_id": ex_doc_id_done,
                         "display_limit": 3,
                         "strategy": "show_2_to_3_questions_first",
                     },

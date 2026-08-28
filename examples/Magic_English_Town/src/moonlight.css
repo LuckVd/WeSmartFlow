@@ -1,0 +1,791 @@
+:root { --moon-ink:#30284f; --moon-violet:#6451ba; --moon-gold:#ffd86f; --moon-cream:#fff9ea; --moon-green:#64a98a; }
+
+/* Season road */
+.course-hub { min-height:var(--magic-town-viewport-height, 100vh); padding:32px clamp(22px,5vw,74px) 54px; position:relative; overflow:hidden; color:#fff; background:linear-gradient(180deg,#30275f 0,#6656a6 42%,#edb487 78%,#f7ddaf); font-family:"DM Sans",sans-serif; }
+.hub-sky { position:absolute; inset:0; overflow:hidden; pointer-events:none; }.hub-sky::after { content:""; position:absolute; left:-10%; right:-10%; bottom:-18%; height:42%; border-radius:50% 50% 0 0; background:#547c69; box-shadow:0 -20px 70px rgba(33,37,65,.2); }.hub-sky>i { position:absolute; width:4px; height:4px; border-radius:50%; background:#fff4c7; box-shadow:0 0 14px #fff2ae; animation:moon-twinkle 2.7s infinite alternate; }.hub-sky>i:nth-child(1){left:14%;top:16%}.hub-sky>i:nth-child(2){right:35%;top:10%;animation-delay:.8s}.hub-sky>i:nth-child(3){right:11%;top:31%;animation-delay:1.4s}.hub-moon { position:absolute; right:8%; top:9%; width:88px; height:88px; border-radius:50%; background:#ffe598; box-shadow:0 0 0 20px rgba(255,229,152,.07),0 0 72px rgba(255,226,136,.35); }
+.hub-header,.hub-intro,.lesson-road,.hub-footer { position:relative; z-index:2; }
+.hub-header { display:flex; align-items:center; justify-content:space-between; }
+.hub-brand { display:flex; align-items:center; gap:12px; }
+.hub-brand>span { width:45px; height:45px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.38); border-radius:15px; background:rgba(255,255,255,.12); font-size:22px; }
+.hub-brand small,.hub-brand strong { display:block; }
+.hub-brand small { opacity:.66; font-size:9px; font-weight:900; letter-spacing:.18em; }
+.hub-brand strong { font:700 20px "Fredoka"; }
+.hub-intro { margin:clamp(58px,8vh,95px) auto 42px; text-align:center; }.hub-intro p { margin:0 0 11px; color:#ffdda0; font-size:10px; font-weight:900; letter-spacing:.2em; }.hub-intro h1 { margin:0; font:700 clamp(38px,6vw,68px)/.98 "Fredoka"; text-shadow:0 9px 38px rgba(24,18,61,.22); }.hub-intro>span { display:block; margin-top:18px; color:#eee9ff; font-size:14px; }
+.lesson-road { width:min(945px,100%); margin:auto; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+.lesson-card { min-height:387px; position:relative; overflow:hidden; border:1px solid rgba(255,255,255,.34); border-radius:27px; color:var(--moon-ink); background:rgba(255,251,239,.94); box-shadow:0 26px 70px rgba(34,25,68,.25); backdrop-filter:blur(16px); }
+.lesson-card>em { position:absolute; right:23px; top:14px; opacity:.08; font:800 78px "Fredoka"; }
+.lesson-card-art { height:151px; position:relative; overflow:hidden; display:grid; place-items:center; background:linear-gradient(#a8d5d4,#75a886); }
+.tone-violet .lesson-card-art { background:linear-gradient(#403a83,#8c6aa5 62%,#516d65 62%); }
+.lesson-card-art>span { position:relative; z-index:3; font-size:59px; filter:drop-shadow(0 13px 18px rgba(28,31,53,.2)); }
+.lesson-card-art>i { position:absolute; bottom:-45px; width:210px; height:110px; border-radius:50%; background:#496f59; }
+.lesson-card-art>i:nth-of-type(1) { left:-35px; }
+.lesson-card-art>i:nth-of-type(2) { right:-40px; background:#5d8068; }
+.lesson-card-art small { position:absolute; z-index:4; left:18px; bottom:15px; padding:6px 10px; border-radius:12px; color:#fff; background:rgba(34,40,55,.3); font-size:10px; font-weight:800; }
+.lesson-card-copy { padding:23px 24px 25px; }
+.lesson-card-copy>p { margin:0; color:#7a6bb3; font-size:9px; font-weight:900; letter-spacing:.13em; }
+.lesson-card-copy h2 { margin:7px 0 10px; font:700 31px "Fredoka"; }
+.lesson-card-copy>span { min-height:48px; display:block; color:#746e7f; font-size:13px; line-height:1.55; }
+.memory-thread { margin-top:14px; padding:10px 12px; display:flex; gap:10px; align-items:center; border-radius:14px; background:#eee9ff; }
+.memory-thread.saved-thread { color:#385d4d; background:#e4f3e8; box-shadow:inset 3px 0 #65a686; }
+.memory-thread>b { font-size:22px; }
+.memory-thread strong,.memory-thread small { display:block; }
+.memory-thread strong { font-size:11px; }
+.memory-thread small { margin-top:2px; color:#766e85; font-size:9px; }
+.memory-thread.saved-thread small { color:#61786d; }
+.hub-footer { margin-top:35px; text-align:center; color:rgba(255,255,255,.78); font-size:11px; }
+.hub-footer div { margin-top:12px; display:flex; justify-content:center; gap:7px; }
+.hub-footer i { width:6px; height:6px; border-radius:50%; background:#ffe292; }
+
+/* Lesson bridge */
+.moon-bridge { min-height:var(--magic-town-viewport-height, 100vh); padding:30px clamp(22px,5vw,70px); position:relative; overflow:hidden; display:grid; grid-template-columns:minmax(320px,650px) minmax(290px,460px); gap:clamp(28px,5vw,80px); align-items:center; color:#fff; background:linear-gradient(160deg,#2e285a,#6f5c9d 44%,#e59b7e 78%,#f2c989); font-family:"DM Sans",sans-serif; }.bridge-back { position:absolute; z-index:8; left:34px; top:28px; color:#fff; font-size:12px; font-weight:800; text-decoration:none; }.bridge-book { min-height:520px; position:relative; filter:drop-shadow(0 34px 45px rgba(28,20,58,.3)); transform:rotate(-2deg); }.bridge-book>i { position:absolute; inset:18px 7px -7px 22px; border-radius:14px 30px 30px 14px; background:#c7b9a4; }.bridge-book>i:nth-child(2){inset:10px 14px 0 14px;background:#e8ddca}.bridge-page { min-height:480px; padding:55px clamp(30px,6vw,70px); position:relative; z-index:2; display:flex; flex-direction:column; justify-content:flex-end; border-radius:14px 28px 28px 14px; color:#4d4561; background:linear-gradient(#fffaf0 0 62%,#e8c7a8 62%); box-shadow:inset 18px 0 35px rgba(83,58,66,.08); }.bridge-page::before { content:""; position:absolute; left:8%; right:8%; bottom:30%; height:120px; border-radius:50% 50% 0 0; background:#6d8e69; }.bridge-page small,.bridge-page h1,.bridge-page p,.bridge-page>span { position:relative; z-index:4; }.bridge-page small { color:#7b6aad; font-size:9px; font-weight:900; letter-spacing:.17em; }.bridge-page h1 { margin:8px 0 5px; font:700 clamp(32px,4vw,48px) "Fredoka"; }.bridge-page p { margin:0; font:italic 18px/1.4 Georgia,serif; }.bridge-page>span { margin-top:18px; color:#766d79; font-size:12px; }.bridge-sunset { position:absolute; z-index:3; left:4%; right:49%; bottom:19%; height:210px; pointer-events:none; }.setting-sun { position:absolute; left:48%; top:2px; width:72px; height:72px; border-radius:50%; background:#ffd576; box-shadow:0 0 45px rgba(255,211,114,.5); }.bridge-town { position:absolute; inset:auto 0 0; height:90px; display:flex; align-items:end; gap:4%; }.bridge-town i { width:19%; height:65%; border-radius:40px 40px 0 0; background:#4e6358; }.bridge-town i:nth-child(2){height:100%;background:#455c55}.bridge-town i:nth-child(3){height:75%;background:#5b6f5d}.bridge-coco { position:absolute; z-index:5; right:11%; bottom:28px; width:175px; height:145px; }.bridge-coco small { position:absolute; right:0; top:-3px; padding:6px 9px; border-radius:12px; color:#55486b; background:#fff9e8; font-size:9px; font-weight:800; }.bridge-copy>p { margin:0 0 12px; color:#ffe09c; font-size:10px; font-weight:900; letter-spacing:.18em; }.bridge-copy h2 { margin:0; font:700 clamp(38px,5vw,63px)/.98 "Fredoka"; }.bridge-copy blockquote { margin:23px 0; padding:17px 20px; border-left:3px solid #ffe194; border-radius:0 16px 16px 0; background:rgba(255,255,255,.1); font:600 17px/1.5 "Fredoka"; }.bridge-copy button { min-height:58px; padding:13px 14px 13px 21px; display:flex; align-items:center; justify-content:space-between; gap:30px; border:0; border-radius:18px; color:#544670; background:#fff7e7; box-shadow:0 18px 32px rgba(42,28,74,.24); font-size:14px; font-weight:900; cursor:pointer; }.bridge-copy button span { width:34px; height:34px; display:grid; place-items:center; border-radius:12px; color:#fff; background:#6e5ab1; }
+
+/* Moonlight runtime shell */
+.moon-app { min-height:var(--magic-town-viewport-height, 100vh); color:var(--moon-ink); background:#29234e; font-family:"DM Sans",sans-serif; }.moon-header { height:72px; padding:0 clamp(16px,3vw,34px); display:grid; grid-template-columns:minmax(220px,1fr) auto; gap:13px; align-items:center; color:#fff; background:#29234e; box-shadow:0 8px 28px rgba(15,10,41,.23); }.moon-brand { display:flex; align-items:center; gap:10px; }.moon-brand>.town-home-mark { width:39px; height:39px; display:grid; place-items:center; border-radius:13px; color:#352c69; background:#ffe193; font-size:22px; }.moon-brand small,.moon-brand strong { display:block; }.moon-brand small { color:#bdb5dc; font-size:8px; letter-spacing:.13em; }.moon-brand strong { font:700 17px "Fredoka"; }.moon-progress { padding:7px 11px; display:flex; align-items:center; gap:9px; border:1px solid rgba(255,255,255,.12); border-radius:14px; color:#fff; background:rgba(255,255,255,.06); text-align:left; cursor:pointer; }.moon-progress>span { width:35px; height:35px; padding:3px; display:block; border-radius:50%; background:conic-gradient(#ffe08b var(--progress),rgba(255,255,255,.12) 0); }.moon-progress>span i { width:100%; height:100%; display:block; border:4px solid #322b59; border-radius:50%; background:#fff0b0; }.moon-progress small,.moon-progress strong { display:block; }.moon-progress small { color:#bdb5dc; font-size:7px; letter-spacing:.1em; }.moon-progress strong { font-size:10px; }
+.moon-layout { min-height:calc(var(--magic-town-viewport-height, 100vh) - 72px); display:grid; grid-template-columns:minmax(0,1fr) minmax(330px,390px); }.moon-world { min-width:0; position:relative; overflow:hidden; background:#4f477f; }.moon-companion { min-width:0; padding:20px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; background:linear-gradient(#fffaf0,#eee6d9); box-shadow:-18px 0 50px rgba(24,17,53,.16); }.festival-scene { min-height:calc(var(--magic-town-viewport-height, 100vh) - 72px); position:relative; overflow:hidden; isolation:isolate; }.scene-title { position:absolute; z-index:20; left:30px; top:28px; color:#fff; text-shadow:0 4px 18px rgba(27,20,55,.35); }.scene-title p { margin:0; color:#ffe394; font-size:9px; font-weight:900; letter-spacing:.16em; }.scene-title h1 { max-width:510px; margin:5px 0 0; font:700 clamp(27px,3.2vw,45px)/1.02 "Fredoka"; }.moon-rail { position:absolute; z-index:40; left:50%; bottom:18px; padding:7px; display:flex; gap:5px; border:1px solid rgba(255,255,255,.25); border-radius:19px; background:rgba(34,28,67,.74); box-shadow:0 15px 36px rgba(27,18,55,.3); backdrop-filter:blur(16px); transform:translateX(-50%); }.moon-rail button { min-width:61px; padding:7px 8px; display:grid; place-items:center; gap:2px; border:0; border-radius:13px; color:#dbd5f0; background:transparent; cursor:pointer; }.moon-rail button span { width:28px; height:28px; display:grid; place-items:center; border-radius:10px; background:rgba(255,255,255,.09); font-size:14px; }.moon-rail button small { font-size:8px; font-weight:800; }.moon-rail button.active { color:#352d68; background:#fff3c8; }.moon-rail button.complete span { color:#264b3c; background:#9fe0bd; }
+
+/* Town scene */
+.town-festival { background:linear-gradient(#5b508e 0 61%,#536f65 61%); transition:background 1s; }.town-festival.is-lit { background:linear-gradient(#24224f 0 61%,#405f59 61%); }.moon-sky { position:absolute; inset:0 0 39%; overflow:hidden; }.moon-sky::after { content:""; position:absolute; right:9%; top:9%; width:84px; height:84px; border-radius:50%; background:#fce098; box-shadow:0 0 0 20px rgba(252,224,152,.06),0 0 65px rgba(252,224,152,.28); }.moon-sky>i { position:absolute; width:4px; height:4px; border-radius:50%; background:#fff3bd; box-shadow:0 0 13px #fff0a8; }.moon-sky>i:first-child{left:20%;top:24%}.moon-sky>i:nth-child(2){left:58%;top:13%}.moon-sky>span { position:absolute; left:10%; top:17%; width:115px; height:22px; border-radius:30px; background:rgba(255,255,255,.18); }.town-silhouette { position:absolute; z-index:1; left:-4%; right:-4%; bottom:39%; height:200px; display:flex; align-items:end; justify-content:space-around; }.town-silhouette i { width:18%; height:58%; border-radius:52px 52px 0 0; background:#423d70; box-shadow:inset 0 0 0 2px rgba(255,255,255,.04); }.town-silhouette i:nth-child(2){height:82%;background:#514477}.town-silhouette i:nth-child(3){height:48%;background:#625477}.town-silhouette i:nth-child(4){height:72%}.town-silhouette i:nth-child(5){height:55%;background:#625477}.festival-square-ground { position:absolute; inset:61% 0 0; background:radial-gradient(ellipse at 50% 0,#728e73,#47665e 75%); }.moon-lantern { position:absolute; z-index:12; left:50%; top:28%; width:150px; height:190px; display:flex; flex-direction:column; align-items:center; justify-content:center; border:8px solid #38325b; border-radius:66px 66px 35px 35px; color:#655d81; background:#aaa1b0; box-shadow:0 24px 35px rgba(28,22,55,.3); transform:translateX(-50%); }.moon-lantern::before { content:""; position:absolute; top:-70px; width:5px; height:64px; background:#38325b; }.moon-lantern>i { position:absolute; inset:8px; border:2px solid rgba(255,255,255,.25); border-radius:52px 52px 25px 25px; }.moon-lantern>span { font-size:58px; }.moon-lantern>small { margin-top:8px; font-size:7px; font-weight:900; letter-spacing:.12em; }.moon-lantern.lit { color:#af6f1d; background:#ffe085; box-shadow:0 0 0 18px rgba(255,224,133,.12),0 0 90px rgba(255,221,115,.7),0 30px 45px rgba(22,16,50,.3); animation:lantern-awake 2s ease-in-out infinite alternate; }.festival-flags { position:absolute; z-index:11; left:13%; right:13%; top:23%; display:flex; justify-content:space-between; border-top:3px solid #f1d6a1; transform:rotate(-2deg); }.festival-flags i { width:65px; height:74px; padding-top:13px; clip-path:polygon(0 0,100% 0,100% 75%,50% 100%,0 75%); color:#ffe690; background:#527fc4; text-align:center; font:700 27px "Fredoka"; }.festival-flags i.yellow{color:#7959a4;background:#f3c55c}.festival-flags i.purple{color:#ffe690;background:#7653a2}.festival-table { position:absolute; z-index:14; left:12%; bottom:17%; min-width:150px; padding:13px 17px 10px; border-radius:50% 50% 14px 14px; background:#bd815d; box-shadow:0 18px 22px rgba(30,28,42,.2); text-align:center; }.festival-table span { display:block; font-size:27px; letter-spacing:4px; }.festival-table small { color:#fff5d9; font-size:8px; font-weight:800; }.town-coco { position:absolute; z-index:18; right:10%; bottom:13%; width:170px; height:150px; }.town-coco small,.park-coco small { position:absolute; right:-4px; top:-3px; padding:7px 9px; border-radius:13px; color:#51436a; background:#fff6df; box-shadow:0 10px 25px rgba(28,22,55,.18); font-size:9px; font-weight:800; }.town-coco.celebrate { animation:coco-hop 1.1s ease-in-out infinite; }.town-fireflies { position:absolute; z-index:17; inset:20% 16% 15%; pointer-events:none; }.town-fireflies i { position:absolute; left:var(--firefly-x); top:var(--firefly-y); width:8px; height:8px; border-radius:50%; background:#fff18a; box-shadow:0 0 15px 5px rgba(255,238,110,.55); animation:firefly-drift calc(2.2s + var(--i)*.12s) ease-in-out infinite alternate; }.festival-guests { position:absolute; z-index:19; left:50%; bottom:16%; display:flex; gap:9px; transform:translateX(-50%); }.festival-guests>span { padding:7px 10px; display:grid; place-items:center; border-radius:15px; background:rgba(255,251,224,.88); font-size:22px; }.festival-guests small { color:#4a4262; font-size:7px; font-weight:900; }
+
+/* Bakery */
+.bakery-festival { background:linear-gradient(#9c6e8e 0 34%,#f2c58d 34% 72%,#966d59 72%); }.bakery-window { position:absolute; right:9%; top:11%; width:185px; height:205px; overflow:hidden; border:12px solid #f8e1b3; border-radius:95px 95px 16px 16px; background:linear-gradient(#554d85,#dd9b86 65%,#536f62 65%); box-shadow:0 15px 34px rgba(73,42,68,.2); }.bakery-window>span { position:absolute; right:22px; top:22px; color:#ffe393; font-size:48px; }.bakery-window>i { position:absolute; left:0; right:0; bottom:34%; border-top:5px solid rgba(255,255,255,.65); }.bakery-awning { position:absolute; left:0; right:0; top:30%; height:62px; background:repeating-linear-gradient(90deg,#f8e2b7 0 65px,#bf6e73 65px 130px); clip-path:polygon(0 0,100% 0,96% 100%,91% 72%,86% 100%,81% 72%,76% 100%,71% 72%,66% 100%,61% 72%,56% 100%,51% 72%,46% 100%,41% 72%,36% 100%,31% 72%,26% 100%,21% 72%,16% 100%,11% 72%,6% 100%); }.bakery-counter { position:absolute; left:4%; right:4%; bottom:14%; height:108px; border-radius:23px 23px 0 0; background:#91624e; box-shadow:inset 0 12px #b98564; }.betty-character { position:absolute; z-index:8; left:9%; bottom:24%; display:grid; justify-items:center; }.betty-character>span { font-size:93px; filter:drop-shadow(0 15px 17px rgba(66,45,62,.2)); }.betty-character small { padding:6px 9px; border-radius:11px; color:#5c4669; background:#fff4db; font-size:8px; font-weight:900; }.treat-shelf { position:absolute; z-index:11; left:27%; right:27%; bottom:24%; display:flex; justify-content:center; gap:13px; }.treat-shelf button { width:92px; height:104px; display:grid; place-items:center; border:3px solid transparent; border-radius:20px; color:#66566d; background:#fff1d6; box-shadow:0 12px 22px rgba(74,45,54,.18); cursor:pointer; }.treat-shelf button.selected { border-color:#745eb9; transform:translateY(-9px); box-shadow:0 17px 27px rgba(75,52,122,.27); }.treat-shelf span { font-size:38px; }.treat-shelf strong { font-size:10px; }.quantity-tray { position:absolute; z-index:12; right:8%; bottom:24%; padding:11px; display:grid; grid-template-columns:repeat(3,38px); gap:6px; border-radius:17px; background:#5e4770; }.quantity-tray small { grid-column:1/4; color:#e8dbec; text-align:center; font-size:7px; font-weight:900; }.quantity-tray button { height:38px; border:0; border-radius:11px; color:#fff; background:rgba(255,255,255,.12); font-weight:900; cursor:pointer; }.quantity-tray button.selected { color:#5d4771; background:#ffe291; }.world-reward { position:absolute; z-index:30; left:50%; top:18%; min-width:280px; padding:11px 15px; display:flex; align-items:center; gap:10px; border:1px solid rgba(255,255,255,.62); border-radius:17px; color:#403760; background:rgba(255,251,230,.94); box-shadow:0 18px 42px rgba(36,26,68,.24); transform:translateX(-50%); animation:reward-arrive .5s cubic-bezier(.2,.9,.25,1.2); }.world-reward>span { width:39px; height:39px; display:grid; place-items:center; border-radius:13px; color:#fff; background:#62a686; }.world-reward small,.world-reward strong { display:block; }.world-reward small { color:#7f7493; font-size:7px; font-weight:900; letter-spacing:.11em; }.world-reward strong { font-size:11px; }
+
+/* School */
+.school-festival { background:linear-gradient(#7162a4 0 32%,#e8ceb0 32% 73%,#a6775d 73%); }.school-window { position:absolute; right:7%; top:8%; width:165px; height:195px; display:grid; place-items:center; border:12px solid #f4e5c9; border-radius:80px 80px 8px 8px; color:#ffe190; background:#4c477b; font-size:55px; }.school-window>i { position:absolute; inset:45% 0 auto; border-top:8px solid #f4e5c9; }.class-board { position:absolute; left:8%; top:17%; width:270px; height:150px; padding:24px; border:11px solid #8a654c; border-radius:9px; color:#f7e7b4; background:#3f6959; box-shadow:0 13px 24px rgba(44,34,64,.17); text-align:center; }.class-board small { font:700 15px "Fredoka"; }.class-board i { position:absolute; left:32px; bottom:28px; width:52px; height:33px; clip-path:polygon(50% 0,100% 100%,0 100%); background:#f2cc62; }.class-board i:last-child { left:auto; right:34px; border-radius:50%; clip-path:none; background:#bb8fd0; }.map-memory { position:absolute; left:11%; top:46%; padding:9px 12px; border-radius:12px; color:#665273; background:#fff7e4; box-shadow:0 10px 20px rgba(60,42,74,.15); transform:rotate(-4deg); }.map-memory span,.map-memory small { display:block; }.map-memory span { font-size:20px; }.map-memory small { font-size:7px; font-weight:800; }.flag-workbench { position:absolute; z-index:9; left:31%; right:22%; bottom:16%; padding:17px; display:flex; align-items:center; justify-content:center; gap:25px; border-radius:25px; background:#b88261; box-shadow:0 20px 35px rgba(49,35,58,.21),inset 0 9px #cf9a75; }.flag-preview { width:150px; height:180px; position:relative; display:grid; place-items:center; clip-path:polygon(0 0,100% 0,100% 78%,50% 100%,0 78%); color:#ffe592; background:#527fc4; font-size:66px; filter:drop-shadow(0 10px 10px rgba(65,40,54,.18)); }.flag-preview.color-yellow{color:#7955a5;background:#f2c95d}.flag-preview.color-purple{color:#ffe592;background:#7451a1}.flag-controls { width:125px; display:grid; grid-template-columns:repeat(3,33px); gap:7px; }.flag-controls small { grid-column:1/4; color:#fff4da; font-size:7px; font-weight:900; }.flag-controls button { height:33px; border:2px solid rgba(255,255,255,.45); border-radius:10px; color:#604c6e; background:#fff4da; cursor:pointer; }.flag-controls button.selected { border-color:#3e315d; box-shadow:0 0 0 3px #ffe38c; transform:translateY(-3px); }.flag-controls button.color-blue{background:#527fc4}.flag-controls button.color-yellow{background:#f2c95d}.flag-controls button.color-purple{background:#7451a1}.maple-character { position:absolute; right:7%; bottom:20%; display:grid; justify-items:center; }.maple-character span { font-size:82px; }.maple-character small { padding:5px 8px; border-radius:10px; color:#564666; background:#fff3dc; font-size:8px; font-weight:900; }
+
+/* Park */
+.park-festival { background:linear-gradient(#39366d 0 58%,#416c59 58%); }.park-moon { position:absolute; right:12%; top:8%; width:85px; height:85px; border-radius:50%; background:#fce09a; box-shadow:0 0 55px rgba(252,224,154,.37); }.old-tree { position:absolute; z-index:3; left:32%; bottom:9%; width:94px; height:315px; border-radius:52% 38% 12px 12px; background:#634a45; transform:rotate(2deg); }.old-tree::before,.old-tree::after { content:""; position:absolute; top:-76px; width:205px; height:170px; border-radius:50%; background:#315948; }.old-tree::before{left:-132px}.old-tree::after{right:-132px;background:#37644f}.old-tree i { position:absolute; width:100px; height:27px; border-radius:20px; background:#634a45; }.old-tree i:first-child{left:-68px;top:53px;transform:rotate(-22deg)}.old-tree i:nth-child(2){right:-75px;top:90px;transform:rotate(24deg)}.park-bush { position:absolute; left:12%; bottom:17%; width:190px; height:105px; border-radius:50%; background:#315d4b; box-shadow:85px 17px 0 #376952; }.park-fountain { position:absolute; right:12%; bottom:15%; width:150px; height:70px; border-radius:50%; background:#59727b; border:9px solid #aca69d; }.park-fountain>i { position:absolute; left:50%; bottom:20px; width:9px; height:105px; border-radius:50%; background:#b6dfea; box-shadow:-30px 38px 0 -2px #b6dfea,30px 38px 0 -2px #b6dfea; transform:translateX(-50%); }.find-firefly { position:absolute; z-index:15; width:74px; height:66px; border:1px solid rgba(255,255,255,.25); border-radius:50%; color:#f8eeb3; background:rgba(30,36,56,.25); cursor:pointer; }.find-firefly>i { width:10px; height:10px; display:block; margin:auto; border-radius:50%; background:#ffeb7a; box-shadow:0 0 14px 7px rgba(255,235,110,.5); animation:moon-twinkle 1.4s infinite alternate; }.find-firefly small { display:block; margin-top:8px; font-size:7px; font-weight:800; }.find-firefly.found { width:auto; min-width:105px; padding:7px; border-radius:14px; background:rgba(255,247,198,.9); color:#4b4263; }.find-firefly.at-tree{left:28%;top:43%}.find-firefly.at-bush{left:13%;bottom:25%}.find-firefly.at-fountain{right:14%;bottom:32%}.park-coco { position:absolute; z-index:12; left:52%; bottom:14%; width:165px; height:145px; }.park-coco.brave .moon-coco-rig { transform:scale(.95) rotate(-3deg); }
+
+/* Story House */
+.storyhouse-festival { background:linear-gradient(#665789 0 31%,#d6b68f 31% 72%,#6f5149 72%); }.story-shelves { position:absolute; inset:20% 7% 17%; display:flex; align-items:end; justify-content:space-around; border:17px solid #735344; border-top-width:24px; background:#4d3b45; box-shadow:inset 0 145px 0 rgba(255,255,255,.05); }.story-shelves i { width:8%; height:44%; border-radius:5px 5px 0 0; background:#b96f76; box-shadow:52px 0 #687fad,104px 0 #d4a85c; }.open-memory-book { position:absolute; z-index:10; left:50%; bottom:20%; width:340px; min-height:175px; padding:30px 38px; border-radius:12px 28px 28px 12px; color:#514761; background:#fff9ea; box-shadow:0 28px 40px rgba(38,27,54,.3); transform:translateX(-50%) rotate(-2deg); }.open-memory-book small { color:#7b69ae; font-size:8px; font-weight:900; letter-spacing:.1em; }.open-memory-book p { font:italic 18px/1.45 Georgia,serif; }.open-memory-book>span { position:absolute; right:25px; top:20px; color:#d09d43; font-size:30px; }.milo-story { position:absolute; z-index:11; right:11%; bottom:21%; display:grid; justify-items:center; color:#fff; }.milo-story>span { font-size:68px; }.milo-story small { font-size:8px; font-weight:900; }
+
+/* Coco CSS character */
+.moon-coco-rig { width:160px; height:135px; position:relative; filter:drop-shadow(0 14px 12px rgba(27,24,45,.22)); }.moon-coco-rig .coco-body { position:absolute; left:40px; bottom:12px; width:105px; height:70px; border-radius:50% 48% 38% 44%; background:#d9843d; }.moon-coco-rig .coco-head { position:absolute; left:10px; top:10px; width:84px; height:80px; border-radius:48% 48% 44% 44%; background:#e28b43; }.moon-coco-rig .coco-head::before,.moon-coco-rig .coco-head::after { content:""; position:absolute; top:-2px; width:29px; height:55px; border-radius:60% 20% 60% 30%; background:#8b573f; }.moon-coco-rig .coco-head::before{left:-13px;transform:rotate(23deg)}.moon-coco-rig .coco-head::after{right:-13px;transform:scaleX(-1) rotate(23deg)}.moon-coco-rig .coco-head>b { position:absolute; z-index:3; top:30px; width:9px; height:12px; border-radius:50%; background:#332e43; }.moon-coco-rig .coco-head>b:first-child{left:23px}.moon-coco-rig .coco-head>b:nth-child(2){right:23px}.moon-coco-rig .coco-head>span { position:absolute; z-index:3; left:50%; top:50px; color:#332e43; font-size:17px; transform:translateX(-50%); }.moon-coco-rig .coco-head>em { position:absolute; z-index:3; left:50%; bottom:5px; width:22px; height:13px; border-bottom:3px solid #5c3b3d; border-radius:50%; transform:translateX(-50%); }.moon-coco-rig .coco-tail { position:absolute; z-index:-1; right:0; bottom:49px; width:50px; height:18px; border:10px solid #d9843d; border-left:0; border-bottom:0; border-radius:0 50px 0 0; transform:rotate(-25deg); transform-origin:left; animation:coco-tail .5s ease-in-out infinite alternate; }.moon-coco-rig .coco-scarf { position:absolute; left:65px; top:69px; width:52px; height:13px; border-radius:7px; background:#5f62b3; transform:rotate(10deg); }.moon-coco-rig .coco-scarf::after { content:""; position:absolute; right:5px; top:8px; width:14px; height:34px; border-radius:5px; background:#5f62b3; transform:rotate(-18deg); }
+
+/* Companion panel */
+.guide-message { padding:14px; display:grid; grid-template-columns:43px 1fr; gap:10px; align-items:start; border:1px solid #e5dac8; border-radius:18px; background:#fffdf7; box-shadow:0 10px 24px rgba(69,48,79,.08); }.guide-message>span { width:43px; height:43px; display:grid; place-items:center; border-radius:14px; background:#eee8ff; font-size:22px; }.guide-message small,.guide-message strong { display:block; }.guide-message small { color:#7868af; font-size:8px; font-weight:900; letter-spacing:.11em; }.guide-message strong { margin-top:3px; font-size:12px; line-height:1.45; }.current-mission { padding:16px; border-radius:20px; color:#fff; background:linear-gradient(135deg,#594899,#7362bd); box-shadow:0 16px 30px rgba(79,59,143,.18); }.current-mission>p { margin:0; display:flex; align-items:center; justify-content:space-between; }.current-mission>p span { color:#ffe394; font-size:8px; font-weight:900; letter-spacing:.12em; }.current-mission>p small { color:#d6d0ef; font-size:8px; }.current-mission h2 { margin:8px 0 0; font:700 19px/1.2 "Fredoka"; }.sentence-seed { width:100%; margin-top:12px; min-height:39px; padding:8px 11px; border:1px solid rgba(255,255,255,.26); border-radius:12px; color:#fff8d9; background:rgba(255,255,255,.1); font-size:9px; font-weight:800; cursor:pointer; }.invite-picker { margin-top:12px; display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }.invite-picker>small { grid-column:1/4; color:#dcd5f3; font-size:7px; font-weight:900; }.invite-picker button { min-height:54px; padding:6px; display:grid; place-items:center; gap:2px; border:1px solid rgba(255,255,255,.2); border-radius:12px; color:#fff; background:rgba(255,255,255,.08); font-size:8px; cursor:pointer; }.invite-picker button span { font-size:20px; }.invite-picker button.selected { color:#514271; background:#ffe49a; }.english-powers { display:grid; grid-template-columns:1fr 1fr; gap:7px; }.english-powers>div { min-height:68px; padding:9px; display:grid; grid-template-columns:28px 1fr; gap:7px; align-items:center; border:1px solid #dfd5c5; border-radius:14px; background:rgba(255,255,255,.55); }.english-powers>div>span { width:27px; height:27px; display:grid; place-items:center; border-radius:9px; background:#ece5da; font-size:13px; }.english-powers>div.complete { border-color:#a8d5bc; background:#e7f4eb; }.english-powers>div.complete>span { color:#fff; background:#65a786; }.english-powers strong,.english-powers small { display:block; }.english-powers strong { font-size:9px; }.english-powers small { margin-top:2px; color:#7d7480; font-size:7px; line-height:1.35; }.festival-input { margin-top:auto; padding:14px; border:1px solid #ded3c2; border-radius:18px; background:#fffdf7; box-shadow:0 12px 24px rgba(61,43,72,.08); }.festival-input>label { display:block; margin-bottom:7px; color:#7165a1; font-size:8px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; }.festival-input>div { display:grid; grid-template-columns:39px 1fr 39px; gap:6px; }.festival-input button,.festival-input input { min-width:0; height:42px; border:1px solid #dfd5c6; border-radius:12px; }.festival-input input { padding:0 11px; outline:none; font-size:13px; }.festival-input input:focus { border-color:#755fbc; box-shadow:0 0 0 3px rgba(117,95,188,.12); }.festival-input button { border:0; color:#fff; background:#6651ac; font-weight:900; cursor:pointer; }.festival-input .voice-button { background:#e4dced; font-size:16px; }.festival-input .voice-button.listening { background:#e66872; animation:voice-pulse 1s infinite; }.festival-input>small { min-height:14px; margin-top:7px; display:block; color:#8d858d; font-size:8px; }.celebration-actions { margin-top:auto; padding:17px; border-radius:18px; color:#fff; background:linear-gradient(135deg,#3c376f,#6555a6); text-align:center; }.celebration-actions p { margin:0; color:#ffe394; font-size:8px; font-weight:900; letter-spacing:.1em; }.celebration-actions h2 { margin:5px 0 13px; font:700 20px "Fredoka"; }.celebration-actions button,.celebration-actions a { min-height:41px; margin-top:6px; padding:9px 12px; display:flex; align-items:center; justify-content:center; border:0; border-radius:12px; font-size:10px; font-weight:900; text-decoration:none; cursor:pointer; }.celebration-actions button { width:100%; color:#51436b; background:#ffe69d; }.celebration-actions a { color:#fff; background:rgba(255,255,255,.1); }
+.festival-input .voice-button.submitting { color:#59458f; background:#ffe69a; animation:voice-submit-pulse .8s ease-in-out infinite alternate; cursor:wait; opacity:1; }
+@media (prefers-reduced-motion:reduce) { .festival-input .voice-button.submitting { animation:none!important; } }
+
+/* Moonlight memory */
+.memory-backdrop { position:fixed; z-index:200; inset:0; padding:24px; display:grid; place-items:center; background:rgba(28,21,58,.65); backdrop-filter:blur(8px); }.moon-memory { width:min(680px,100%); max-height:calc(var(--magic-town-viewport-height, 100vh) - 40px); padding:25px; position:relative; overflow-y:auto; border:1px solid rgba(255,255,255,.55); border-radius:28px; color:#4b4262; background:#fff9e9; box-shadow:0 34px 90px rgba(20,13,49,.45); }.moon-memory>button { position:absolute; right:18px; top:16px; width:35px; height:35px; border:0; border-radius:50%; color:#554a6b; background:#eee6d9; font-size:20px; cursor:pointer; }.moon-memory>header { display:flex; align-items:center; gap:12px; }.moon-memory>header>span { width:50px; height:50px; display:grid; place-items:center; border-radius:17px; color:#443a75; background:#ffe193; font-size:28px; }.moon-memory header small,.moon-memory header strong { display:block; }.moon-memory header small { color:#786aad; font-size:8px; font-weight:900; letter-spacing:.12em; }.moon-memory header strong { font:700 25px "Fredoka"; }.memory-postcard { height:190px; margin-top:17px; position:relative; overflow:hidden; border-radius:21px; background:linear-gradient(#353466 0 63%,#4f7163 63%); }.mini-lantern { position:absolute; left:50%; top:24px; width:80px; height:103px; display:grid; place-items:center; border:5px solid #483d68; border-radius:38px 38px 18px 18px; color:#a76d1d; background:#ffe082; box-shadow:0 0 42px rgba(255,224,130,.7); font-size:32px; transform:translateX(-50%); }.mini-flag { position:absolute; left:10%; top:38px; width:62px; height:78px; display:grid; place-items:center; clip-path:polygon(0 0,100% 0,100% 75%,50% 100%,0 75%); color:#ffe494; background:#527fc4; font-size:25px; }.mini-flag.color-yellow{color:#7957a1;background:#f2c85d}.mini-flag.color-purple{color:#ffe494;background:#7553a1}.memory-postcard>span { position:absolute; left:9%; bottom:18px; font-size:28px; }.memory-postcard>i { position:absolute; right:9%; bottom:30px; color:#fff28c; font-size:20px; }.moon-memory>blockquote { margin:15px 0; padding:13px 18px; border-left:4px solid #7460b5; border-radius:0 15px 15px 0; background:#eee8fa; font:italic 16px/1.45 Georgia,serif; }.moon-memory>section { display:grid; grid-template-columns:1fr 1fr; gap:8px; }.moon-memory>section>div { padding:10px; display:grid; grid-template-columns:30px 1fr; gap:8px; align-items:center; border:1px solid #e3d8c7; border-radius:14px; background:#fffdf7; }.moon-memory>section>div>span { width:29px; height:29px; display:grid; place-items:center; border-radius:9px; color:#fff; background:#66a787; }.moon-memory>section strong,.moon-memory>section small { display:block; }.moon-memory>section strong { font-size:9px; }.moon-memory>section small { margin-top:2px; color:#7f7682; font-size:7px; }.moon-memory>footer { margin-top:15px; display:flex; align-items:center; justify-content:space-between; gap:12px; }.moon-memory>footer>span { color:#7a7080; font-size:9px; }.moon-memory>footer button { min-height:40px; padding:9px 14px; border:0; border-radius:12px; color:#fff; background:#6550a8; font-size:10px; font-weight:900; cursor:pointer; }
+
+/* Lesson 2 main story and reward trail */
+.main-story-pill { min-width:330px; grid-template-columns:35px minmax(0,1fr) auto; }
+.main-story-pill p { min-width:0; }
+.main-story-pill strong { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.main-story-pill>b { color:#ffe394; font-size:8px; white-space:nowrap; }
+.moon-town-home { width:max-content; height:auto; padding:6px 7px; border:1px solid rgba(255,255,255,.7); border-radius:18px; color:#302b49; background:rgba(255,253,247,.95); box-shadow:0 9px 28px rgba(14,9,39,.2); text-align:left; text-decoration:none; cursor:pointer; }
+.moon-town-home:hover,.moon-town-home:focus-visible { background:#fffdf7; box-shadow:0 12px 34px rgba(14,9,39,.28); outline:none; transform:translateY(-1px); }
+.moon-town-home .town-home-mark { width:39px; height:39px; position:relative; display:block; border-radius:50%; background:#6c55d8; box-shadow:inset 0 0 0 1px rgba(255,255,255,.2); }
+.town-home-mark i { position:absolute; width:7px; height:7px; border-radius:50%; background:#fff; }
+.town-home-mark i:first-child { left:10px; top:10px; }
+.town-home-mark i:nth-child(2) { right:9px; top:9px; }
+.town-home-mark i:nth-child(3) { left:16px; bottom:8px; width:9px; height:9px; }
+.moon-town-home .town-home-copy { margin:0; }
+.moon-town-home strong { font-size:14px; }
+.moon-town-home small { margin-top:2px; color:#746d82; font-size:8px; }
+.moon-town-home .town-home-cue { color:#6550c5; }
+.story-compass { padding:14px; }
+.story-compass h2 { font-size:18px; }
+.moon-relic-strip { margin-top:11px; display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.moon-relic-strip>span { min-height:48px; padding:6px 4px; display:grid; place-items:center; gap:2px; border:1px dashed rgba(255,255,255,.24); border-radius:11px; color:#d8d0ec; background:rgba(35,27,73,.16); }
+.moon-relic-strip>span.unlocked { border-style:solid; color:#4d406d; background:#ffe39a; box-shadow:0 7px 16px rgba(40,27,79,.18); }
+.moon-relic-strip i { font-style:normal; font-size:17px; }
+.moon-relic-strip small { font-size:7px; font-weight:900; }
+.visible-next-step { margin-top:9px; padding:9px 10px; border-radius:11px; color:#4d4168; background:#fff8df; }
+.visible-next-step small,.visible-next-step strong { display:block; }
+.visible-next-step small { color:#7a69ad; font-size:7px; font-weight:900; letter-spacing:.1em; }
+.visible-next-step strong { margin-top:3px; font-size:10px; line-height:1.35; }
+.story-map-button { width:100%; min-height:35px; margin-top:7px; padding:6px 9px; display:flex; align-items:center; gap:7px; border:1px solid rgba(255,255,255,.24); border-radius:11px; color:#fff; background:rgba(255,255,255,.08); font-size:9px; font-weight:900; cursor:pointer; }
+.story-map-button>span { color:#ffe394; font-size:17px; }
+.story-map-button>b { margin-left:auto; color:#d9d2f2; font-size:7px; }
+.invitation-seed { margin-top:7px; color:#514271; background:#ffe49a; }
+
+.town-secret { appearance:none; font-family:inherit; cursor:pointer; }
+.festival-flags.town-secret,.town-fireflies.town-secret { border:0; background:transparent; }
+.festival-table.town-secret { border:0; color:inherit; }
+.town-secret>b { position:absolute; z-index:5; padding:4px 6px; border-radius:9px; color:#453a67; background:#ffe38e; box-shadow:0 7px 15px rgba(27,18,55,.22); font-size:7px; font-weight:900; white-space:nowrap; }
+.festival-table.town-secret>b { right:-7px; top:-12px; }
+.festival-flags.town-secret>b { right:-8px; top:-16px; }
+.town-fireflies.town-secret { pointer-events:auto; }
+.town-fireflies.town-secret>b { right:0; top:0; }
+.town-secret.secret-ready { animation:secret-pulse 1.6s ease-in-out infinite alternate; }
+.town-secret.secret-found>b { color:#fff; background:#65a786; }
+
+.moon-quest-backdrop,.moon-reward-backdrop { position:fixed; z-index:210; inset:0; padding:20px; display:grid; place-items:center; background:rgba(24,18,54,.72); backdrop-filter:blur(10px); }
+.moon-quest-map { width:min(900px,100%); max-height:calc(var(--magic-town-viewport-height, 100vh) - 32px); padding:25px; position:relative; overflow-y:auto; border:1px solid rgba(255,255,255,.55); border-radius:28px; color:#493f62; background:#fff9e9; box-shadow:0 38px 100px rgba(17,11,44,.5); }
+.quest-close { position:absolute; right:18px; top:16px; width:36px; height:36px; border:0; border-radius:50%; color:#51476a; background:#eee6d9; font-size:20px; cursor:pointer; }
+.moon-quest-map>header { display:flex; align-items:center; gap:12px; }
+.moon-quest-map>header>span { width:52px; height:52px; display:grid; place-items:center; border-radius:17px; color:#40376f; background:#ffe18e; font-size:29px; }
+.moon-quest-map header small,.moon-quest-map header strong { display:block; }
+.moon-quest-map header small { color:#7767ad; font-size:8px; font-weight:900; letter-spacing:.13em; }
+.moon-quest-map header strong { font:700 26px "Fredoka"; }
+.moon-quest-map>blockquote { margin:16px 0; padding:12px 16px; border-left:4px solid #725eb5; border-radius:0 14px 14px 0; background:#eee8fa; font:600 14px/1.5 "Fredoka"; }
+.quest-chapter-path { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.quest-chapter-path.five-steps { grid-template-columns:repeat(5,minmax(0,1fr)); }
+.quest-chapter-path>div { min-height:65px; padding:9px; display:grid; grid-template-columns:29px 1fr; gap:7px; align-items:center; border:1px solid #e1d6c7; border-radius:14px; background:#fffdf7; }
+.quest-chapter-path>div>span { width:28px; height:28px; display:grid; place-items:center; border-radius:9px; color:#fff; background:#aaa1af; font-size:10px; font-weight:900; }
+.quest-chapter-path>div.current { border-color:#7964bd; box-shadow:0 0 0 3px rgba(121,100,189,.1); }
+.quest-chapter-path>div.current>span { color:#4c4167; background:#ffe18e; }
+.quest-chapter-path>div.complete { border-color:#9ccdb5; background:#e8f5ed; }
+.quest-chapter-path>div.complete>span { background:#65a786; }
+.quest-chapter-path strong,.quest-chapter-path small { display:block; }
+.quest-chapter-path strong { font-size:9px; }
+.quest-chapter-path small { margin-top:2px; color:#817783; font-size:7px; line-height:1.3; }
+.quest-current-card { margin-top:10px; padding:14px 17px; border-radius:17px; color:#fff; background:linear-gradient(135deg,#433773,#7059b3); }
+.quest-current-card small { color:#ffe18e; font-size:8px; font-weight:900; letter-spacing:.11em; }
+.quest-current-card h2 { margin:5px 0 3px; font:700 23px "Fredoka"; }
+.quest-current-card p { margin:0; color:#e9e4f7; font-size:10px; line-height:1.45; }
+.quest-reward-shelf { margin-top:11px; padding:13px; border:1px solid #e2d7c8; border-radius:17px; background:#f7efdf; }
+.quest-reward-shelf>header { display:flex; justify-content:space-between; align-items:center; }
+.quest-reward-shelf header small,.quest-reward-shelf header strong { display:block; }
+.quest-reward-shelf header small { color:#7a69ae; font-size:7px; font-weight:900; letter-spacing:.11em; }
+.quest-reward-shelf header strong { font-size:10px; }
+.quest-reward-shelf>header>span { padding:5px 8px; border-radius:9px; color:#fff; background:#6551a4; font-size:8px; font-weight:900; }
+.quest-reward-shelf>div { margin-top:9px; display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
+.quest-reward-shelf button { min-height:59px; padding:8px; display:grid; grid-template-columns:32px 1fr auto; gap:7px; align-items:center; border:1px solid #ddd1c0; border-radius:13px; color:#4f4562; background:#fffdf7; text-align:left; cursor:pointer; }
+.quest-reward-shelf button>span { width:31px; height:31px; display:grid; place-items:center; border-radius:10px; background:#e9e2d8; font-size:17px; }
+.quest-reward-shelf button.unlocked>span { background:#ffe39a; }
+.quest-reward-shelf button.found>span { background:#bfe2cf; }
+.quest-reward-shelf button strong,.quest-reward-shelf button small { display:block; }
+.quest-reward-shelf button strong { font-size:8px; }
+.quest-reward-shelf button small { margin-top:2px; color:#837985; font-size:7px; line-height:1.25; }
+.quest-reward-shelf button>i { font-style:normal; }
+.moon-quest-map>footer { margin-top:12px; display:flex; justify-content:flex-end; gap:8px; }
+.moon-quest-map>footer button { min-height:42px; padding:9px 14px; border:0; border-radius:12px; font-size:9px; font-weight:900; cursor:pointer; }
+.quest-soft-action { color:#645a6c; background:#eee5d7; }
+.quest-primary-action { color:#fff; background:#6651aa; box-shadow:0 10px 20px rgba(85,65,155,.2); }
+
+.moon-reward-backdrop { z-index:230; }
+.moon-reward-reveal { width:min(470px,100%); padding:30px; position:relative; overflow:hidden; border:1px solid rgba(255,255,255,.6); border-radius:30px; color:#4b4162; background:#fff9e7; box-shadow:0 38px 100px rgba(17,11,44,.55); text-align:center; }
+.reward-rays { position:absolute; left:50%; top:-115px; width:350px; height:350px; opacity:.22; background:repeating-conic-gradient(from 0deg,#f2be49 0 12deg,transparent 12deg 25deg); animation:reward-rays 18s linear infinite; transform:translateX(-50%); }
+.reward-relic-icon { width:90px; height:90px; margin:0 auto 14px; position:relative; display:grid; place-items:center; border:7px solid #fff2bd; border-radius:28px; background:#ffe08a; box-shadow:0 14px 35px rgba(187,132,38,.28); font-size:48px; animation:reward-bounce .75s cubic-bezier(.2,.9,.3,1.25); }
+.moon-reward-reveal>small { position:relative; color:#7765ac; font-size:8px; font-weight:900; letter-spacing:.13em; }
+.moon-reward-reveal h2 { position:relative; margin:7px 0; font:700 30px/1.05 "Fredoka"; }
+.moon-reward-reveal>p { position:relative; margin:0 auto; max-width:360px; color:#776e7c; font-size:11px; line-height:1.5; }
+.reward-lantern-slots { margin:17px auto; display:flex; justify-content:center; gap:9px; }
+.reward-lantern-slots i { width:43px; height:43px; display:grid; place-items:center; border:1px dashed #c9bdaf; border-radius:13px; color:#aaa0a8; background:#eee6d9; font-style:normal; }
+.reward-lantern-slots i.lit { border-style:solid; color:#4b4068; background:#ffe191; box-shadow:0 8px 16px rgba(185,131,44,.18); }
+.moon-reward-reveal>button { width:100%; min-height:48px; padding:10px 14px; border:0; border-radius:14px; color:#fff; background:#6550a7; font-size:10px; font-weight:900; cursor:pointer; }
+
+@keyframes secret-pulse { to{filter:brightness(1.18) drop-shadow(0 0 12px rgba(255,231,128,.65));transform:translateY(-3px)} }
+@keyframes reward-rays { to{transform:translateX(-50%) rotate(360deg)} }
+@keyframes reward-bounce { from{opacity:0;transform:translateY(18px) scale(.55)} }
+@keyframes moon-twinkle { to{opacity:.35;transform:scale(.6)} }
+@keyframes lantern-awake { to{transform:translateX(-50%) translateY(-5px);filter:brightness(1.08)} }
+@keyframes firefly-drift { to{transform:translate(22px,-25px) scale(.65);opacity:.55} }
+@keyframes coco-hop { 50%{transform:translateY(-10px)} }
+@keyframes coco-tail { to{transform:rotate(18deg)} }
+.bridge-coco { right:5%; bottom:12px; }
+
+@media (min-width:901px) {
+  .moon-app { height:var(--magic-town-viewport-height, 100vh); min-height:0; overflow:hidden; }
+  .moon-layout { height:calc(var(--magic-town-viewport-height, 100vh) - 72px); min-height:0; }
+  .moon-world,.festival-scene { height:100%; min-height:0; }
+}
+
+@keyframes reward-arrive { from{opacity:0;transform:translateX(-50%) translateY(15px) scale(.86)} }
+@keyframes voice-pulse { 50%{box-shadow:0 0 0 7px rgba(230,104,114,.18)} }
+
+@media (max-width:900px) {
+  .lesson-road { grid-template-columns:1fr; width:min(522px,100%); }.moon-bridge { grid-template-columns:minmax(0,1fr); padding-top:75px; }.bridge-book,.bridge-copy { min-width:0; width:100%; }.bridge-copy { padding-bottom:30px; }.bridge-copy h2 { max-width:100%; overflow-wrap:anywhere; }.bridge-sunset { right:5%; bottom:44%; }.moon-layout { grid-template-columns:1fr; }.moon-world,.festival-scene { min-height:610px; }.moon-companion { min-height:440px; }.moon-rail { position:fixed; bottom:9px; }.moon-companion { padding-bottom:85px; }.scene-title { top:22px; left:22px; }.treat-shelf { left:23%; right:23%; }.flag-workbench { left:24%; right:19%; }.moon-header { position:sticky; z-index:80; top:0; }.moon-progress p{display:none}
+}
+@media (max-width:600px) {
+  .course-hub { padding-inline:14px; }.hub-header { align-items:flex-start; }.hub-intro { margin-top:55px; }.hub-intro h1 { font-size:38px; }.lesson-card { min-height:351px; }.lesson-card-copy h2 { font-size:27px; }.moon-bridge { padding-inline:14px; }.bridge-book { min-height:430px; }.bridge-page { min-height:410px; padding:35px 25px; }.bridge-sunset { left:3%; right:3%; bottom:49%; transform:scale(.8); }.moon-header { grid-template-columns:minmax(0,1fr) auto; padding-inline:9px; }.moon-town-home { padding:5px 10px 5px 5px; gap:7px; }.moon-town-home .town-home-mark { width:34px; height:34px; }.moon-brand strong { font-size:14px; }.moon-progress { padding:6px; }.moon-progress>span { width:31px;height:31px}.moon-world,.festival-scene { min-height:560px; }.moon-rail { width:calc(100% - 18px); justify-content:space-between; }.moon-rail button { min-width:0; flex:1; padding-inline:3px; }.moon-rail button small { font-size:7px; }.scene-title h1 { max-width:330px; font-size:29px; }.moon-lantern { top:29%; width:115px; height:150px; }.town-coco { right:3%; width:140px; transform:scale(.8); }.festival-table { left:4%; min-width:120px; }.treat-shelf { left:26%; right:auto; bottom:27%; flex-direction:column; gap:6px; }.treat-shelf button { width:78px; height:70px; grid-template-columns:36px 1fr; }.treat-shelf span { font-size:26px; }.quantity-tray { right:4%; bottom:26%; }.betty-character { left:4%; transform:scale(.78); transform-origin:bottom left; }.flag-workbench { left:10%; right:10%; bottom:18%; transform:scale(.86); }.maple-character { right:2%; transform:scale(.72); }.class-board { left:4%; width:225px; }.park-coco { left:45%; transform:scale(.75); }.find-firefly.at-tree{left:20%}.find-firefly.at-bush{left:5%}.find-firefly.at-fountain{right:4%}.open-memory-book { width:290px; }.english-powers { grid-template-columns:1fr; }.moon-memory>section { grid-template-columns:1fr; }.moon-memory>footer { align-items:stretch; flex-direction:column; }.memory-backdrop { padding:9px; }
+}
+
+@media (max-width:900px) {
+  .main-story-pill { min-width:0; grid-template-columns:35px; }
+  .main-story-pill>b { display:none; }
+}
+@media (max-width:650px) {
+  .moon-quest-backdrop,.moon-reward-backdrop { padding:8px; }
+  .moon-quest-map { padding:18px 14px; border-radius:21px; }
+  .moon-quest-map>header { padding-right:38px; }
+  .moon-quest-map header strong { font-size:21px; }
+  .quest-chapter-path { grid-template-columns:1fr 1fr; }
+  .quest-chapter-path.five-steps { grid-template-columns:1fr 1fr; }
+  .quest-reward-shelf>div { grid-template-columns:1fr; }
+  .moon-quest-map>footer { align-items:stretch; flex-direction:column; }
+  .moon-reward-reveal { padding:24px 17px; }
+  .moon-reward-reveal h2 { font-size:26px; }
+}
+
+@media (prefers-reduced-motion:reduce) { .hub-sky>i,.moon-lantern.lit,.town-fireflies i,.town-coco.celebrate,.moon-coco-rig .coco-tail,.voice-button.listening,.town-secret.secret-ready,.reward-rays,.reward-relic-icon { animation:none!important; } }
+
+.hub-platform-back { min-height:38px; padding:8px 12px; display:inline-flex; align-items:center; border:1px solid rgba(255,255,255,.24); border-radius:12px; color:#fff; background:rgba(255,255,255,.1); font-size:9px; font-weight:900; text-decoration:none; backdrop-filter:blur(10px); }
+.hub-platform-back:hover,.hub-platform-back:focus-visible { background:rgba(255,255,255,.18); outline:none; }
+.next-lesson-link { min-height:44px; padding:10px 16px; display:inline-flex; align-items:center; justify-content:center; border-radius:13px; color:#fff; background:linear-gradient(135deg,#4d467f,#7860bd); box-shadow:0 10px 22px rgba(70,53,128,.22); font-size:11px; font-weight:900; text-decoration:none; }
+
+.moon-first-steps { border-color:rgba(255,244,204,.94); background:linear-gradient(135deg,rgba(255,250,234,.98),rgba(239,232,255,.98)); box-shadow:0 22px 58px rgba(26,20,61,.32),0 0 0 7px rgba(255,224,139,.12); }
+.moon-first-steps-guide { color:#4c3e76; background:linear-gradient(145deg,#ffe49a,#e9b868); font:700 31px "Fredoka",sans-serif; }
+.moon-first-steps-go { color:#4e416d; background:linear-gradient(135deg,#ffe59a,#efc468); box-shadow:0 9px 19px rgba(120,85,31,.2); }
+
+.moon-town-destinations { position:absolute; z-index:24; left:28px; top:150px; width:220px; display:grid; gap:8px; }
+.moon-town-destinations button { min-width:0; min-height:58px; padding:8px 9px; overflow:hidden; display:grid; grid-template-columns:34px minmax(0,1fr) 44px; gap:8px; align-items:center; border:1px solid rgba(255,255,255,.55); border-radius:16px; color:#4c4263; background:rgba(255,249,231,.9); box-shadow:0 12px 28px rgba(28,20,57,.18); text-align:left; backdrop-filter:blur(10px); cursor:pointer; }
+.moon-town-destinations button>span { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; color:#4d426c; background:#ffe49a; font-size:17px; }
+.moon-town-destinations p { min-width:0; margin:0; overflow:hidden; }
+.moon-town-destinations strong,.moon-town-destinations small { display:block; }
+.moon-town-destinations strong { overflow:hidden; font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.moon-town-destinations small { margin-top:2px; overflow:hidden; color:#7d7383; font-size:7px; line-height:1.25; overflow-wrap:anywhere; }
+.moon-town-destinations i { width:100%; min-width:0; min-height:22px; padding:4px 2px; overflow:hidden; display:grid; place-items:center; border-radius:7px; color:#7562b5; background:#eee8fa; font-size:6px; font-style:normal; font-weight:900; text-align:center; text-overflow:ellipsis; white-space:nowrap; }
+.moon-town-destinations button.featured i { color:#6b5214; background:#ffe596; }
+.moon-town-destinations button.complete i { color:#397258; background:#d8efe1; }
+.moon-town-destinations button.featured { border:2px solid #ffe28d; box-shadow:0 0 0 5px rgba(255,226,141,.16),0 15px 32px rgba(28,20,57,.22); }
+.moon-town-destinations button.complete { border-color:#a8d5bc; background:rgba(234,248,239,.94); }
+.moon-town-destinations button.complete>span { color:#fff; background:#65a786; }
+
+@media (max-width:900px) {
+  .moon-town-destinations { display:none; }
+}
+
+/* Lesson 2 shares Lesson 1's light, floating HUD instead of a full-width bar. */
+.moon-header.floating-hud {
+  height:auto;
+  padding:0;
+  position:fixed;
+  z-index:80;
+  top:18px;
+  left:clamp(16px,2vw,32px);
+  right:calc(390px + clamp(16px,2vw,32px));
+  display:grid;
+  grid-template-columns:minmax(265px,1fr) auto;
+  gap:18px;
+  align-items:start;
+  color:var(--moon-ink);
+  background:transparent;
+  box-shadow:none;
+  pointer-events:none;
+}
+.moon-header.floating-hud>a,
+.moon-header.floating-hud>button { pointer-events:auto; }
+.moon-header.floating-hud .main-story-pill {
+  min-width:350px;
+  min-height:72px;
+  padding:9px 13px 10px 10px;
+  border:3px solid #fff0a4;
+  border-radius:22px;
+  color:#3d345c;
+  background:linear-gradient(135deg,#fffdf7,#fff8d8);
+  box-shadow:0 13px 34px rgba(63,45,132,.22),0 0 0 7px rgba(255,235,126,.2);
+  backdrop-filter:blur(14px);
+}
+.moon-header.floating-hud .moon-progress>span {
+  width:42px;
+  height:42px;
+  padding:4px;
+  background:conic-gradient(#755ee0 var(--progress),rgba(108,86,220,.14) 0);
+}
+.moon-header.floating-hud .moon-progress>span i {
+  border-color:#fff9df;
+  background:#ffe18c;
+}
+.moon-header.floating-hud .moon-progress small { color:#7a7089; font-size:8px; }
+.moon-header.floating-hud .moon-progress strong { margin-top:2px; font-size:12px; }
+.moon-header.floating-hud .main-story-pill>b { color:#604bc5; font-size:9px; }
+.moon-layout { min-height:var(--magic-town-viewport-height, 100vh); }
+.festival-scene { min-height:var(--magic-town-viewport-height, 100vh); }
+.scene-title { top:100px; }
+.moon-town-destinations { top:220px; }
+
+@media (min-width:901px) {
+  .moon-layout { height:var(--magic-town-viewport-height, 100vh); }
+}
+
+@media (max-width:1180px) {
+  .moon-header.floating-hud { grid-template-columns:minmax(230px,1fr) auto; }
+  .moon-header.floating-hud .main-story-pill { min-width:52px; min-height:52px; padding:5px; grid-template-columns:36px; border-radius:17px; }
+  .moon-header.floating-hud .main-story-pill p,
+  .moon-header.floating-hud .main-story-pill>b { display:none; }
+  .moon-header.floating-hud .moon-progress>span { width:36px; height:36px; }
+}
+
+@media (max-width:900px) {
+  .moon-header.floating-hud { position:fixed; top:10px; left:10px; right:10px; grid-template-columns:minmax(0,1fr) auto; gap:10px; }
+  .moon-world,.festival-scene { min-height:632px; }
+  .scene-title { top:92px; }
+}
+
+@media (max-width:600px) {
+  .moon-header.floating-hud { padding:0; }
+  .moon-header.floating-hud .main-story-pill { min-width:48px; min-height:48px; }
+  .moon-header.floating-hud .moon-progress>span { width:32px; height:32px; }
+}
+
+.moon-reward-actions { position:relative; margin-top:18px; display:grid; gap:8px; }
+.moon-reward-actions>button { width:100%; min-height:48px; padding:10px 14px; border:0; border-radius:14px; color:#fff; background:#6550a7; font-size:10px; font-weight:900; cursor:pointer; }
+.moon-reward-actions>.reward-bonus-action { color:#584879; border:1px solid #d8caee; background:#f1eaff; }
+.moon-reward-actions>.reward-bonus-action small { margin-top:2px; display:block; color:#806eb0; font-size:7px; }
+.moon-learning-modal { border-color:#fff0ac; }
+.moon-challenge-success>p { color:#756d80; line-height:1.5; }
+.quest-reward-shelf button.earned:not(.unlocked)>span { background:#eee7ff; }
+
+/* Wide desktop readability ---------------------------------------------- */
+@media (min-width:1440px) and (min-height:720px) {
+  .course-hub,
+  .moon-bridge,
+  .moon-app { font-size:16px; }
+
+  .hub-brand small,
+  .lesson-card-art small,
+  .lesson-card-copy > p,
+  .memory-thread small,
+  .bridge-page small,
+  .bridge-coco small,
+  .bridge-copy > p { font-size:10px; }
+  .hub-brand strong { font-size:21px; }
+  .hub-footer { font-size:12px; }
+  .hub-intro p { font-size:12px; }
+  .hub-intro > span { font-size:15px; }
+  .lesson-road { width:min(1035px,100%); gap:22px; }
+  .lesson-card-copy > span { font-size:14px; }
+  .memory-thread strong { font-size:12px; }
+  .bridge-page > span { font-size:13px; }
+  .bridge-copy blockquote { font-size:18px; }
+  .bridge-copy button { font-size:15px; }
+
+  .moon-layout { grid-template-columns:minmax(0,1fr) minmax(420px,460px); }
+  .moon-header.floating-hud { right:calc(460px + clamp(16px,2vw,32px)); }
+  .moon-header.floating-hud .moon-progress small,
+  .moon-header.floating-hud .main-story-pill > b,
+  .moon-town-home small { font-size:10px; }
+  .moon-header.floating-hud .moon-progress strong,
+  .moon-town-home strong { font-size:14px; }
+  .scene-title p { font-size:10px; }
+  .moon-rail button { min-width:72px; padding:8px 10px; }
+  .moon-rail button small { font-size:10px; }
+  .moon-town-destinations { width:250px; }
+  .moon-town-destinations button { min-height:64px; grid-template-columns:38px minmax(0,1fr) 48px; }
+  .moon-town-destinations button > span { width:38px; height:38px; font-size:18px; }
+  .moon-town-destinations strong { font-size:12px; }
+  .moon-town-destinations small { font-size:10px; }
+
+  .moon-companion { padding:22px; gap:15px; }
+  .guide-message { padding:15px; grid-template-columns:46px 1fr; gap:11px; }
+  .guide-message > span { width:46px; height:46px; font-size:23px; }
+  .guide-message small,
+  .current-mission > p span,
+  .current-mission > p small,
+  .invite-picker > small,
+  .english-powers small,
+  .celebration-actions p { font-size:10px; }
+  .guide-message strong { font-size:14px; }
+  .current-mission h2 { font-size:21px; }
+  .sentence-seed { min-height:44px; font-size:12px; }
+  .invite-picker button { min-height:56px; font-size:11px; }
+  .english-powers strong { font-size:12px; }
+  .celebration-actions h2 { font-size:22px; }
+  .celebration-actions button,
+  .celebration-actions a { min-height:44px; font-size:12px; }
+
+  .moon-memory { width:min(730px,100%); max-height:calc(var(--magic-town-viewport-height, 100vh) - 40px); padding:28px; overflow-y:auto; }
+  .moon-memory header small,
+  .moon-memory > section small,
+  .moon-memory > footer > span { font-size:10px; }
+  .moon-memory header strong { font-size:26px; }
+  .moon-memory > section strong { font-size:12px; }
+  .moon-memory > footer button { min-height:44px; font-size:12px; }
+
+  .moon-quest-map { width:min(960px,100%); max-height:calc(var(--magic-town-viewport-height, 100vh) - 40px); padding:28px; }
+  .moon-quest-map header small,
+  .quest-chapter-path small,
+  .quest-current-card small,
+  .quest-reward-shelf header small,
+  .quest-reward-shelf button small { font-size:10px; }
+  .moon-quest-map header strong { font-size:27px; }
+  .moon-quest-map > blockquote { font-size:15px; }
+  .quest-chapter-path > div { min-height:74px; padding:10px; }
+  .quest-chapter-path strong,
+  .quest-reward-shelf header strong,
+  .quest-reward-shelf button strong { font-size:12px; }
+  .quest-current-card h2 { font-size:24px; }
+  .quest-current-card p { font-size:13px; }
+  .quest-reward-shelf > header > span { font-size:10px; }
+  .quest-reward-shelf button { min-height:68px; }
+  .moon-quest-map > footer button { min-height:44px; font-size:12px; }
+
+  .moon-reward-reveal { width:min(520px,100%); max-height:calc(var(--magic-town-viewport-height, 100vh) - 40px); padding:34px; overflow-y:auto; }
+  .moon-reward-reveal > small,
+  .moon-reward-actions > .reward-bonus-action small { font-size:10px; }
+  .moon-reward-reveal h2 { font-size:33px; }
+  .moon-reward-reveal > p { max-width:410px; font-size:14px; }
+  .moon-reward-reveal > button,
+  .moon-reward-actions > button { min-height:52px; font-size:12px; }
+}
+
+@media (min-width:1440px) and (min-height:720px) and (max-height:860px) {
+  .moon-companion { padding:18px 20px; gap:12px; }
+  .moon-town-destinations { top:204px; }
+  .invite-picker button { min-height:50px; }
+}
+
+/* Lesson 2 uses the same scene-first, guided bottom dock rhythm as Lesson 1. */
+.moon-world-dock { color:#443a5b; background:linear-gradient(110deg,#fffaf0,#f4ecdc 62%,#eee6f7); }
+.moon-dock-guide { min-width:0; display:grid; grid-template-columns:46px minmax(0,1fr); gap:11px; align-items:start; }
+.moon-dock-guide>span { width:46px; height:46px; display:grid; place-items:center; border:1px solid #ded2ee; border-radius:15px; background:#eee7ff; box-shadow:0 8px 18px rgba(66,48,104,.1); font-size:23px; }
+.moon-dock-guide p { min-width:0; margin:0; }
+.moon-dock-guide small,.moon-dock-guide strong,.moon-dock-guide em { display:block; }
+.moon-dock-guide small { color:#7562b1; font-size:8px; font-weight:900; letter-spacing:.11em; }
+.moon-dock-guide strong { margin-top:5px; font:700 16px/1.2 "Fredoka"; }
+.moon-dock-guide em { margin-top:7px; color:#746c78; font-size:10px; font-style:normal; line-height:1.42; }
+
+.moon-task-card { min-width:0; padding:12px 14px; border:2px solid #d7c7f0; border-radius:19px; background:linear-gradient(135deg,#fffdf8,#f7f1ff); box-shadow:0 9px 22px rgba(67,48,107,.1); }
+.moon-task-card.kind-tap { border-color:#e9c85f; background:linear-gradient(135deg,#fffdf2,#fff6cc); }
+.moon-task-card.kind-complete { border-color:#8bc7a6; background:linear-gradient(135deg,#f7fff9,#e5f5eb); }
+.moon-task-card>header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.moon-task-card>header small { overflow:hidden; color:#715bb5; font-size:8px; font-weight:900; letter-spacing:.1em; text-overflow:ellipsis; white-space:nowrap; }
+.moon-task-card>header b { flex:none; padding:4px 7px; border-radius:8px; color:#6652a8; background:#eee6ff; font-size:8px; }
+.moon-task-card h2 { margin:6px 0 7px; display:flex; align-items:center; gap:8px; font:700 19px/1.08 "Fredoka"; }
+.moon-task-card h2>span { width:30px; height:30px; flex:none; display:grid; place-items:center; border-radius:10px; background:#ffe395; font-size:16px; }
+.moon-task-steps { display:flex; flex-wrap:wrap; gap:6px; }
+.moon-task-steps>span { padding:5px 7px; border-radius:8px; color:#5f566a; background:#eee8df; font-size:8px; font-weight:800; }
+.moon-task-primary { width:100%; min-height:39px; margin-top:9px; padding:8px 11px; display:flex; align-items:center; justify-content:space-between; border:0; border-radius:12px; color:#fff; background:#6751ba; box-shadow:0 8px 16px rgba(91,70,174,.22); font-size:9px; font-weight:900; cursor:pointer; }
+.moon-task-primary span { width:24px; height:24px; display:grid; place-items:center; border-radius:8px; background:rgba(255,255,255,.16); }
+.moon-task-tap-note,.moon-task-example { min-width:0; margin-top:9px; padding:7px 9px; border-radius:11px; background:#fff0ad; }
+.moon-task-tap-note { display:grid; grid-template-columns:26px minmax(0,1fr); column-gap:7px; align-items:center; }
+.moon-task-tap-note>span { grid-row:1/3; font-size:20px; }
+.moon-task-tap-note strong,.moon-task-tap-note small,.moon-task-example small,.moon-task-example strong { display:block; }
+.moon-task-tap-note strong,.moon-task-example small { color:#7b651d; font-size:7px; font-weight:900; letter-spacing:.08em; }
+.moon-task-tap-note small,.moon-task-example strong { margin-top:2px; overflow:hidden; color:#5d5264; font-size:9px; line-height:1.3; text-overflow:ellipsis; white-space:nowrap; }
+.moon-task-controls .sentence-seed { min-height:37px; margin-top:9px; border:0; color:#fff; background:#6b55bb; }
+.moon-task-controls .invite-picker { margin-top:7px; }
+.moon-task-controls .invite-picker>small { color:#7566a3; }
+.moon-task-controls .invite-picker button { min-height:42px; border-color:#d9cfea; color:#55496c; background:#f1ebfa; }
+.moon-task-controls .invite-picker button.selected { background:#ffe49a; }
+
+.moon-dock-actions { min-width:0; display:flex; flex-direction:column; gap:6px; }
+.moon-dock-progress { min-width:0; min-height:31px; display:flex; align-items:center; gap:7px; }
+.moon-progress-label { min-width:0; margin-right:auto; padding:4px 8px; display:grid; flex:1; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:8px; border:1px solid #d8cce8; border-radius:10px 13px 10px 12px; color:#554b65; background:#f8f4fc; text-align:left; cursor:pointer; }
+.moon-progress-label small,.moon-progress-label strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.moon-progress-label small { grid-column:1; color:#7866ab; font-size:7px; font-weight:900; letter-spacing:.1em; }
+.moon-progress-label strong { grid-column:1; margin-top:2px; color:#554b65; font-size:9px; }
+.moon-progress-label b { grid-column:2; grid-row:1/3; align-self:center; color:#6e58b6; font-size:7px; }
+.moon-dock-progress .story-map-button { min-width:0; min-height:34px; margin:0; padding:5px 8px; flex:1; color:#51446e; border-color:#d7cbe7; background:#f5effc; }
+.moon-dock-progress .story-map-button p { min-width:0; margin:0; text-align:left; }
+.moon-dock-progress .story-map-button small,.moon-dock-progress .story-map-button strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.moon-dock-progress .story-map-button small { color:#7969aa; font-size:6px; }
+.moon-dock-progress .story-map-button strong { font-size:8px; }
+.moon-dock-progress .story-map-button>b { color:#654fb1; }
+.moon-power-count,.moon-secret-count { flex:none; padding:5px 7px; border-radius:8px; color:#4f735f; background:#e1f0e7; font-size:7px; font-weight:900; white-space:nowrap; }
+.moon-secret-count { color:#725f9d; background:#e9e2f5; }
+.moon-dock-actions .celebration-actions { margin:0; padding:10px; display:grid; grid-template-columns:1fr 1fr; gap:5px 7px; }
+.moon-dock-actions .celebration-actions p,.moon-dock-actions .celebration-actions h2 { grid-column:1/3; }
+.moon-dock-actions .celebration-actions h2 { margin:3px 0 5px; font-size:17px; }
+.moon-dock-actions .celebration-actions button,.moon-dock-actions .celebration-actions a { min-height:35px; margin:0; }
+
+@media (min-width:901px) {
+  .moon-layout { height:var(--magic-town-viewport-height, 100vh); min-height:0; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) 224px; }
+  .moon-world,.moon-world>.festival-scene { height:100%; min-height:0; }
+  .moon-companion.moon-world-dock { min-height:0; padding:14px clamp(14px,2vw,30px); position:relative; z-index:50; overflow:visible; display:grid; grid-template-columns:minmax(180px,.68fr) minmax(300px,1fr) minmax(310px,1.05fr); gap:14px; align-items:center; border-top:3px solid rgba(255,224,132,.85); box-shadow:0 -14px 40px rgba(28,20,58,.22); }
+  .moon-header.floating-hud { right:clamp(16px,2vw,32px); }
+  .moon-rail { bottom:12px; }
+}
+
+@media (min-width:1440px) and (min-height:720px) {
+  .moon-layout { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) 238px; }
+  .moon-companion.moon-world-dock { padding:16px clamp(20px,2.5vw,42px); grid-template-columns:minmax(230px,.72fr) minmax(390px,1.08fr) minmax(420px,1.12fr); gap:18px; }
+  .moon-dock-guide small,.moon-task-card>header small,.moon-task-card>header b,.moon-task-steps>span,.moon-task-tap-note strong,.moon-task-example small { font-size:10px; }
+  .moon-dock-guide strong { font-size:19px; }
+  .moon-dock-guide em { font-size:12px; }
+  .moon-task-card h2 { font-size:22px; }
+  .moon-task-tap-note small,.moon-task-example strong { font-size:11px; }
+  .moon-task-primary,.moon-task-controls .sentence-seed { font-size:11px; }
+  .moon-dock-progress .story-map-button small,.moon-power-count,.moon-secret-count { font-size:9px; }
+  .moon-dock-progress .story-map-button strong { font-size:11px; }
+}
+
+@media (max-width:900px) {
+  .moon-companion.moon-world-dock { min-height:0; padding:18px 18px 92px; overflow:visible; display:grid; grid-template-columns:52px minmax(0,1fr); gap:14px 10px; }
+  .moon-dock-guide { grid-column:1/3; }
+  .moon-task-card,.moon-dock-actions { grid-column:1/3; }
+}
+
+@media (max-width:600px) {
+  .moon-companion.moon-world-dock { padding-inline:12px; }
+  .moon-dock-guide strong { font-size:15px; }
+  .moon-task-card h2 { font-size:18px; }
+  .moon-dock-progress { flex-wrap:wrap; }
+  .moon-dock-progress .story-map-button { flex-basis:100%; }
+  .quest-chapter-path.five-steps { grid-template-columns:1fr; }
+}
+
+/* Lesson 2 finale: fireworks, a keepsake reward, and a page-turning memory book. */
+.festival-fireworks,.festival-confetti { position:absolute; z-index:7; inset:0 0 39%; overflow:hidden; pointer-events:none; }
+.festival-firework { position:absolute; left:var(--x); top:var(--y); width:6px; height:6px; }
+.festival-firework::before { content:""; position:absolute; inset:-4px; border-radius:50%; background:#fff8d8; box-shadow:0 0 18px 6px var(--firework-color); animation:festival-flash 2.9s var(--delay) ease-out infinite; }
+.festival-firework i { position:absolute; left:1px; top:1px; width:5px; height:5px; border-radius:50%; background:var(--firework-color); box-shadow:0 0 9px 2px rgba(255,220,126,.65); box-shadow:0 0 9px 2px color-mix(in srgb,var(--firework-color),transparent 35%); opacity:0; animation:festival-spark 2.9s var(--delay) ease-out infinite; }
+.festival-confetti { z-index:16; inset:0; }
+.festival-confetti i { --column:calc((var(--piece) * 5.55%) + 2%); position:absolute; left:var(--column); top:-18px; width:7px; height:13px; border-radius:2px; background:hsl(calc(var(--piece) * 31deg) 82% 68%); animation:festival-confetti-fall calc(4.2s + var(--piece) * .09s) calc(var(--piece) * -.24s) linear infinite; }
+.festival-guests { align-items:end; }
+.festival-guests>span { min-width:55px; position:relative; border:2px solid rgba(255,229,142,.78); box-shadow:0 13px 25px rgba(25,19,52,.22); animation:guest-celebrate 1.6s calc(var(--guest-delay,0) * .12s) ease-in-out infinite alternate; }
+.festival-guests>span:nth-child(2){--guest-delay:1}.festival-guests>span:nth-child(3){--guest-delay:2}.festival-guests>span:nth-child(4){--guest-delay:3}
+.festival-guests>span::after { content:""; position:absolute; left:50%; bottom:-8px; width:18px; height:8px; border-radius:50%; background:rgba(24,21,49,.2); transform:translateX(-50%); }
+
+.moon-finale-backdrop { z-index:260; background:radial-gradient(circle at 50% 20%,rgba(116,88,180,.42),rgba(20,15,48,.84)); }
+.moon-finale-reward { width:min(560px,100%); padding:34px; position:relative; overflow:hidden; border:1px solid rgba(255,243,196,.75); border-radius:34px; color:#4c4165; background:linear-gradient(145deg,#fffdf3,#f6edff 68%,#fff0b9); box-shadow:0 42px 110px rgba(14,9,39,.58),inset 0 0 0 5px rgba(255,255,255,.45); text-align:center; }
+.finale-reward-sparkles i { position:absolute; width:7px; height:7px; border-radius:50%; background:#f4bd42; box-shadow:0 0 15px 4px rgba(244,189,66,.4); animation:finale-sparkle 1.8s ease-in-out infinite alternate; }
+.finale-reward-sparkles i:nth-child(1){left:10%;top:15%}.finale-reward-sparkles i:nth-child(2){left:23%;top:7%;animation-delay:.4s}.finale-reward-sparkles i:nth-child(3){right:16%;top:11%;animation-delay:.8s}.finale-reward-sparkles i:nth-child(4){right:8%;top:36%;animation-delay:1.2s}.finale-reward-sparkles i:nth-child(5){left:8%;top:43%;animation-delay:1.6s}
+.finale-medal { width:112px; height:112px; margin:0 auto 16px; position:relative; display:grid; place-items:center; border:8px solid #fff2b9; border-radius:36px; color:#5f4d92; background:linear-gradient(145deg,#ffe792,#ffc85e); box-shadow:0 18px 34px rgba(181,125,34,.28),0 0 0 10px rgba(255,223,129,.16); animation:finale-medal-arrive .8s cubic-bezier(.18,.9,.3,1.25); }
+.finale-medal>span { font-size:64px; line-height:1; }
+.finale-medal>i { position:absolute; right:-7px; bottom:-7px; width:38px; height:38px; display:grid; place-items:center; border:4px solid #fff8df; border-radius:50%; color:#fff; background:#7359b4; font-size:17px; font-style:normal; }
+.moon-finale-reward>p { margin:0; color:#7664a8; font-size:9px; font-weight:900; letter-spacing:.13em; }
+.moon-finale-reward h2 { margin:8px 0; font:700 clamp(30px,4vw,40px)/1 "Fredoka"; }
+.moon-finale-reward blockquote { margin:15px auto 18px; max-width:430px; color:#716777; font:italic 16px/1.5 Georgia,serif; }
+.finale-reward-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; }
+.finale-reward-stats>span { padding:11px 7px; border:1px solid #e5d8c5; border-radius:16px; background:rgba(255,255,255,.72); }
+.finale-reward-stats strong,.finale-reward-stats small { display:block; }
+.finale-reward-stats strong { color:#604b94; font:700 22px "Fredoka"; }
+.finale-reward-stats small { margin-top:2px; color:#817681; font-size:8px; font-weight:800; }
+.moon-finale-reward>button { width:100%; min-height:48px; margin-top:10px; border:0; border-radius:15px; font-size:11px; font-weight:900; cursor:pointer; }
+.finale-storybook-action { padding:10px 14px 10px 18px; display:flex; align-items:center; justify-content:space-between; color:#fff; background:linear-gradient(135deg,#765cca,#5d47a5); box-shadow:0 12px 24px rgba(84,61,152,.25); }
+.finale-storybook-action span { width:28px; height:28px; display:grid; place-items:center; border-radius:9px; background:rgba(255,255,255,.16); }
+.finale-watch-action { color:#64586d; background:#eee5d8; }
+
+.moon-storybook { width:min(900px,100%); padding:22px 26px 18px; overflow:hidden; background:linear-gradient(135deg,#fffdf5,#f8f0df); }
+.moon-storybook>header { padding-right:42px; }
+.moon-book-tools { margin-left:auto; display:flex; align-items:center; gap:8px; }
+.moon-book-tools>span { color:#7b7080; font-size:9px; font-weight:800; }
+.moon-book-tools>button { min-height:34px; padding:7px 10px; border:1px solid #d8c9e6; border-radius:11px; color:#5e4e83; background:#f2ebfb; font-size:9px; font-weight:900; cursor:pointer; }
+.moon-book-shell { width:min(760px,calc(100% - 36px)); height:min(480px,calc(var(--magic-town-viewport-height, 100vh) - 205px)); min-height:390px; margin:15px auto 0; position:relative; perspective:1400px; }
+.moon-book-page-stack { position:absolute; inset:10px -8px -8px 8px; border-radius:19px 32px 32px 19px; background:#d2c4ad; box-shadow:8px 9px #b8aa94,0 25px 48px rgba(42,29,61,.22); transform:rotate(1deg); }
+.moon-book-page { position:absolute; inset:0; overflow:hidden; border:1px solid #e2d5bf; border-radius:18px 30px 30px 18px; background:linear-gradient(90deg,#f4ead7 0,#fffdf5 6%,#fffdf7 94%,#efe1c9 100%); box-shadow:inset 20px 0 35px rgba(91,63,57,.07); transform-origin:left center; animation:moon-page-turn .55s cubic-bezier(.2,.75,.25,1); }
+.moon-book-page::after { content:""; position:absolute; inset:0; opacity:.12; pointer-events:none; background-image:radial-gradient(#9d856b .6px,transparent .7px); background-size:9px 9px; }
+.moon-page-turn { position:absolute; z-index:5; bottom:15px; min-width:82px; min-height:43px; padding:7px 11px; display:flex; align-items:center; gap:7px; border:0; border-radius:13px; color:#fff; background:#6751aa; box-shadow:0 9px 18px rgba(76,55,137,.2); cursor:pointer; }
+.moon-page-turn.previous { left:18px; }.moon-page-turn.next { right:18px; }.moon-page-turn.finish { background:#4f9672; }
+.moon-page-turn span { font:700 24px/1 "Fredoka"; }.moon-page-turn small { font-size:8px; font-weight:900; }
+.moon-paper-number { position:absolute; z-index:4; left:50%; bottom:20px; color:#9a8d84; font:italic 10px Georgia,serif; }
+.moon-book-progress { margin:13px auto 0; display:flex; justify-content:center; gap:6px; }
+.moon-book-progress i { width:28px; height:4px; border-radius:8px; background:#d8cec0; }
+.moon-book-progress i.read { background:#a9cfb6; }.moon-book-progress i.current { background:#7157ba; box-shadow:0 0 0 3px rgba(113,87,186,.12); }
+.moon-storybook>footer { margin-top:11px; }
+.moon-storybook>footer button { border-radius:11px; }
+
+.moon-book-cover,.moon-book-chapter,.moon-book-review { height:100%; padding:34px 72px 62px; position:relative; z-index:2; }
+.moon-book-cover { display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff7d0; background:radial-gradient(circle at 50% 42%,#7860b9,#3b356b 72%); text-align:center; }
+.moon-book-cover::before { content:""; position:absolute; inset:18px; border:2px solid rgba(255,226,135,.55); border-radius:18px 28px 28px 18px; }
+.cover-fireworks { position:absolute; left:11%; right:11%; top:34px; display:flex; justify-content:space-between; color:#ffe890; font-size:27px; }
+.cover-fireworks span { color:#ff9fbc; font-size:36px; }
+.cover-lantern { width:82px; height:96px; display:grid; place-items:center; border:5px solid #43376c; border-radius:36px 36px 17px 17px; color:#9a6315; background:#ffe18a; box-shadow:0 0 42px rgba(255,222,123,.58); font-size:34px; }
+.moon-book-cover p { margin:13px 0 4px; color:#ffe899; font-size:9px; font-weight:900; letter-spacing:.17em; }
+.moon-book-cover h2 { margin:0; font:700 clamp(27px,4vw,42px)/1 "Fredoka"; }
+.moon-book-cover>span { margin-top:10px; color:#e5dcef; font:italic 13px Georgia,serif; }
+.cover-cast { margin-top:15px; display:flex; }
+.cover-cast i { width:42px; height:42px; margin-left:-5px; display:grid; place-items:center; border:3px solid #51427d; border-radius:50%; background:#fff7de; font-size:21px; font-style:normal; }
+.moon-book-cover>small { margin-top:12px; color:#cfc2e2; font-size:8px; }
+
+.moon-book-chapter>header { display:grid; grid-template-columns:1fr auto; align-items:center; }
+.moon-book-chapter>header small { color:#7662a8; font-size:8px; font-weight:900; letter-spacing:.13em; }
+.moon-book-chapter>header h2 { margin:3px 0 0; font:700 30px/1 "Fredoka"; }
+.moon-book-chapter>header span { grid-column:2; grid-row:1/3; font-size:36px; }
+.chapter-picture { height:145px; margin:15px 0; position:relative; overflow:hidden; display:flex; align-items:end; justify-content:center; gap:28px; border-radius:19px; background:linear-gradient(#5f5790 0 62%,#b98765 62%); }
+.chapter-picture>b,.chapter-picture>i { position:relative; z-index:2; padding:11px; border-radius:16px; background:rgba(255,249,222,.9); font-size:32px; font-style:normal; }
+.chapter-picture>em { position:absolute; right:13%; top:14px; color:#ffe696; font-size:34px; font-style:normal; }
+.school-memory .chapter-picture { background:linear-gradient(#6f61a1 0 62%,#c69a71 62%); }
+.park-memory .chapter-picture { background:linear-gradient(#343767 0 62%,#557163 62%); }
+.together-memory .chapter-picture { background:radial-gradient(circle at 50% 28%,#7061a9,#393765 70%); }
+.memory-flag { width:70px; height:89px; display:grid; place-items:center; clip-path:polygon(0 0,100% 0,100% 76%,50% 100%,0 76%); color:#ffe799; background:#527fc4!important; }
+.memory-flag.color-yellow { color:#78569c; background:#f2ca5d!important; }.memory-flag.color-purple { color:#ffe799; background:#7653a2!important; }
+.firefly-picture>b { padding:0; color:#fff18c; background:transparent; filter:drop-shadow(0 0 8px #fff073); font-size:28px; }
+.together-picture { gap:10px; }.together-picture>b { padding:8px; font-size:26px; }.together-picture>em { left:50%; right:auto; top:9px; color:#ffe178; transform:translateX(-50%); }
+.moon-book-chapter>p { margin:0; color:#62586a; font:600 13px/1.5 "DM Sans"; }
+.moon-book-chapter blockquote { margin:10px 0 8px; padding:10px 14px; border-left:4px solid #755fb6; border-radius:0 13px 13px 0; color:#4e4563; background:#eee8fa; font:italic 14px/1.4 Georgia,serif; }
+.chapter-power { color:#6c5a95; font-size:9px; font-weight:900; }
+
+.moon-book-review { padding-inline:54px; }
+.moon-book-review>p { margin:0; color:#7763aa; font-size:9px; font-weight:900; letter-spacing:.15em; text-align:center; }
+.moon-book-review>h2 { margin:4px 0 12px; font:700 30px/1 "Fredoka"; text-align:center; }
+.moon-book-review>section:not(.course-completion) { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+.moon-book-review>section:not(.course-completion)>div { min-width:0; padding:8px; display:grid; grid-template-columns:29px minmax(0,1fr); gap:7px; align-items:center; border:1px solid #e0d5c3; border-radius:13px; background:rgba(255,255,255,.72); }
+.moon-book-review>section:not(.course-completion)>div>span { width:28px; height:28px; display:grid; place-items:center; border-radius:9px; color:#fff; background:#69a987; }
+.moon-book-review>section:not(.course-completion) strong,.moon-book-review>section:not(.course-completion) small { display:block; }
+.moon-book-review>section:not(.course-completion) strong { font-size:9px; }.moon-book-review>section:not(.course-completion) small { margin-top:2px; overflow:hidden; color:#756c78; font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
+.moon-review-words { margin-top:9px; display:flex; flex-wrap:wrap; justify-content:center; gap:5px; }
+.moon-review-words>small { width:100%; color:#7d70a1; font-size:7px; font-weight:900; text-align:center; }
+.moon-review-words button { min-height:28px; padding:5px 8px; border:1px solid #d8cde5; border-radius:9px; color:#594b78; background:#f4eefb; font-size:8px; font-weight:800; cursor:pointer; }
+.moon-review-words button span { color:#775eb3; }
+.moon-review-badge { width:max-content; margin:10px auto 0; padding:7px 12px; display:flex; align-items:center; gap:8px; border-radius:14px; color:#594778; background:#ffe497; }
+.moon-review-badge>span { font-size:25px; }.moon-review-badge p { margin:0; }.moon-review-badge small,.moon-review-badge strong { display:block; }.moon-review-badge small { font-size:6px; }.moon-review-badge strong { font:700 12px "Fredoka"; }
+.read-story-again { margin:8px auto 0; padding:7px 11px; display:block; border:0; border-radius:10px; color:#fff; background:#6b54ae; font-size:8px; font-weight:900; cursor:pointer; }
+.celebration-actions>a { grid-column:1/3; }
+
+@keyframes festival-flash { 0%,14%,100%{opacity:0;transform:scale(.2)} 18%{opacity:1;transform:scale(1)} 29%{opacity:0;transform:scale(1.35)} }
+@keyframes festival-spark { 0%,14%{opacity:0;transform:rotate(calc(var(--ray) * 30deg)) translateY(0) scale(.2)} 18%{opacity:1} 65%{opacity:.9;transform:rotate(calc(var(--ray) * 30deg)) translateY(-72px) scale(.8)} 88%,100%{opacity:0;transform:rotate(calc(var(--ray) * 30deg)) translateY(-96px) scale(.15)} }
+@keyframes festival-confetti-fall { from{transform:translateY(-20px) rotate(0deg)} to{transform:translateY(70vh) rotate(560deg)} }
+@keyframes guest-celebrate { to{transform:translateY(-7px) rotate(2deg)} }
+@keyframes finale-sparkle { to{opacity:.25;transform:scale(.45)} }
+@keyframes finale-medal-arrive { from{opacity:0;transform:translateY(24px) scale(.55) rotate(-9deg)} }
+@keyframes moon-page-turn { from{opacity:.55;transform:rotateY(-11deg) translateX(14px)} to{opacity:1;transform:rotateY(0) translateX(0)} }
+
+@media (max-width:700px) {
+  .festival-guests { left:43%; gap:4px; transform:translateX(-50%) scale(.78); transform-origin:bottom center; }
+  .moon-finale-reward { padding:27px 17px; }
+  .finale-medal { width:90px; height:90px; }.finale-medal>span { font-size:52px; }
+  .moon-storybook { padding:15px 9px 12px; overflow-y:auto; }
+  .moon-storybook>header { align-items:flex-start; padding-right:35px; }
+  .moon-book-tools { display:grid; justify-items:end; }
+  .moon-book-shell { width:calc(100% - 8px); min-height:440px; height:calc(var(--magic-town-viewport-height, 100vh) - 205px); }
+  .moon-book-cover,.moon-book-chapter,.moon-book-review { padding:28px 34px 60px; }
+  .moon-book-chapter>header h2,.moon-book-review>h2 { font-size:25px; }
+  .chapter-picture { height:130px; gap:12px; }
+  .moon-book-review>section:not(.course-completion) { grid-template-columns:1fr; }
+  .moon-book-review>section:not(.course-completion)>div { padding:6px; }
+  .moon-review-words button:nth-of-type(n+7) { display:none; }
+  .moon-book-page { overflow-y:auto; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .festival-firework::before,.festival-firework i,.festival-confetti i,.festival-guests>span,.finale-reward-sparkles i,.finale-medal,.moon-book-page { animation:none!important; }
+  .festival-confetti { display:none; }
+}
+
+/* Course completion uses the shared three-star component. */
+.lesson-completion-status { margin-top:15px; }
+.lesson-card.is-complete { border-color:rgba(255,226,132,.8); box-shadow:0 28px 75px rgba(34,25,68,.26),0 0 0 4px rgba(255,226,132,.12); }
+
+.celebration-actions { position:relative; }
+.celebration-actions .celebration-course-stars { position:absolute; right:10px; top:9px; }
+.celebration-actions .celebration-hidden-action { color:#fff7ce; background:linear-gradient(135deg,#7958b2,#584394); }
+.moon-dock-actions .celebration-actions .course-completion,.moon-dock-actions .celebration-actions .storybook-finish-pending { width:100%; grid-column:1/3; }
+.celebration-actions .course-completion { color:#54466d; }
+.storybook-finish-pending { padding:9px 11px; display:grid; grid-template-columns:31px 1fr; gap:9px; align-items:center; border:1px dashed rgba(255,232,164,.58); border-radius:14px; color:#fff9df; background:rgba(255,255,255,.09); text-align:left; }
+.storybook-finish-pending>span { font-size:22px; }
+.storybook-finish-pending p { color:inherit; letter-spacing:0; }
+.storybook-finish-pending small,.storybook-finish-pending strong { display:block; }
+.storybook-finish-pending small { color:#ffe394; font-size:8px; font-weight:900; letter-spacing:.09em; }
+.storybook-finish-pending strong { margin-top:2px; font-size:11px; line-height:1.25; }
+.moon-book-completion { margin:0 auto 12px; }
+.finale-course-stars { margin:10px 0 5px; justify-content:center; }
+.finale-star-message,.finale-hidden-promise { display:block; }
+.finale-star-message { color:#5a477e; font-size:13px; }
+.finale-hidden-promise { margin:5px 0 14px; color:#7b707e; font-size:10px; }
+.cover-course-stars { margin-top:10px; position:relative; z-index:2; }
+
+/* Step-by-step Lesson 2 story maker, mirroring the Lesson 1 authorship flow. */
+.moon-memory-studio-backdrop { z-index:255; padding:18px; }
+.moon-memory-studio { width:min(1040px,100%); max-height:calc(var(--magic-town-viewport-height, 100vh) - 36px); padding:24px; position:relative; overflow-y:auto; border:1px solid rgba(255,244,198,.7); border-radius:30px; color:#4b4161; background:linear-gradient(135deg,#fffaf0,#f3ebff); box-shadow:0 38px 100px rgba(17,11,44,.55); }
+.moon-studio-close { position:absolute; z-index:3; right:18px; top:17px; width:38px; height:38px; border:0; border-radius:50%; color:#594b6d; background:#e9e0d6; font-size:21px; cursor:pointer; }
+.moon-memory-studio>header { padding-right:48px; display:flex; align-items:center; justify-content:space-between; gap:20px; }
+.moon-memory-studio>header p { margin:0; }
+.moon-memory-studio>header small,.moon-memory-studio>header strong { display:block; }
+.moon-memory-studio>header small { color:#745ead; font-size:11px; font-weight:900; letter-spacing:.12em; }
+.moon-memory-studio>header strong { margin-top:3px; font:700 30px "Fredoka"; }
+.moon-studio-progress { display:flex; gap:8px; }
+.moon-studio-progress i { width:34px; height:34px; display:grid; place-items:center; border:2px solid #d7cadf; border-radius:11px; color:#918597; background:#eee7df; font-size:11px; font-style:normal; font-weight:900; }
+.moon-studio-progress i.current { color:#fff; border-color:#7158b5; background:#7158b5; box-shadow:0 0 0 4px rgba(113,88,181,.13); }
+.moon-studio-progress i.saved { color:#fff; border-color:#68a582; background:#68a582; }
+.moon-studio-layout { margin-top:18px; display:grid; grid-template-columns:minmax(310px,.85fr) minmax(390px,1.15fr); gap:18px; }
+.moon-studio-preview,.moon-studio-writing { min-width:0; min-height:390px; padding:23px; border-radius:23px; }
+.moon-studio-preview { position:relative; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; background:radial-gradient(circle at 50% 34%,#7765b0,#393664 74%); text-align:center; }
+.moon-studio-preview::before { content:""; position:absolute; inset:14px; border:1px solid rgba(255,229,144,.42); border-radius:16px; }
+.moon-studio-preview>small,.moon-studio-preview>div,.moon-studio-preview>h2,.moon-studio-preview>p,.moon-studio-preview>span { position:relative; z-index:2; }
+.moon-studio-preview>small { color:#ffe194; font-size:11px; font-weight:900; letter-spacing:.14em; }
+.moon-studio-preview>div { margin:13px 0; font-size:54px; letter-spacing:9px; filter:drop-shadow(0 10px 15px rgba(22,17,48,.25)); }
+.moon-studio-preview>h2 { margin:0; font:700 27px/1.12 "Fredoka"; }
+.moon-studio-preview>p { margin:15px 0 12px; max-width:420px; color:#f6eef9; font:italic 18px/1.45 Georgia,serif; }
+.moon-studio-preview>span { padding:7px 10px; border-radius:10px; color:#4e4165; background:#ffe59a; font-size:11px; font-weight:900; }
+.moon-studio-writing { display:flex; flex-direction:column; border:1px solid #dfd4c7; background:rgba(255,255,255,.74); }
+.moon-studio-writing label small,.moon-studio-writing label strong { display:block; }
+.moon-studio-writing label small { color:#755eaa; font-size:10px; font-weight:900; letter-spacing:.12em; }
+.moon-studio-writing label strong { margin-top:4px; font:700 26px "Fredoka"; }
+.moon-studio-writing textarea { width:100%; min-height:150px; margin-top:13px; padding:17px; resize:vertical; border:2px solid #d9cce7; border-radius:17px; color:#4d435d; background:#fffefa; outline:none; font:600 18px/1.5 "DM Sans"; }
+.moon-studio-writing textarea:focus { border-color:#735ab6; box-shadow:0 0 0 4px rgba(115,90,182,.12); }
+.moon-studio-suggestions { margin-top:10px; display:flex; flex-wrap:wrap; gap:7px; }
+.moon-studio-suggestions button { min-height:34px; padding:7px 10px; border:1px solid #d8cae5; border-radius:10px; color:#5d4a7b; background:#f2ebfa; font-size:11px; font-weight:800; cursor:pointer; }
+.moon-studio-voice { margin-top:auto; padding-top:14px; display:grid; grid-template-columns:135px minmax(0,1fr); gap:11px; align-items:center; }
+.moon-studio-voice>button { min-height:48px; padding:9px 13px; display:flex; align-items:center; justify-content:center; gap:8px; border:0; border-radius:14px; color:#fff; background:#6b52af; font-size:11px; cursor:pointer; }
+.moon-studio-voice>button span { font-size:20px; }.moon-studio-voice>button.listening { background:#dd6674; }.moon-studio-voice>button.unsupported { color:#71687b; background:#e5ddd7; }
+.moon-studio-voice>small { color:#756d7a; font-size:11px; line-height:1.4; }
+.moon-memory-studio>footer { margin-top:17px; display:grid; grid-template-columns:1fr auto 1fr; gap:9px; align-items:center; }
+.moon-memory-studio>footer button { min-height:45px; padding:9px 15px; border:0; border-radius:13px; font-size:11px; font-weight:900; cursor:pointer; }
+.studio-back,.studio-listen { color:#62576c; background:#e9e1d8; }.studio-next { justify-self:end; color:#fff; background:#6750aa; box-shadow:0 10px 20px rgba(81,59,147,.2); }
+
+/* Larger type in the finished keepsake book and final review. */
+.moon-book-tools>span,.moon-book-tools>button { font-size:11px; }
+.moon-book-cover p { font-size:11px; }.moon-book-cover>span { font-size:16px; }.moon-book-cover>small { font-size:10px; }
+.moon-book-chapter>header small { font-size:10px; }.moon-book-chapter>header h2 { font-size:34px; }
+.moon-book-chapter>p { font-size:16px; line-height:1.55; }
+.moon-book-chapter blockquote { padding:12px 16px; font-size:18px; line-height:1.48; }
+.chapter-power { font-size:11px; }
+.moon-book-review>p { font-size:11px; }.moon-book-review>h2 { font-size:34px; }
+.moon-book-review>section:not(.course-completion) strong { font-size:12px; }.moon-book-review>section:not(.course-completion) small { font-size:10px; line-height:1.35; white-space:normal; }
+.moon-review-words>small { font-size:9px; }.moon-review-words button { min-height:32px; font-size:11px; }
+.moon-review-badge small { font-size:8px; }.moon-review-badge strong { font-size:15px; }
+.read-story-again { min-height:34px; font-size:10px; }
+
+@media (max-width:760px) {
+  .moon-studio-layout { grid-template-columns:1fr; }
+  .moon-studio-preview,.moon-studio-writing { min-height:330px; }
+  .moon-memory-studio>header { align-items:flex-start; flex-direction:column; }
+  .moon-studio-progress { order:2; }
+  .moon-memory-studio>footer { grid-template-columns:1fr 1fr; }
+  .moon-memory-studio>footer .studio-listen { grid-column:1/3; grid-row:1; }
+  .moon-studio-writing textarea { font-size:17px; }
+}
+.moon-rail button.locked,.moon-town-destinations button.locked { cursor:not-allowed; filter:saturate(.3); opacity:.58; }
+.moon-town-destinations button.locked { border-style:dashed; background:linear-gradient(135deg,rgba(69,57,101,.78),rgba(56,49,83,.78)); }
+.moon-town-destinations button.locked p small { max-width:235px; line-height:1.25; }
+.moon-rail button.locked span { font-size:15px; }
+
+/* Finished Lesson 2 book: match the roomy Lesson 1 flipbook and contain long writing. */
+.moon-storybook {
+  width:min(1080px,100%);
+  padding:22px 30px 18px;
+}
+.moon-book-shell {
+  width:min(920px,calc(100% - 36px));
+  height:min(570px,calc(var(--magic-town-viewport-height, 100vh) - 180px));
+  min-height:540px;
+}
+.moon-book-page {
+  border-radius:8px 20px 20px 8px;
+  background:linear-gradient(90deg,#f4ead7 0,#fffaf0 6%,#fffaf0 94%,#efe1c9 100%);
+  box-shadow:inset 18px 0 32px rgba(91,69,64,.06),inset 0 0 70px rgba(111,82,55,.035);
+}
+.moon-book-cover,
+.moon-book-chapter,
+.moon-book-review {
+  min-width:0;
+  height:100%;
+  padding:32px 58px 76px;
+  overflow-x:hidden;
+  overflow-y:auto;
+  scrollbar-gutter:stable;
+}
+.moon-book-cover {
+  overflow:hidden;
+}
+.moon-book-cover h2,
+.moon-book-cover>span,
+.moon-book-chapter h2,
+.moon-book-chapter>p,
+.moon-book-chapter blockquote,
+.moon-book-review strong,
+.moon-book-review small {
+  max-width:100%;
+  overflow-wrap:anywhere;
+  word-break:normal;
+}
+.moon-book-chapter>p,
+.moon-book-chapter blockquote {
+  position:relative;
+  z-index:3;
+}
+.moon-book-chapter blockquote {
+  white-space:normal;
+}
+.moon-book-review>section:not(.course-completion)>div,
+.moon-book-review>section:not(.course-completion)>div p {
+  min-width:0;
+}
+.moon-book-review>section:not(.course-completion) small {
+  white-space:normal;
+}
+
+@media (max-width:700px) {
+  .moon-storybook { width:100%; padding:15px 9px 12px; }
+  .moon-book-shell { width:calc(100% - 8px); min-height:560px; height:calc(var(--magic-town-viewport-height, 100vh) - 190px); }
+  .moon-book-cover,.moon-book-chapter,.moon-book-review { padding:28px 30px 74px; }
+  .moon-book-chapter>header h2,.moon-book-review>h2 { font-size:28px; }
+  .moon-book-chapter>p { font-size:15px; }
+  .moon-book-chapter blockquote { font-size:16px; }
+}

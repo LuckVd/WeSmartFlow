@@ -257,6 +257,21 @@ CREATE TABLE IF NOT EXISTS user_profile_overview (
     updated_at          TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+-- 图谱视图配置：LLM 生成的派生展示视图，不改变原始节点/边事实
+CREATE TABLE IF NOT EXISTS graph_view_profiles (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL,
+    view_type       TEXT NOT NULL DEFAULT 'simplified',
+    name            TEXT NOT NULL DEFAULT '简化图谱',
+    status          TEXT NOT NULL DEFAULT 'active',
+    source_snapshot TEXT NOT NULL DEFAULT '{}',
+    view_config     TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE (user_id, view_type),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 # --------------------------------------------------------------------------

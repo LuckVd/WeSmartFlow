@@ -14,8 +14,16 @@ from .generate_viz import GenerateInteractiveVizTool
 from .kg_tools import (
     KGProposeMissingConceptTool,
     KGRecordObservationTool,
+    KGResolveForAuthoringTool,
     KGResolveTool,
+    KGSearchForAuthoringTool,
     KGSearchTool,
+)
+from .md_writer_tools import (
+    MdCreateConceptTool,
+    MdLoadConceptTool,
+    MdLoadFacetSectionTool,
+    MdWriteFacetSectionTool,
 )
 
 __all__ = [
@@ -32,6 +40,12 @@ __all__ = [
     "GenerateInteractiveVizTool",
     "KGSearchTool",
     "KGResolveTool",
+    "KGSearchForAuthoringTool",
+    "KGResolveForAuthoringTool",
     "KGProposeMissingConceptTool",
     "KGRecordObservationTool",
+    "MdLoadConceptTool",
+    "MdCreateConceptTool",
+    "MdLoadFacetSectionTool",
+    "MdWriteFacetSectionTool",
 ]

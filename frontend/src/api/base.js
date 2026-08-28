@@ -15,10 +15,18 @@ class ApiError extends Error {
 
 /**
  * 统一处理 401 未授权：清除 token，跳转登录页
+ * 注意：当前若在 admin 路由下（独立账号体系），不跳普通 /login，
+ * 避免普通用户 token 过期把 admin 页面冲掉。
  */
 function handleUnauthorized() {
   localStorage.removeItem("wesmartflow-token");
   localStorage.removeItem("wesmartflow-user");
+  if (
+    typeof window !== "undefined" &&
+    window.location.hash.startsWith("#/admin")
+  ) {
+    return;
+  }
   // 使用 location.href 确保整个页面刷新，触发路由守卫
   window.location.href = window.location.pathname + "#/login";
 }

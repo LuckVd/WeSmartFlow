@@ -282,6 +282,10 @@ class SessionRepository(BaseRepository):
             json.dumps(workspace, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
+    def read_workspace(self, session_id: str) -> dict:
+        """只读 workspace（含 canvas_blocks），不写盘。"""
+        return self._read_workspace(session_id)
+
     def update_workspace(self, session_id: str, **patch) -> dict:
         """更新 workspace 顶层字段并返回最新 workspace。"""
         workspace = self._read_workspace(session_id)

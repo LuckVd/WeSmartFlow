@@ -4,11 +4,15 @@ FastAPI 应用入口
 """
 
 import logging
+from pathlib import Path
 import logging.handlers
+import os
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
 from config import BACKEND_HOST, BACKEND_PORT, CORS_ORIGINS, DATA_DIR, LOG_DIR
@@ -27,6 +31,12 @@ from routers.cards import gen_router as cards_gen_router
 from routers.usage import router as usage_router
 from routers.viz import router as viz_router
 from routers.llm import router as llm_router
+from routers.admin import router as admin_router
+from routers.weclaw import router as weclaw_router
+from routers.court import router as court_router
+from routers.examples import router as examples_router
+from routers.backup import router as backup_router
+from routers.graph import router as graph_router
 
 from services.quota import QuotaExceededError
 
@@ -65,10 +75,21 @@ if not _root_logger.handlers:
 # 应用初始化
 # --------------------------------------------------------------------------
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    on_startup()
+    try:
+        yield
+    finally:
+        await on_shutdown()
+
+
 app = FastAPI(
     title="WeSmartFlow API",
     description="AI 学习助手后端",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -78,6 +99,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# demo 路径强制 no-cache（迭代频繁，避免浏览器缓存住旧版本）
+@app.middleware("http")
+async def _no_cache_living_history(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/living-history/") or path == "/living-history":
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate, max-age=0"
+        )
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 
 # --------------------------------------------------------------------------
 # 路由注册
@@ -96,6 +132,13 @@ app.include_router(cards_gen_router)
 app.include_router(usage_router)
 app.include_router(viz_router)
 app.include_router(llm_router)
+app.include_router(admin_router)
+app.include_router(weclaw_router)
+app.include_router(court_router)
+app.include_router(examples_router)
+app.include_router(backup_router)
+app.include_router(graph_router)
+
 
 # --------------------------------------------------------------------------
 # 全局异常处理：额度超限返回 429
@@ -125,7 +168,6 @@ _assets_dir.mkdir(parents=True, exist_ok=True)
 # --------------------------------------------------------------------------
 
 
-@app.on_event("startup")
 def on_startup():
     init_db()
     init_kg_db()
@@ -150,6 +192,14 @@ def on_startup():
     except Exception as exc:  # pylint: disable=broad-except
         log.warning("启动 KG 后台周期任务失败: %s", exc)
 
+    # 启动 proposal 异步落盘 worker（admin approve 后调 MdAuthor 写 OKF .md）
+    try:
+        from services.apply_worker import start_apply_worker
+
+        start_apply_worker()
+    except Exception as exc:  # pylint: disable=broad-except
+        log.warning("启动 apply_worker 失败: %s", exc)
+
     # 清理 data/documents/courses 下的孤儿课程目录（无 outline.json 或无对应 session）
     try:
         from services.immersive.persistence import cleanup_orphan_course_dirs
@@ -159,21 +209,78 @@ def on_startup():
         log.warning("启动时清理孤儿课程目录失败: %s", exc)
 
 
+@app.on_event("startup")
+async def on_startup_weclaw():
+    """启动 weclaw 微信通道（多租户长轮询协程）。默认关闭，由 WECLAW_ENABLED 控制。"""
+    from config import WECLAW_ENABLED
+
+    if not WECLAW_ENABLED:
+        return
+    log = logging.getLogger(__name__)
+    try:
+        from channels.manager import manager as weclaw_manager
+
+        await weclaw_manager.start()
+        log.info("weclaw 微信通道已启动")
+    except Exception as exc:  # pylint: disable=broad-except
+        log.warning("启动 weclaw 微信通道失败: %s", exc)
+
+
 @app.on_event("shutdown")
 async def on_shutdown():
+    log = logging.getLogger(__name__)
+
+    # 关闭 weclaw 微信通道
+    try:
+        from config import WECLAW_ENABLED
+
+        if WECLAW_ENABLED:
+            from channels.manager import manager as weclaw_manager
+
+            await weclaw_manager.stop()
+    except Exception as exc:  # pylint: disable=broad-except
+        log.warning("关闭 weclaw 微信通道失败: %s", exc)
+
+    # 关闭 apply_worker（避免事件循环关闭时 task 被强行取消的告警）
+    try:
+        from services.apply_worker import stop_apply_worker
+
+        await stop_apply_worker()
+    except Exception as exc:  # pylint: disable=broad-except
+        log.warning("关闭 apply_worker 失败: %s", exc)
+
     # 关闭 KG 后台周期任务，避免事件循环关闭时出现 task 被强行取消的告警
     try:
         from services.kg_background import stop_kg_background_loops
 
         await stop_kg_background_loops()
     except Exception as exc:  # pylint: disable=broad-except
-        log = logging.getLogger(__name__)
         log.warning("关闭 KG 后台周期任务失败: %s", exc)
 
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# 生产部署：挂载前端静态产物（存在 frontend/dist 时，同源服务页面与 /api）
+# 开发模式下 dist 不存在，走 vite dev server（5173）+ /api 代理，互不影响
+# --------------------------------------------------------------------------
+
+_FRONTEND_DIST = os.environ.get("FRONTEND_DIST") or str(
+    Path(__file__).resolve().parents[1] / "frontend" / "dist"
+)
+# 运行时图片库（live_science 模式：<img src="/court-assets/X.jpg"> 浏览器原生加载）
+COURT_ASSETS_DIR = Path(__file__).parent / "court" / ".assets"
+COURT_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/court-assets", StaticFiles(directory=str(COURT_ASSETS_DIR)), name="court-assets"
+)
+
+if os.path.isdir(_FRONTEND_DIST):
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+    print(f"[deploy] 已挂载前端静态产物: {_FRONTEND_DIST}")
 
 
 # --------------------------------------------------------------------------

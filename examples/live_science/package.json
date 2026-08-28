@@ -1,0 +1,11 @@
+{
+  "name": "live-science",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "python3 server.py",
+    "build": "node build-wesmartflow.mjs",
+    "build:wesmartflow": "node build-wesmartflow.mjs"
+  }
+}

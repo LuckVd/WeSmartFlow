@@ -289,6 +289,62 @@
           </div>
         </div>
 
+        <!-- 数据备份 -->
+        <div v-if="activeTab === 'backup'">
+          <div class="settings-section card">
+            <div class="ss-title">数据备份</div>
+            <p class="ss-desc">
+              导出当前用户的会话记录、知识节点、复习进度、长期画像和知识库。不会导出密码、API
+              Key、Token 或日志。
+            </p>
+            <div class="config-block">
+              <div class="cb-title">导出</div>
+              <div class="backup-actions">
+                <button
+                  class="btn btn-primary"
+                  :disabled="exportingBackup"
+                  @click="exportBackup"
+                >
+                  {{ exportingBackup ? "导出中..." : "导出记忆与知识库" }}
+                </button>
+                <span class="field-hint"
+                  >保存为 JSON 文件，可用于换设备或重装后恢复。</span
+                >
+              </div>
+            </div>
+            <div class="config-block backup-import-block">
+              <div class="cb-title">导入</div>
+              <p class="field-hint">
+                导入会合并到当前登录用户：同 ID 数据覆盖，新数据插入；不会恢复
+                API Key 或密码。
+              </p>
+              <div class="backup-actions">
+                <input
+                  ref="backupFileInput"
+                  type="file"
+                  accept="application/json,.json"
+                  class="hidden-file"
+                  @change="onBackupFileChange"
+                />
+                <button
+                  class="btn btn-ghost"
+                  :disabled="importingBackup"
+                  @click="backupFileInput?.click()"
+                >
+                  {{ importingBackup ? "导入中..." : "选择备份 JSON 导入" }}
+                </button>
+                <div
+                  v-if="backupStatus"
+                  class="status-hint"
+                  :class="backupStatusType"
+                >
+                  {{ backupStatus }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 关于 -->
         <div v-if="activeTab === 'about'">
           <div class="settings-section card about-card">
@@ -379,6 +435,13 @@ const testImageUrl = ref(""); // 测试生成的图片 base64 data URL
 const quotaLoaded = ref(false);
 const quotaItems = ref([]);
 
+// 数据备份状态
+const exportingBackup = ref(false);
+const importingBackup = ref(false);
+const backupStatus = ref("");
+const backupStatusType = ref("success");
+const backupFileInput = ref(null);
+
 // 表单数据（用户输入，空字符串表示不修改）
 const form = reactive({
   llm_api_key: "",
@@ -412,6 +475,11 @@ const tabs = [
     key: "image",
     label: "图像生成",
     icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+  },
+  {
+    key: "backup",
+    label: "数据备份",
+    icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
   },
   {
     key: "about",
@@ -574,6 +642,54 @@ async function testImageGen() {
   } finally {
     testingImage.value = false;
     loadQuota();
+  }
+}
+
+async function exportBackup() {
+  exportingBackup.value = true;
+  backupStatus.value = "";
+  try {
+    const res = await settingsApi.exportBackup();
+    if (!res.ok) throw new Error(`导出失败：${res.status}`);
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = cd.match(/filename="?([^";]+)"?/);
+    const filename = m?.[1] || `wesmartflow-backup-${Date.now()}.json`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    backupStatusType.value = "success";
+    backupStatus.value = "导出完成，备份文件已下载。";
+  } catch (e) {
+    backupStatusType.value = "error";
+    backupStatus.value = String(e?.message || e);
+  } finally {
+    exportingBackup.value = false;
+  }
+}
+
+async function onBackupFileChange(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  importingBackup.value = true;
+  backupStatus.value = "";
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    const data = await settingsApi.importBackup(payload);
+    backupStatusType.value = "success";
+    backupStatus.value = `导入完成：主库 ${data.stats?.main_rows || 0} 行，KG ${data.stats?.kg_rows || 0} 行，会话文件 ${data.stats?.session_message_files || 0} 个。`;
+  } catch (err) {
+    backupStatusType.value = "error";
+    backupStatus.value = `导入失败：${err?.message || err}`;
+  } finally {
+    importingBackup.value = false;
+    if (backupFileInput.value) backupFileInput.value.value = "";
   }
 }
 
@@ -761,6 +877,18 @@ onMounted(() => {
 }
 .form-item-row .status-hint {
   margin-top: 0;
+}
+.backup-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.backup-import-block {
+  margin-top: 14px;
+}
+.hidden-file {
+  display: none;
 }
 
 .status-hint {

@@ -140,6 +140,39 @@
             </div>
           </div>
 
+          <!-- 修复提示横幅：课程已“完成”但个别章节 PDF 编译失败/缺失时展示 -->
+          <div
+            v-if="imShowRepairPrompt"
+            class="im-resume-banner im-repair-banner"
+          >
+            <div class="im-resume-info">
+              <div class="im-resume-title">🔧 有章节缺少 PDF 讲义</div>
+              <div class="im-resume-desc">
+                <strong>
+                  {{
+                    imMissingPdfChapters
+                      .map((c) => `第${c.chapter_id}章`)
+                      .join("、")
+                  }}
+                </strong>
+                的 PDF 未成功生成（共
+                <strong>{{ imMissingPdfChapters.length }}</strong>
+                章）。可以点击“修复”重新生成缺失的讲义，已完整的章节不受影响。
+              </div>
+            </div>
+            <div class="im-resume-actions">
+              <button
+                class="im-resume-btn-ghost"
+                @click="imRepairDismissed = true"
+              >
+                稍后再说
+              </button>
+              <button class="im-resume-btn-primary" @click="imRepairMissingPdf">
+                🔧 修复缺失 PDF
+              </button>
+            </div>
+          </div>
+
           <!-- 阶段进度条 -->
           <div v-if="imGenerating" class="im-progress-wrap">
             <div class="im-progress-bar">
@@ -1179,6 +1212,8 @@ const imOutline = ref(null);
 const imChapters = ref([]);
 // 返回未完成会话时，是否展示“继续生成”提示（交给用户决定）
 const imResumePrompt = ref(false);
+// 重新进入课程时，若已“完成”的章节缺失 PDF，可手动触发修复；用户可关闭提示
+const imRepairDismissed = ref(false);
 const imCurrentChapterIndex = ref(0);
 const imCurrentPage = ref(1);
 const imTotalPages = ref(0);
@@ -1196,6 +1231,20 @@ const imPdfDocMap = new Map();
 // 解决：连续切页/容器尺寸变化触发的并发 render 导致内容旋转错位/重影。
 const imPdfRenderTasks = new WeakMap(); // canvas -> RenderTask
 let imCurrentAudio = null;
+
+// 已装载的章节中，缺少 PDF 讲义的章节（后端标记 ready 但 PDF 编译失败时会出现）。
+// 依据：章节既没有 pdf_doc_id 也没有 pdf_path，即前端无法展示 PDF。
+const imMissingPdfChapters = computed(() =>
+  (imChapters.value || []).filter((c) => !c.pdf_doc_id && !c.pdf_path),
+);
+// 是否展示“修复缺失 PDF”提示：存在缺 PDF 章节、当前非生成中、未在续传、用户未关闭。
+const imShowRepairPrompt = computed(
+  () =>
+    imMissingPdfChapters.value.length > 0 &&
+    !imGenerating.value &&
+    !imResumePrompt.value &&
+    !imRepairDismissed.value,
+);
 
 // ── LearningCanvas 工作区 ───────────────────────────────────────
 const canvasBlocks = ref([]);
@@ -1328,39 +1377,38 @@ const imAgentMsgRef = ref(null);
 
 // ── 习题交互 ────────────────────────────────────────────────────
 const imParsedQuizzes = ref([]);
-const imQuizJudging = ref(false);
+// const imQuizJudging = ref(false);
 const imQuizCurrent = ref(0);
 const imQuizSubmitted = ref(false);
 const imQuizAdvice = ref("");
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const currentQuiz = computed(
-  () => imParsedQuizzes.value[imQuizCurrent.value] || null,
-);
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const imQuizAnsweredCount = computed(
-  () =>
-    imParsedQuizzes.value.filter(
-      (q) => q.userAnswer !== null || q.userText.trim(),
-    ).length,
-);
-const imQuizStats = computed(() => {
-  const qs = imParsedQuizzes.value;
-  return {
-    correct: qs.filter((q) => q.judgeResult === true).length,
-    wrong: qs.filter((q) => q.judgeResult === false).length,
-    pending: qs.filter((q) => q.judgeResult === null).length,
-  };
-});
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const imQuizScoreLevel = computed(() => {
-  const total = imParsedQuizzes.value.length;
-  if (total === 0) return "low";
-  const ratio = imQuizStats.value.correct / total;
-  if (ratio >= 0.8) return "great";
-  if (ratio >= 0.5) return "good";
-  return "low";
-});
+// const currentQuiz = computed(
+//   () => imParsedQuizzes.value[imQuizCurrent.value] || null,
+// );
+
+// const imQuizAnsweredCount = computed(
+//   () =>
+//     imParsedQuizzes.value.filter(
+//       (q) => q.userAnswer !== null || q.userText.trim(),
+//     ).length,
+// );
+// const imQuizStats = computed(() => {
+//   const qs = imParsedQuizzes.value;
+//   return {
+//     correct: qs.filter((q) => q.judgeResult === true).length,
+//     wrong: qs.filter((q) => q.judgeResult === false).length,
+//     pending: qs.filter((q) => q.judgeResult === null).length,
+//   };
+// });
+
+// const imQuizScoreLevel = computed(() => {
+//   const total = imParsedQuizzes.value.length;
+//   if (total === 0) return "low";
+//   const ratio = imQuizStats.value.correct / total;
+//   if (ratio >= 0.8) return "great";
+//   if (ratio >= 0.5) return "good";
+//   return "low";
+// });
 
 // ── 分栏拖拽 ─────────────────────────────────────────────────────
 const chatWidth = ref(null);
@@ -1413,14 +1461,14 @@ const imStageIcon = computed(
 function isImStageComplete(key) {
   return (imStageOrder[imCurrentStage.value] || 0) > (imStageOrder[key] || 0);
 }
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function isImChapterDone(chId) {
-  return imChapters.value.some((c) => c.chapter_id === chId);
-}
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function isImChapterCurrent(chId) {
-  return imGeneratingChapterId.value === chId;
-}
+// // eslint-disable-next-line
+// function isImChapterDone(chId) {
+//   return imChapters.value.some((c) => c.chapter_id === chId);
+// }
+
+// function isImChapterCurrent(chId) {
+//   return imGeneratingChapterId.value === chId;
+// }
 
 const imCurrentChapter = computed(
   () => imChapters.value[imCurrentChapterIndex.value] || null,
@@ -2187,6 +2235,22 @@ async function imResumeGenerate() {
   }
 }
 
+// ── 修复：重新生成缺失 PDF 的章节 ────────────────────────────
+// 复用 /api/immersive/resume：后端会全量审计磁盘产物（含 validate_pdf_file
+// 校验 PDF 完整性），把缺失/损坏 PDF 的章节判为 pending 并重新编译，
+// 已完整的章节会跳过，不重复生成。
+async function imRepairMissingPdf() {
+  if (imMissingPdfChapters.value.length === 0) return;
+  const ids = imMissingPdfChapters.value
+    .map((c) => `第${c.chapter_id}章`)
+    .join("、");
+  imAddLog(
+    `🔧 开始修复缺失 PDF 的章节：${ids}（共 ${imMissingPdfChapters.value.length} 章）`,
+    "success",
+  );
+  await imResumeGenerate();
+}
+
 function imHandleSSE(data) {
   const agentType = data.agent_type || "unknown";
   const eventType = data.event_type || "unknown";
@@ -2219,8 +2283,18 @@ function imHandleSSE(data) {
       break;
     case "chapter_done": {
       const ch = data.data;
-      if (!imChapters.value.some((c) => c.chapter_id === ch.chapter_id))
+      const existIdx = imChapters.value.findIndex(
+        (c) => c.chapter_id === ch.chapter_id,
+      );
+      if (existIdx >= 0) {
+        // 修复/续传场景：章节已在列表中，合并最新产物（含新编译的 pdf_doc_id）
+        imChapters.value[existIdx] = {
+          ...imChapters.value[existIdx],
+          ...ch,
+        };
+      } else {
         imChapters.value.push(ch);
+      }
       imGeneratingChapterTitle.value = "";
       imGeneratingChapterId.value = 0;
       const badges = [
@@ -2396,28 +2470,28 @@ async function imRenderPage(doc, pageNum) {
   imCurrentPage.value = pageNum;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function imGotoPage(num) {
-  const ch = imChapters.value[imCurrentChapterIndex.value];
-  if (!ch?.pdf_doc_id) return;
-  const pdfUrl = docRawUrl(ch.pdf_doc_id);
-  let doc = imPdfDocMap.get(pdfUrl);
-  if (!doc) {
-    try {
-      doc = await pdfjsLib.getDocument({
-        url: pdfUrl,
-        httpHeaders: authHeaders(),
-        cMapUrl: "https://unpkg.com/pdfjs-dist@5.6.205/cmaps/",
-        cMapPacked: true,
-      }).promise;
-      imPdfDocMap.set(pdfUrl, doc);
-    } catch (e) {
-      imAddLog(`PDF 加载失败: ${e.message}`, "error");
-      return;
-    }
-  }
-  await imRenderPage(doc, num);
-}
+// // eslint-disable-next-line @typescript-eslint/no-unused-vars
+// async function imGotoPage(num) {
+//   const ch = imChapters.value[imCurrentChapterIndex.value];
+//   if (!ch?.pdf_doc_id) return;
+//   const pdfUrl = docRawUrl(ch.pdf_doc_id);
+//   let doc = imPdfDocMap.get(pdfUrl);
+//   if (!doc) {
+//     try {
+//       doc = await pdfjsLib.getDocument({
+//         url: pdfUrl,
+//         httpHeaders: authHeaders(),
+//         cMapUrl: "https://unpkg.com/pdfjs-dist@5.6.205/cmaps/",
+//         cMapPacked: true,
+//       }).promise;
+//       imPdfDocMap.set(pdfUrl, doc);
+//     } catch (e) {
+//       imAddLog(`PDF 加载失败: ${e.message}`, "error");
+//       return;
+//     }
+//   }
+//   await imRenderPage(doc, num);
+// }
 
 // ── 音频播放 ─────────────────────────────────────────────────────
 function imPlayAudio(audioUrl = "") {
@@ -2968,115 +3042,114 @@ function parseExercises(mdText) {
     .map((q) => ({ ...q, difficulty: q.difficulty || "medium" }));
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function retryQuiz() {
-  imQuizSubmitted.value = false;
-  imQuizAdvice.value = "";
-  imQuizCurrent.value = 0;
-  for (const q of imParsedQuizzes.value) {
-    q.userAnswer = null;
-    q.userText = "";
-    q.judgeResult = null;
-    q.feedback = "";
-  }
-}
+// // eslint-disable-next-line
+// function retryQuiz() {
+//   imQuizSubmitted.value = false;
+//   imQuizAdvice.value = "";
+//   imQuizCurrent.value = 0;
+//   for (const q of imParsedQuizzes.value) {
+//     q.userAnswer = null;
+//     q.userText = "";
+//     q.judgeResult = null;
+//     q.feedback = "";
+//   }
+// }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function submitAllQuizzes() {
-  if (!currentSessionId.value) return;
-  imQuizJudging.value = true;
-  for (const q of imParsedQuizzes.value) {
-    if (
-      q.options.length > 0 &&
-      q.correctIndex >= 0 &&
-      typeof q.userAnswer === "number"
-    ) {
-      q.judgeResult = q.userAnswer === q.correctIndex;
-      q.feedback = q.judgeResult
-        ? `✅ 正确！${q.explanation || ""}`
-        : `正确答案是 **${String.fromCharCode(65 + q.correctIndex)}**。${q.explanation || ""}`;
-    }
-  }
-  const needAI = imParsedQuizzes.value.filter((q) => q.judgeResult === null);
-  if (needAI.length > 0) {
-    const questionsStr = needAI
-      .map((q) => {
-        const userAns =
-          typeof q.userAnswer === "number"
-            ? String.fromCharCode(65 + q.userAnswer)
-            : q.userText || "未作答";
-        return `【第${imParsedQuizzes.value.indexOf(q) + 1}题】\n题目：${q.question}\n参考答案：${q.answer || "（无）"}\n学生答案：${userAns}`;
-      })
-      .join("\n\n");
-    const prompt = `请批量判断以下 ${needAI.length} 道题的答案是否正确。\n\n${questionsStr}\n\n请以 JSON 数组回复，每个元素格式：{"index": 题号, "correct": true/false, "feedback": "分析（50字内）"}\n只回复 JSON 数组。`;
-    try {
-      let fullContent = "";
-      await new Promise((resolve) => {
-        sessionApi.streamMessage(currentSessionId.value, prompt, {
-          onTextReply: (t) => {
-            fullContent += t;
-          },
-          onDone: () => resolve(),
-          onError: () => resolve(),
-        });
-      });
-      const jsonMatch = fullContent.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        const results = JSON.parse(jsonMatch[0]);
-        for (const r of results) {
-          const idx = (r.index || 1) - 1;
-          const q = imParsedQuizzes.value[idx];
-          if (q && q.judgeResult === null) {
-            q.judgeResult = !!r.correct;
-            q.feedback = r.feedback || (r.correct ? "正确！" : "不正确。");
-          }
-        }
-      }
-    } catch {
-      for (const q of needAI) {
-        if (q.judgeResult === null) {
-          q.judgeResult = false;
-          q.feedback = "AI 判题失败，请重试。";
-        }
-      }
-    }
-  }
-  const wrongQuizzes = imParsedQuizzes.value.filter(
-    (q) => q.judgeResult === false,
-  );
-  if (wrongQuizzes.length > 0) {
-    const wrongStr = wrongQuizzes
-      .map((q) => {
-        const userAns =
-          typeof q.userAnswer === "number"
-            ? String.fromCharCode(65 + q.userAnswer)
-            : q.userText || "未作答";
-        return `- 题目：${q.question.slice(0, 80)}\n  学生答案：${userAns}`;
-      })
-      .join("\n");
-    try {
-      let adviceContent = "";
-      await new Promise((resolve) => {
-        sessionApi.streamMessage(
-          currentSessionId.value,
-          `学生答错了以下题目：\n\n${wrongStr}\n\n请给出100-200字的综合学习建议。`,
-          {
-            onTextReply: (t) => {
-              adviceContent += t;
-            },
-            onDone: () => resolve(),
-            onError: () => resolve(),
-          },
-        );
-      });
-      imQuizAdvice.value = adviceContent;
-    } catch {
-      imQuizAdvice.value = "";
-    }
-  }
-  imQuizJudging.value = false;
-  imQuizSubmitted.value = true;
-}
+// async function submitAllQuizzes() {
+//   if (!currentSessionId.value) return;
+//   imQuizJudging.value = true;
+//   for (const q of imParsedQuizzes.value) {
+//     if (
+//       q.options.length > 0 &&
+//       q.correctIndex >= 0 &&
+//       typeof q.userAnswer === "number"
+//     ) {
+//       q.judgeResult = q.userAnswer === q.correctIndex;
+//       q.feedback = q.judgeResult
+//         ? `✅ 正确！${q.explanation || ""}`
+//         : `正确答案是 **${String.fromCharCode(65 + q.correctIndex)}**。${q.explanation || ""}`;
+//     }
+//   }
+//   const needAI = imParsedQuizzes.value.filter((q) => q.judgeResult === null);
+//   if (needAI.length > 0) {
+//     const questionsStr = needAI
+//       .map((q) => {
+//         const userAns =
+//           typeof q.userAnswer === "number"
+//             ? String.fromCharCode(65 + q.userAnswer)
+//             : q.userText || "未作答";
+//         return `【第${imParsedQuizzes.value.indexOf(q) + 1}题】\n题目：${q.question}\n参考答案：${q.answer || "（无）"}\n学生答案：${userAns}`;
+//       })
+//       .join("\n\n");
+//     const prompt = `请批量判断以下 ${needAI.length} 道题的答案是否正确。\n\n${questionsStr}\n\n请以 JSON 数组回复，每个元素格式：{"index": 题号, "correct": true/false, "feedback": "分析（50字内）"}\n只回复 JSON 数组。`;
+//     try {
+//       let fullContent = "";
+//       await new Promise((resolve) => {
+//         sessionApi.streamMessage(currentSessionId.value, prompt, {
+//           onTextReply: (t) => {
+//             fullContent += t;
+//           },
+//           onDone: () => resolve(),
+//           onError: () => resolve(),
+//         });
+//       });
+//       const jsonMatch = fullContent.match(/\[[\s\S]*\]/);
+//       if (jsonMatch) {
+//         const results = JSON.parse(jsonMatch[0]);
+//         for (const r of results) {
+//           const idx = (r.index || 1) - 1;
+//           const q = imParsedQuizzes.value[idx];
+//           if (q && q.judgeResult === null) {
+//             q.judgeResult = !!r.correct;
+//             q.feedback = r.feedback || (r.correct ? "正确！" : "不正确。");
+//           }
+//         }
+//       }
+//     } catch {
+//       for (const q of needAI) {
+//         if (q.judgeResult === null) {
+//           q.judgeResult = false;
+//           q.feedback = "AI 判题失败，请重试。";
+//         }
+//       }
+//     }
+//   }
+//   const wrongQuizzes = imParsedQuizzes.value.filter(
+//     (q) => q.judgeResult === false,
+//   );
+//   if (wrongQuizzes.length > 0) {
+//     const wrongStr = wrongQuizzes
+//       .map((q) => {
+//         const userAns =
+//           typeof q.userAnswer === "number"
+//             ? String.fromCharCode(65 + q.userAnswer)
+//             : q.userText || "未作答";
+//         return `- 题目：${q.question.slice(0, 80)}\n  学生答案：${userAns}`;
+//       })
+//       .join("\n");
+//     try {
+//       let adviceContent = "";
+//       await new Promise((resolve) => {
+//         sessionApi.streamMessage(
+//           currentSessionId.value,
+//           `学生答错了以下题目：\n\n${wrongStr}\n\n请给出100-200字的综合学习建议。`,
+//           {
+//             onTextReply: (t) => {
+//               adviceContent += t;
+//             },
+//             onDone: () => resolve(),
+//             onError: () => resolve(),
+//           },
+//         );
+//       });
+//       imQuizAdvice.value = adviceContent;
+//     } catch {
+//       imQuizAdvice.value = "";
+//     }
+//   }
+//   imQuizJudging.value = false;
+//   imQuizSubmitted.value = true;
+// }
 
 // ── 离开确认 ─────────────────────────────────────────────────────
 const showLeaveConfirm = ref(false);
@@ -4615,6 +4688,15 @@ onUnmounted(() => {
   border-radius: 10px;
   color: var(--text-primary, #e5e7ff);
   flex-shrink: 0;
+}
+/* 修复缺失 PDF 提示：用琥珀/橙色系与“继续生成”区分开 */
+.im-repair-banner {
+  background: linear-gradient(
+    135deg,
+    rgba(245, 158, 11, 0.18),
+    rgba(239, 68, 68, 0.16)
+  );
+  border-color: rgba(245, 158, 11, 0.5);
 }
 .im-resume-info {
   flex: 1;

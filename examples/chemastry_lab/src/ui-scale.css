@@ -1,0 +1,56 @@
+/* Viewport, safe-area and motion compatibility layer.
+   Kept separate from the bench visuals so browser fallbacks are easy to audit. */
+
+body {
+  /* 100vh first, then upgrade where dvh is supported. */
+  min-height: 100vh;
+  padding: 16px;
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
+}
+
+@supports (min-height: 100dvh) {
+  body {
+    min-height: 100dvh;
+  }
+}
+
+@media (width <= 480px) {
+  body {
+    padding: 12px;
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: max(12px, env(safe-area-inset-left));
+  }
+
+  /* At 360px the bench must not overflow sideways. */
+  .beaker {
+    height: 200px;
+  }
+
+  .run button {
+    padding: 12px;
+    font-size: 14px;
+  }
+
+  .cats {
+    max-height: 300px;
+  }
+}
+
+/* Every state is also carried by colour, glyph or text, so animations can go. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .bub {
+    display: none;
+  }
+}

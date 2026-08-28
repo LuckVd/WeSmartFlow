@@ -26,4 +26,10 @@ export const settingsApi = {
 
   // 测试图像生成连接
   testImage: () => api.post("/api/settings/test-image"),
+
+  // 导出记忆与知识库备份（返回原始 Response，前端负责下载文件）
+  exportBackup: () => api.getRaw("/api/backup/export"),
+
+  // 导入记忆与知识库备份 JSON
+  importBackup: (data) => api.post("/api/backup/import", data),
 };

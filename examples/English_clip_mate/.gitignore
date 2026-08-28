@@ -1,0 +1,7 @@
+node_modules/
+
+# 独立构建产物；集成构建写入 frontend/public/bingemate/，由 frontend/.gitignore 忽略
+dist/
+
+*.log
+.DS_Store

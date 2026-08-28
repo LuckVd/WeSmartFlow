@@ -17,6 +17,14 @@ from .base import KGBaseRepo, dumps, loads, new_id, utcnow_str
 
 
 def _row_to_schema(row: dict) -> ProposalSchema:
+    # row 既可能是 sqlite3.Row 也可能是 dict；统一用 .get 风格做容错
+    def _g(k: str, default=None):
+        try:
+            v = row[k]
+        except (KeyError, IndexError):
+            return default
+        return v if v is not None else default
+
     return ProposalSchema(
         id=row["id"],
         op=row["op"],
@@ -32,6 +40,10 @@ def _row_to_schema(row: dict) -> ProposalSchema:
         review_note=row["review_note"] or "",
         created_at=row["created_at"],
         reviewed_at=row["reviewed_at"],
+        apply_status=_g("apply_status", "idle") or "idle",
+        apply_error=_g("apply_error", "") or "",
+        apply_started_at=_g("apply_started_at"),
+        apply_finished_at=_g("apply_finished_at"),
     )
 
 
@@ -143,3 +155,92 @@ class ProposalRepository(KGBaseRepo):
             )
             conn.commit()
             return row.rowcount > 0
+
+    # ============================================================
+    # 异步落盘流水线（apply_status 状态机）
+    #
+    #   approve 接口 → mark_apply_queued()    -> 'queued'
+    #   worker 起任务 → pop_one_queued()       -> 'running'
+    #   worker 跑完   → mark_apply_finished()  -> 'done' / 'aborted' / 'failed'
+    #   失败重试      → mark_apply_queued()    -> 'queued'
+    # ============================================================
+
+    def mark_apply_queued(self, proposal_id: str) -> bool:
+        """把一个 approved proposal 推进到 queued（清空错误与时间戳）。"""
+        with get_kg_db() as conn:
+            cur = conn.execute(
+                "UPDATE proposal SET apply_status='queued', apply_error='', "
+                "apply_started_at=NULL, apply_finished_at=NULL WHERE id=?",
+                (proposal_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def pop_one_queued(self) -> Optional[ProposalSchema]:
+        """原子地取出一条 queued 任务并标记为 running，返回该 proposal。
+
+        SQLite 单写串行，配合 IMMEDIATE 事务足以保证不会被并发抢走。
+        """
+        now = utcnow_str()
+        with get_kg_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM proposal WHERE apply_status='queued' "
+                "ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return None
+            pid = row["id"]
+            conn.execute(
+                "UPDATE proposal SET apply_status='running', "
+                "apply_started_at=?, apply_finished_at=NULL, apply_error='' "
+                "WHERE id=? AND apply_status='queued'",
+                (now, pid),
+            )
+            conn.commit()
+            # 重新读一遍最新状态
+            new_row = conn.execute(
+                "SELECT * FROM proposal WHERE id=?", (pid,)
+            ).fetchone()
+            return _row_to_schema(new_row) if new_row else None
+
+    def mark_apply_finished(
+        self,
+        proposal_id: str,
+        apply_status: str,
+        apply_error: str = "",
+    ) -> bool:
+        """终态写入：done / aborted / failed。"""
+        if apply_status not in ("done", "aborted", "failed"):
+            raise ValueError(f"非法 apply_status 终态: {apply_status}")
+        now = utcnow_str()
+        with get_kg_db() as conn:
+            cur = conn.execute(
+                "UPDATE proposal SET apply_status=?, apply_error=?, "
+                "apply_finished_at=? WHERE id=?",
+                (apply_status, apply_error or "", now, proposal_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def reset_stuck_running_to_queued(self) -> int:
+        """启动时把卡在 running 的任务回滚成 queued（防进程崩溃后任务卡死）。
+
+        返回被回滚的条数。
+        """
+        with get_kg_db() as conn:
+            cur = conn.execute(
+                "UPDATE proposal SET apply_status='queued', "
+                "apply_started_at=NULL, apply_finished_at=NULL, "
+                "apply_error='reset on startup' "
+                "WHERE apply_status='running'"
+            )
+            conn.commit()
+            return cur.rowcount or 0
+
+    def count_apply_queued(self) -> int:
+        row = self._fetchone(
+            "SELECT COUNT(*) AS n FROM proposal WHERE apply_status='queued'"
+        )
+        return int(row["n"]) if row else 0

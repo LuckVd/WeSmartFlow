@@ -72,7 +72,29 @@ class DocumentService:
 
     # ── 列表 / 详情 ─────────────────────────────────────
     def list_documents(self, user_id: str) -> list[DocumentBrief]:
+        # 兜底修复：如果后台提取任务因服务重启/热更新被中断，可能已经创建节点，
+        # 但 documents.status 仍停在 processing。列表读取时自动按 origins 反查节点并置为 ready。
+        self._reconcile_interrupted_documents(user_id)
         return self.doc_repo.get_all(user_id)
+
+    def _reconcile_interrupted_documents(self, user_id: str) -> None:
+        docs = self.doc_repo.get_all(user_id)
+        for doc in docs:
+            if doc.status not in ("pending", "processing"):
+                continue
+            rows = self.node_repo._fetchall(
+                "SELECT id FROM nodes WHERE user_id=? AND origins LIKE ? ORDER BY created_at ASC",
+                (user_id, f"%{doc.id}%"),
+            )
+            node_ids = [r["id"] for r in rows]
+            if node_ids:
+                self.doc_repo.set_node_ids(doc.id, node_ids)
+                self.doc_repo.set_status(doc.id, "ready")
+                logger.info(
+                    "文档 %s 检测到已生成 %d 个节点，自动恢复为 ready",
+                    doc.id,
+                    len(node_ids),
+                )
 
     def get_document(self, user_id: str, doc_id: str) -> DocumentSchema:
         return self._assert_doc_owner(user_id, doc_id)

@@ -359,7 +359,7 @@ class GenerateCardTool(BaseTool):
         import json
         import re
         import logging
-        from agent_core.tool.tts_say import say_batch_synthesize
+        from agent_core.tool.qwen_tts import synthesize_batch
 
         logger = logging.getLogger(__name__)
 
@@ -406,9 +406,8 @@ class GenerateCardTool(BaseTool):
             {"text": str(note), "filename": f"frame_{i + 1:03d}.wav"}
             for i, note in enumerate(notes)
         ]
-        result = say_batch_synthesize(
-            items=items, output_dir=str(audio_dir), voice="Tingting", rate=180
-        )
+        # TTS 合成（qwen3-tts 优先，无 key 回退 macOS say，都无则不生成）
+        result = synthesize_batch(items=items, output_dir=str(audio_dir))
 
         # 保存讲解稿
         notes_path = CARDS_DIR / card_id / "notes.json"

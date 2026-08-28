@@ -37,7 +37,7 @@
       <iframe
         ref="iframeRef"
         class="html-card-iframe"
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         @load="onIframeLoad"
       ></iframe>
     </div>
@@ -157,6 +157,7 @@
 
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
+import { api } from "../../api/base.js";
 import { renderMd } from "../../composables/useMarkdown.js";
 import { llmApi } from "../../api/llm.js";
 
@@ -177,8 +178,11 @@ const loading = ref(true);
 const error = ref("");
 const sizeReady = ref(false);
 
-const naturalW = ref(900);
-const naturalH = ref(600);
+const DEFAULT_NATURAL_WIDTH = 900;
+const DEFAULT_NATURAL_HEIGHT = 600;
+
+const naturalW = ref(DEFAULT_NATURAL_WIDTH);
+const naturalH = ref(DEFAULT_NATURAL_HEIGHT);
 const scale = ref(1);
 
 // ── 选中文本气泡 ──────────────────────────────────────────────────
@@ -254,12 +258,39 @@ function updateScale() {
   scale.value = Math.min(scaleW, scaleH);
 }
 
+function isRootMeasurable() {
+  const root = rootRef.value;
+  return Boolean(
+    root &&
+    root.offsetWidth > 0 &&
+    root.offsetHeight > 0 &&
+    root.getClientRects().length > 0,
+  );
+}
+
+let resizeRequestTimer = null;
+
+function requestIframeResize(delay = 0) {
+  clearTimeout(resizeRequestTimer);
+  resizeRequestTimer = setTimeout(() => {
+    if (!isRootMeasurable() || !iframeRef.value?.contentWindow) return;
+    iframeRef.value.contentWindow.postMessage({ type: "requestResize" }, "*");
+    updateScale();
+  }, delay);
+}
+
 let resizeObserver = null;
+let wasRootMeasurable = false;
 
 function initResizeObserver() {
   resizeObserver?.disconnect();
   resizeObserver = new ResizeObserver(() => {
+    const measurable = isRootMeasurable();
     updateScale();
+    // Safari 会把 display:none 下的 iframe 排版成极窄、极高的页面。
+    // 卡片从 v-show 的隐藏状态恢复后，必须基于可见布局重新测量。
+    if (measurable && !wasRootMeasurable) requestIframeResize(50);
+    wasRootMeasurable = measurable;
   });
   if (rootRef.value) resizeObserver.observe(rootRef.value);
 }
@@ -272,9 +303,18 @@ function handleMessage(event) {
   const msg = event.data;
 
   // 尺寸上报
-  if (msg?.type === "resize" && msg.height > 0 && msg.width > 0) {
+  if (
+    msg?.type === "resize" &&
+    Number.isFinite(msg.height) &&
+    Number.isFinite(msg.width) &&
+    msg.height > 0 &&
+    msg.width > 0
+  ) {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
+      // v-show 会让未选中的主卡片在 display:none 下继续加载。
+      // WebKit 此时上报的 scrollWidth/scrollHeight 不可信，不能写回 iframe 尺寸。
+      if (!isRootMeasurable()) return;
       naturalW.value = msg.width;
       naturalH.value = msg.height;
       updateScale();
@@ -354,10 +394,32 @@ ${scriptOpen}
       img.addEventListener('load', function() { setTimeout(report, 50); }, { once: true });
     });
   }
-  window.addEventListener('load', function() { normalizeImages(); setTimeout(report, 300); });
+  function normalizeExternalLinks() {
+    var pageOrigin = '';
+    try {
+      pageOrigin = window.parent.location.origin;
+    } catch (_) {
+      try { pageOrigin = new URL(document.baseURI).origin; } catch (_) {}
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('a[href]'), function(link) {
+      try {
+        var url = new URL(link.getAttribute('href'), document.baseURI);
+        if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin === pageOrigin) return;
+        if (link.getAttribute('target') !== '_blank') link.setAttribute('target', '_blank');
+        var rel = (link.getAttribute('rel') || '').split(/\\s+/).filter(Boolean);
+        if (rel.indexOf('noopener') < 0) rel.push('noopener');
+        if (rel.indexOf('noreferrer') < 0) rel.push('noreferrer');
+        var nextRel = rel.join(' ');
+        if (link.getAttribute('rel') !== nextRel) link.setAttribute('rel', nextRel);
+      } catch (_) {}
+    });
+  }
+  normalizeImages();
+  normalizeExternalLinks();
+  window.addEventListener('load', function() { normalizeImages(); normalizeExternalLinks(); setTimeout(report, 300); });
   window.addEventListener('message', function(e) { if (e.data?.type === 'requestResize') report(); });
   var t;
-  new MutationObserver(function() { normalizeImages(); clearTimeout(t); t = setTimeout(report, 200); })
+  new MutationObserver(function() { normalizeImages(); normalizeExternalLinks(); clearTimeout(t); t = setTimeout(report, 200); })
     .observe(document.body, { childList: true, subtree: true, attributes: true });
 
   // 选中文本上报
@@ -400,12 +462,15 @@ ${scriptClose}`;
 // ── 加载卡片 ──────────────────────────────────────────────────────
 async function load() {
   if (!props.fileId) return;
+  clearTimeout(resizeTimer);
   loading.value = true;
   error.value = "";
   sizeReady.value = false;
+  naturalW.value = DEFAULT_NATURAL_WIDTH;
+  naturalH.value = DEFAULT_NATURAL_HEIGHT;
+  scale.value = 1;
 
   try {
-    const { api } = await import("../../api/base.js");
     const res = await api.getRaw(`/api/documents/${props.fileId}/raw`);
     if (!res.ok) throw new Error(`加载失败 (${res.status})`);
     let html = await res.text();
@@ -473,13 +538,7 @@ onMounted(() => {
     (entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting && iframeRef.value?.contentWindow) {
-          setTimeout(() => {
-            iframeRef.value?.contentWindow?.postMessage(
-              { type: "requestResize" },
-              "*",
-            );
-            updateScale();
-          }, 50);
+          requestIframeResize(50);
         }
       }
     },
@@ -493,6 +552,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("message", handleMessage);
+  clearTimeout(resizeTimer);
+  clearTimeout(resizeRequestTimer);
   resizeObserver?.disconnect();
   visibilityObserver?.disconnect();
   askAbortController?.abort();

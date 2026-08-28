@@ -24,6 +24,11 @@ COURSES_DIR = DOCUMENTS_DIR / "courses"
 VIZ_DIR = DOCUMENTS_DIR / "viz"
 SESSIONS_DIR = DATA_DIR / "sessions"
 
+# OKF 知识库根目录（概念 md 落盘根，由 ingest_okf 同步到 KG）
+# 必须锚定到仓库根，避免进程 cwd 漂移导致 md 写到 backend/knowledge/ 这种错误位置。
+# 子目录由写回工具按 subject 自行 mkdir，此处不预创建。
+KNOWLEDGE_ROOT = Path(os.getenv("KNOWLEDGE_ROOT", str(ROOT_DIR / "knowledge")))
+
 # 默认指向 SimplePlus-BeamerTheme 主题目录
 TEX_TEMPLATE_DIR = Path(
     os.getenv("TEX_TEMPLATE_DIR", str(Path(__file__).parent / "SimplePlus-BeamerTheme"))
@@ -39,6 +44,13 @@ DB_PATH = DATA_DIR / "wesmartflow.db"
 JWT_SECRET = os.getenv("JWT_SECRET", "wesmartflow-dev-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
+
+# Admin 审核台账号（明文，单人后台用）
+# 必须在 .env 配置；未配置则 admin 登录直接 503。
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+# admin token 单独的过期时间（更短）
+ADMIN_TOKEN_EXPIRE_HOURS = int(os.getenv("ADMIN_TOKEN_EXPIRE_HOURS", "12"))
 
 # 免费额度配置（每用户总量，使用平台公共 Key 时生效）
 # 注意：额度按实际 API 调用次数计数（一次对话可能触发多次 LLM 调用）
@@ -58,6 +70,30 @@ SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "WeSmartFlow")  # 发件人显示�
 WECHAT_MP_APPID = os.getenv("WECHAT_MP_APPID", "")  # 小程序 AppID
 WECHAT_MP_SECRET = os.getenv("WECHAT_MP_SECRET", "")  # 小程序 AppSecret
 
+# ── weclaw 微信通道（多租户：每个用户扫码绑定自己的 bot）──────────────
+# 接收消息只能靠 clawbridge 长轮询（无 webhook）；本项目用 async httpx 协程池实现，
+# 每个已启用的 bot 一个长轮询协程（≈ 一条 idle 长连接），由 ChannelManager 统一调度。
+WECLAW_ENABLED = os.getenv("WECLAW_ENABLED", "false").lower() in {"1", "true", "yes"}
+WECLAW_BASE_URL = os.getenv("WECLAW_BASE_URL", "https://clawbridge.weixin.qq.com")
+WECLAW_CDN_BASE_URL = os.getenv(
+    "WECLAW_CDN_BASE_URL", "https://novac2c.cdn.weixin.qq.com/c2c"
+)
+WECLAW_LONG_POLL_TIMEOUT_MS = int(os.getenv("WECLAW_LONG_POLL_TIMEOUT_MS", "35000"))
+# 对外可访问的基础 URL，用于拼卡片 / PDF 链接（微信 webview 打开），末尾不带斜杠。
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+# 卡片渲染成图片（Playwright 无头 Chromium）：html/quiz/viz 卡片截图后作为图片发到微信。
+WECLAW_RENDER_CARDS = os.getenv("WECLAW_RENDER_CARDS", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+WECLAW_RENDER_WIDTH = int(os.getenv("WECLAW_RENDER_WIDTH", "480"))  # 截图视口宽度(px)
+WECLAW_RENDER_TIMEOUT_MS = int(os.getenv("WECLAW_RENDER_TIMEOUT_MS", "15000"))
+# EduViz 沙箱 SDK 源文件（用于后端复刻 viz 沙箱做截图）
+EDUVIZ_SDK_PATH = (
+    ROOT_DIR / "frontend" / "src" / "components" / "EduViz" / "eduviz-sdk.js"
+)
+
 # GitHub OAuth 配置
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
@@ -70,7 +106,7 @@ CORS_ORIGINS = os.getenv(
 ).split(",")
 
 # 文件上传限制
-MAX_UPLOAD_SIZE_MB = 50
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100"))
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", ".docx"}
 
 # 确保数据目录存在
@@ -85,3 +121,7 @@ for _dir in [
     LOG_DIR,
 ]:
     _dir.mkdir(parents=True, exist_ok=True)
+
+TTS_MODEL = os.getenv(
+    "TTS_MODEL", "cosyvoice-v1"
+)  # 角色语音模型（v1 默认；v2 需开通对应权限）

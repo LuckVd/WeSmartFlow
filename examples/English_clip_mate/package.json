@@ -1,0 +1,11 @@
+{
+  "name": "bingemate",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BingeMate 追剧搭子 —— 追剧时随时待命的英语学习搭子（WeSmartFlow 探索主题）",
+  "type": "module",
+  "scripts": {
+    "build": "node build-wesmartflow.mjs",
+    "build:wesmartflow": "node build-wesmartflow.mjs"
+  }
+}

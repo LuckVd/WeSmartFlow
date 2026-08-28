@@ -1,6 +1,8 @@
 .DS_Store
 node_modules
 /dist
+# Example bundles are generated from examples/explore-catalog.json.
+/public/*/
 
 # local env files
 .env.local

@@ -5,16 +5,21 @@ import "./style.css";
 
 import Login from "./views/LoginView.vue";
 import GitHubCallback from "./views/GitHubCallback.vue";
-import Dashboard from "./views/DashboardView.vue";
-import Graph from "./views/GraphView.vue";
-import Chat from "./views/ChatView.vue";
-import Immersive from "./views/ImmersiveView.vue";
-import Quiz from "./views/QuizView.vue";
-import DailyBrief from "./views/DailyBrief.vue";
-import Documents from "./views/DocumentsView.vue";
-import Sessions from "./views/SessionsView.vue";
-import Profile from "./views/ProfileView.vue";
-import Settings from "./views/SettingsView.vue";
+import Weclaw from "./views/WeclawView.vue";
+import AdminLogin from "./views/AdminLoginView.vue";
+import AdminConsole from "./views/AdminConsoleView.vue";
+const Dashboard = () => import("./views/DashboardView.vue");
+const Graph = () => import("./views/GraphView.vue");
+const Chat = () => import("./views/ChatView.vue");
+const Immersive = () => import("./views/ImmersiveView.vue");
+const Quiz = () => import("./views/QuizView.vue");
+const DailyBrief = () => import("./views/DailyBrief.vue");
+const Documents = () => import("./views/DocumentsView.vue");
+const Sessions = () => import("./views/SessionsView.vue");
+const Profile = () => import("./views/ProfileView.vue");
+const Settings = () => import("./views/SettingsView.vue");
+const AdminKg = () => import("./views/AdminKgView.vue");
+const Explore = () => import("./views/ExploreView.vue");
 
 const routes = [
   { path: "/login", component: Login, meta: { public: true } },
@@ -22,6 +27,22 @@ const routes = [
     path: "/auth/github/callback",
     component: GitHubCallback,
     meta: { public: true },
+  },
+  // Admin 审核台（独立账号体系，public 表示不走普通用户守卫）
+  {
+    path: "/admin/login",
+    component: AdminLogin,
+    meta: { public: true, admin: true },
+  },
+  {
+    path: "/admin/console",
+    component: AdminConsole,
+    meta: { public: true, admin: true },
+  },
+  {
+    path: "/admin/kg",
+    component: AdminKg,
+    meta: { public: true, admin: true },
   },
   { path: "/", redirect: "/chat" },
   { path: "/dashboard", component: Dashboard },
@@ -32,6 +53,7 @@ const routes = [
     redirect: (to) => ({ path: "/graph", query: to.query }),
   },
   { path: "/chat", component: Chat },
+  { path: "/explore", component: Explore },
   { path: "/immersive", component: Immersive },
   { path: "/quiz", component: Quiz },
   { path: "/sessions", component: Sessions },
@@ -39,6 +61,7 @@ const routes = [
   { path: "/documents", component: Documents },
   { path: "/profile", component: Profile },
   { path: "/settings", component: Settings },
+  { path: "/weclaw", component: Weclaw },
 ];
 
 const router = createRouter({
@@ -63,6 +86,19 @@ const router = createRouter({
 
 // 路由守卫：未登录跳转到登录页
 router.beforeEach((to) => {
+  // ── Admin 路由独立守卫（不依赖 wesmartflow-token）──
+  if (to.meta.admin) {
+    const adminToken = localStorage.getItem("wesmartflow-admin-token");
+    if (to.path === "/admin/login") {
+      if (adminToken) return "/admin/console";
+      return; // 未登录可访问登录页
+    }
+    // 其它 admin 子页必须有 admin token
+    if (!adminToken) return "/admin/login";
+    return;
+  }
+
+  // ── 普通用户路由守卫 ──
   const token = localStorage.getItem("wesmartflow-token");
   if (!to.meta.public && !token) {
     return "/login";

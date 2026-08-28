@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识之境 · Realm of Knowledge</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;600;700&family=Cormorant+Garamond:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root{--gold:#d4b77a;--gold-bright:#f0d9a8;--text:#e8e2d5;--text-dim:#9a92a8;--violet:#b49ae0;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{min-height:100vh;background:radial-gradient(ellipse at 50% 15%,rgba(46,30,78,.65),#0b0714 75%);
+  color:var(--text);font-family:'Noto Serif SC',serif;display:flex;flex-direction:column;align-items:center;
+  padding:64px 20px 60px;}
+.sub{font-family:'Cormorant Garamond',serif;font-style:italic;letter-spacing:.5em;color:var(--gold);
+  font-size:clamp(12px,1.6vw,16px);text-transform:uppercase;margin-bottom:18px;}
+h1{font-size:clamp(40px,7vw,72px);letter-spacing:.26em;color:#fff;font-weight:700;
+  text-shadow:0 0 56px rgba(212,183,122,.5);margin-bottom:14px;}
+.tagline{color:var(--text-dim);font-size:clamp(13px,1.6vw,15px);letter-spacing:.22em;margin-bottom:52px;text-align:center;line-height:2;}
+.chapters{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;width:min(94vw,1060px);}
+.ch-card{position:relative;border-radius:18px;overflow:hidden;border:1px solid rgba(212,183,122,.25);
+  background:#141020;text-decoration:none;color:var(--text);transition:all .4s;display:block;
+  box-shadow:0 18px 50px rgba(0,0,0,.5);}
+.ch-card:hover{border-color:var(--gold);transform:translateY(-6px);box-shadow:0 26px 70px rgba(212,183,122,.18);}
+.ch-card img{width:100%;aspect-ratio:3/2;object-fit:cover;display:block;
+  transition:transform .6s ease;}
+.ch-card:hover img{transform:scale(1.05);}
+.ch-info{position:absolute;left:0;right:0;bottom:0;padding:44px 22px 18px;
+  background:linear-gradient(to top,rgba(5,3,12,.95),rgba(5,3,12,.55) 60%,transparent);}
+.ch-title{font-size:19px;font-weight:600;letter-spacing:.1em;color:#fff;margin-bottom:5px;}
+.ch-sub{font-size:12px;color:var(--text-dim);letter-spacing:.12em;}
+.ch-new{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:280px;
+  border:1px dashed rgba(212,183,122,.35);border-radius:18px;text-decoration:none;transition:all .35s;
+  color:var(--text-dim);gap:14px;}
+.ch-new:hover{border-color:var(--gold);background:rgba(212,183,122,.05);}
+.ch-new .plus{font-size:44px;color:var(--gold);font-weight:300;}
+.ch-new .t{font-size:15px;letter-spacing:.2em;color:var(--gold-bright);}
+.ch-new .d{font-size:12px;letter-spacing:.1em;}
+.tools{margin-top:44px;display:flex;gap:26px;font-size:12.5px;letter-spacing:.18em;}
+.tools a{color:var(--text-dim);text-decoration:none;transition:color .3s;}
+.tools a:hover{color:var(--gold);}
+footer{margin-top:56px;font-size:11px;color:rgba(154,146,168,.45);letter-spacing:.2em;text-align:center;line-height:2;}
+.back-explore{position:fixed;top:20px;left:22px;display:inline-flex;align-items:center;gap:8px;
+  padding:9px 16px;border:1px solid rgba(212,183,122,.4);border-radius:999px;color:var(--gold-bright);
+  text-decoration:none;font-size:13px;letter-spacing:.12em;background:rgba(20,16,32,.72);backdrop-filter:blur(8px);
+  transition:all .3s;z-index:50;}
+.back-explore:hover{border-color:var(--gold);background:rgba(212,183,122,.12);}
+</style>
+</head>
+<body>
+<a class="back-explore" id="backExplore" href="/#/explore" hidden>← 返回探索</a>
+<div class="sub">Realm of Knowledge</div>
+<h1>知 识 之 境</h1>
+<div class="tagline">回到知识诞生的现场 · 与伟大心灵对话 · 亲手重做他们的实验<br>每一幕有铺垫、有配音、有困境、有课本——从来源到意义，一次走通</div>
+
+<div class="chapters" id="chapters">
+  <a class="ch-new" href="generate.html">
+    <span class="plus">✦</span>
+    <span class="t">生成新篇章</span>
+    <span class="d">输入任意科学主题，AI 现场打造</span>
+  </a>
+</div>
+
+<div class="tools">
+  <a href="voice_lab.html">♪ 音色实验室</a>
+  <a href="generate.html">✦ 篇章生成器</a>
+</div>
+
+<footer>每一段历史现场 · 都由 AI 剧本、CG、配音、实验与课本衔接共同构筑<br>live_science · edu-agent</footer>
+
+<script>
+const grid=document.getElementById('chapters');
+function card(c){
+  const a=document.createElement('a'); a.className='ch-card'; a.href='chapters/'+c.slug+'/index.html';
+  a.innerHTML=`<img src="chapters/${c.slug}/assets/${c.cover}" alt="">
+    <div class="ch-info"><div class="ch-title">${c.title}</div><div class="ch-sub">${c.subtitle||''}</div></div>`;
+  grid.insertBefore(a, grid.lastElementChild);
+}
+// 静态兜底：圆锥曲线（出厂预装）
+card({slug:'conic-sections', title:'圆锥曲线', subtitle:'两千三百年的六次重生', cover:'prologue.png', badge:'出厂预装'});
+// 动态：server 扫描 chapters/ 下其余篇章
+fetch('/api/demo/live-science/chapters').then(r=>r.json()).then(d=>{
+  (d.chapters||[]).forEach(c=>{ if(c.slug!=='conic-sections') card(c); });
+}).catch(()=>{});
+</script>
+<script>
+// 从 WeSmartFlow 探索入口进入时显示「返回探索」；直接访问则隐藏。
+(function(){
+  var p=new URLSearchParams(location.search);
+  if(p.get('source')==='wesmartflow'){
+    var b=document.getElementById('backExplore');
+    if(b) b.hidden=false;
+  }
+})();
+</script>
+</body>
+</html>

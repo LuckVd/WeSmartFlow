@@ -308,6 +308,11 @@ def register_chapter_audio(
 # ── workspace / canvas / files 操作 ─────────────────────────────
 
 
+def read_workspace(session_id: str) -> dict:
+    """只读当前 workspace（含 canvas_blocks / workspace 嵌套），不写盘。"""
+    return SessionRepository().read_workspace(session_id)
+
+
 def update_workspace(session_id: str, **patch) -> dict:
     """更新沉浸式学习 workspace 顶层状态。"""
     return SessionRepository().update_workspace(session_id, **patch)

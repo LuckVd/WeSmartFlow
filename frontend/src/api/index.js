@@ -12,5 +12,6 @@ export { quizApi } from "./quizzes.js";
 export { authApi } from "./auth.js";
 export { briefApi } from "./brief.js";
 export { settingsApi } from "./settings.js";
+export { graphApi } from "./graph.js";
 export { api, BASE_URL, ApiError, fetchAsBlobUrl } from "./base.js";
 export { llmApi } from "./llm.js";

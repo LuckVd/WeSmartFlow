@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>如果 · 活的历史社区</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root { --bg:#15130f; --bg2:#1f1b15; --bg3:#282218; --ink:#efe5d0; --dim:#a3937a; --cinnabar:#b3402f; --azurite:#3a6b8a; --gold:#c9a35a; --teal:#4a7d6b; --line:#3d332a; }
+  html,body { height:100%; }
+  body { font-family:"Songti SC","STSong","SimSun",serif; color:var(--ink); background:var(--bg); overflow-x:hidden; }
+  .hidden { display:none !important; }
+  button { font-family:inherit; }
+
+  /* ===== 入口 ===== */
+  #entry { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:20px; background:radial-gradient(ellipse at 50% 120%, #2a2118 0%, var(--bg) 70%); }
+  #entry .inner { max-width:640px; text-align:center; }
+  .series { color:var(--dim); letter-spacing:8px; font-size:13px; margin-bottom:18px; }
+  #entry h1 { font-size:46px; letter-spacing:10px; color:var(--gold); margin-bottom:14px; text-shadow:0 0 30px rgba(201,163,90,.35); }
+  .whats { color:var(--dim); font-size:14.5px; letter-spacing:1px; margin-bottom:26px; line-height:2; }
+  .whats b { color:var(--ink); }
+  #topicInput { width:100%; background:var(--bg2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:inherit; font-size:17px; padding:14px 18px; outline:none; letter-spacing:1px; }
+  #topicInput:focus { border-color:var(--gold); }
+  .sug { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin:14px 0 24px; }
+  .sug button { background:none; border:1px dashed var(--line); border-radius:16px; color:var(--dim); font-size:13px; padding:6px 14px; cursor:pointer; }
+  .sug button:hover { color:var(--gold); border-color:var(--gold); }
+  #forgeBtn { background:var(--cinnabar); color:#fff; border:none; font-size:18px; letter-spacing:6px; padding:13px 44px; border-radius:6px; cursor:pointer; box-shadow:0 4px 24px rgba(179,64,47,.4); }
+  #forgeBtn:disabled { background:#5a4a3a; cursor:wait; }
+  .speed-note { margin-top:16px; color:var(--dim); font-size:12.5px; letter-spacing:1px; }
+
+  /* ===== 苏醒 ===== */
+  #waking { position:fixed; inset:0; z-index:49; background:var(--bg); display:flex; align-items:center; justify-content:center; flex-direction:column; padding:20px; }
+  .wake-title { font-size:26px; letter-spacing:6px; color:var(--gold); min-height:40px; margin-bottom:22px; }
+  .wake-roles { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; max-width:520px; min-height:52px; }
+  .wake-role { display:flex; align-items:center; gap:8px; background:var(--bg2); border:1px solid var(--line); border-radius:20px; padding:6px 14px; font-size:14px; animation:fadein .5s; }
+  .wake-role i { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .wake-sub { margin-top:26px; color:var(--dim); font-size:13px; letter-spacing:2px; animation:pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity:.4; } }
+  @keyframes fadein { from { opacity:0; transform:translateY(8px); } }
+
+  /* ===== 顶栏 ===== */
+  #topbar { position:fixed; top:0; left:0; right:0; z-index:40; display:flex; justify-content:space-between; align-items:center; padding:11px 18px;
+    background:linear-gradient(180deg, rgba(21,19,15,.96), rgba(21,19,15,.8)); border-bottom:1px solid var(--line); backdrop-filter:blur(6px); }
+  #topbar .tb-title { color:var(--gold); letter-spacing:2px; font-size:15px; max-width:36vw; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tb-group { display:flex; gap:7px; }
+  .tb-btn { background:none; border:1px solid var(--line); color:var(--dim); font-size:12.5px; letter-spacing:1px; padding:5px 13px; border-radius:15px; cursor:pointer; }
+  .tb-btn.active { color:var(--gold); border-color:var(--gold); }
+  .tb-btn:hover:not(.active):not(:disabled) { color:var(--ink); }
+  .tb-btn:disabled { opacity:.45; cursor:not-allowed; }
+  .tb-btn .dot { color:var(--cinnabar); }
+
+  /* ===== 主布局：动态流 + 侧栏 ===== */
+  #world { padding:74px 16px 60px; max-width:1080px; margin:0 auto; display:grid; grid-template-columns:1fr 300px; gap:16px; }
+  @media (max-width:900px){ #world { grid-template-columns:1fr; } }
+
+  #feed { display:flex; flex-direction:column; gap:12px; }
+  .case-banner { background:linear-gradient(140deg,var(--bg3),var(--bg2)); border:1px solid var(--gold); border-radius:10px; padding:18px 20px; }
+  .case-banner h2 { color:var(--gold); font-size:20px; letter-spacing:3px; margin-bottom:4px; }
+  .case-banner .cy { color:var(--dim); font-size:12.5px; letter-spacing:2px; margin-bottom:8px; }
+  .case-banner .cd { font-size:14.5px; line-height:1.9; }
+
+  .composer { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .composer .c-label { font-size:12px; color:var(--dim); letter-spacing:2px; margin-bottom:8px; }
+  .composer .c-row { display:flex; gap:8px; }
+  #pushInput { flex:1; background:rgba(0,0,0,.3); border:1px solid var(--line); border-radius:6px; color:var(--ink); font-family:inherit; font-size:14px; padding:9px 12px; outline:none; }
+  #pushInput:focus { border-color:var(--gold); }
+  #pushBtn { background:var(--cinnabar); color:#fff; border:none; border-radius:6px; padding:0 18px; font-size:14px; letter-spacing:2px; cursor:pointer; }
+  #pushBtn:disabled, #flyBtn:disabled { opacity:.5; cursor:wait; }
+  #flyBtn { background:none; border:1px solid var(--line); color:var(--dim); border-radius:6px; padding:0 14px; font-size:13px; cursor:pointer; margin-top:8px; }
+  #flyBtn:hover:not(:disabled) { color:var(--gold); border-color:var(--gold); }
+
+  .post { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:14px 16px; animation:fadein .5s; }
+  .post.sys { border-style:dashed; color:var(--dim); font-size:13px; text-align:center; letter-spacing:1px; }
+  .post .p-head { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
+  .p-av { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:15px; flex-shrink:0; }
+  .p-name { font-size:15px; letter-spacing:1px; }
+  .p-tag { font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:10px; padding:1px 8px; }
+  .p-you { color:var(--cinnabar); border-color:#7a3a30; }
+  .post .p-text { font-size:15px; line-height:1.9; }
+  .post .p-text .at { color:var(--gold); }
+  .p-reply { font-size:12.5px; color:var(--dim); background:rgba(0,0,0,.25); border-left:2px solid var(--line); padding:6px 10px; border-radius:0 6px 6px 0; margin-bottom:8px; line-height:1.7; }
+  .post .p-acts { margin-top:9px; display:flex; gap:10px; }
+  .p-acts button { background:none; border:1px dashed var(--line); border-radius:5px; color:var(--dim); font-size:12px; padding:2px 10px; cursor:pointer; }
+  .p-acts button:hover { color:var(--gold); border-color:var(--gold); }
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  /* 史实对照卡 */
+  .learn-card{margin-top:10px;background:rgba(90,124,146,.08);border:1px solid rgba(90,124,146,.35);
+    border-radius:10px;padding:13px 15px;animation:fadeUp .5s ease both;}
+  .lc-verdict{display:inline-block;font-size:11px;border-radius:3px;padding:2px 8px;margin-bottom:8px;letter-spacing:1px;}
+  .lc-verdict.v1{background:rgba(90,154,125,.15);color:#a8d4bd;border:1px solid rgba(90,154,125,.4);}
+  .lc-verdict.v2{background:rgba(201,164,92,.12);color:var(--gold);border:1px solid rgba(201,164,92,.4);}
+  .lc-verdict.v3{background:rgba(194,81,71,.12);color:#e0a49e;border:1px solid rgba(194,81,71,.4);}
+  .lc-row{font-size:13.5px;line-height:1.8;margin-bottom:6px;color:var(--ink,#ddd0b3);}
+  .lc-row b{color:var(--gold);font-weight:700;}
+  /* 手记弹层 */
+  #noteLayer{position:fixed;inset:0;z-index:300;background:rgba(10,7,4,.85);backdrop-filter:blur(6px);
+    display:flex;align-items:center;justify-content:center;padding:24px;}
+  #noteLayer .nl-box{background:rgba(26,19,11,.96);border:1px solid rgba(201,164,92,.4);border-radius:14px;
+    max-width:540px;width:100%;max-height:84vh;overflow-y:auto;padding:26px;}
+  .nl-close{float:right;background:transparent;border:1px solid rgba(201,164,92,.4);color:var(--dim);
+    border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer;}
+  .nl-close:hover{color:var(--gold);border-color:var(--gold);}
+  .note-item{display:flex;gap:10px;margin-bottom:10px;font-size:14.5px;line-height:1.8;color:var(--ink,#ddd0b3);}
+  .note-item .no{color:var(--gold);font-weight:900;flex-shrink:0;}
+  .thinking-row { color:var(--dim); font-size:13px; text-align:center; padding:10px; letter-spacing:2px; animation:pulse 1.4s infinite; }
+
+  /* ===== 侧栏 ===== */
+  #side { display:flex; flex-direction:column; gap:12px; }
+  .side-box { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .side-box h4 { color:var(--gold); font-size:13px; letter-spacing:3px; margin-bottom:12px; }
+  .role-mini { display:flex; gap:10px; align-items:flex-start; margin-bottom:11px; animation:fadein .5s; }
+  .role-mini .rm-body { flex:1; min-width:0; }
+  .role-mini .rm-name { font-size:14.5px; }
+  .role-mini .rm-title { font-size:11.5px; color:var(--dim); margin:1px 0 3px; }
+  .role-mini .rm-brief { font-size:12px; color:var(--dim); line-height:1.7; }
+  .mode-entry { display:block; width:100%; text-align:left; background:rgba(0,0,0,.25); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-size:14px; padding:11px 14px; margin-bottom:9px; cursor:pointer; line-height:1.6; }
+  .mode-entry:hover:not(:disabled) { border-color:var(--gold); }
+  .mode-entry:disabled { opacity:.5; cursor:wait; }
+  .mode-entry small { display:block; color:var(--dim); font-size:11.5px; }
+  .status-line { font-size:12px; color:var(--dim); line-height:1.9; }
+  .status-line b { color:var(--gold); }
+
+  /* ===== 模式页（重演/代入/圆桌）复用旧样式 ===== */
+  .mode-page { padding:74px 18px 60px; min-height:100vh; }
+  .stage-wrap { max-width:900px; margin:0 auto; }
+  .scene-frame { position:relative; width:100%; aspect-ratio:1664/928; border-radius:10px; overflow:hidden; border:1px solid var(--line); margin-bottom:22px; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  .scene-frame img { width:100%; height:100%; object-fit:cover; display:block; animation:kb 26s ease-in-out infinite alternate; }
+  @keyframes kb { 0%{transform:scale(1);} 100%{transform:scale(1.05);} }
+  .scene-cap { position:absolute; left:0; right:0; bottom:0; padding:14px 20px 16px; background:linear-gradient(180deg, transparent, rgba(12,9,7,.9)); font-size:17px; line-height:1.9; }
+  .scene-cap .who { color:var(--gold); font-size:13px; letter-spacing:2px; margin-bottom:4px; display:block; }
+  .img-pending { width:100%; height:100%; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px;
+    background:repeating-linear-gradient(45deg,#1c1611,#1c1611 12px,#211a15 12px,#211a15 24px); color:var(--dim); font-size:14px; letter-spacing:3px; }
+  .narr { font-size:16.5px; line-height:2.1; text-align:center; max-width:720px; margin:0 auto 26px; }
+  .btn-main { display:block; margin:26px auto 0; background:var(--cinnabar); color:#fff; border:none; font-size:17px; letter-spacing:6px; padding:12px 42px; border-radius:5px; cursor:pointer; }
+  .rashomon-title { text-align:center; color:var(--gold); font-size:20px; letter-spacing:6px; margin:30px 0 8px; }
+  .rashomon-sub { text-align:center; color:var(--dim); font-size:13.5px; letter-spacing:2px; margin-bottom:24px; }
+  .testimony { background:var(--bg2); border-left:3px solid var(--gold); border-radius:0 8px 8px 0; padding:16px 20px; margin:0 auto 14px; max-width:680px; animation:fadein .6s; }
+  .testimony .t-who { font-size:13px; letter-spacing:2px; margin-bottom:6px; }
+  .testimony .t-line { font-size:15.5px; line-height:1.95; }
+  .quiz-card { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:24px 28px; max-width:640px; margin:0 auto 18px; }
+  .quiz-card .q { font-size:17px; margin-bottom:16px; line-height:1.8; }
+  .quiz-opt { display:block; width:100%; text-align:left; background:rgba(0,0,0,.25); border:1px solid var(--line); border-radius:6px; padding:11px 16px; color:var(--ink); font-size:15px; margin-bottom:9px; cursor:pointer; }
+  .quiz-opt.right { border-color:var(--teal); background:rgba(74,125,107,.15); }
+  .quiz-opt.wrong { border-color:var(--cinnabar); background:rgba(179,64,47,.12); }
+  .role-cards { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin:20px 0 10px; }
+  .role-card { width:250px; background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:20px 18px; cursor:pointer; text-align:left; color:var(--ink); transition:all .2s; }
+  .role-card:hover { transform:translateY(-3px); border-color:var(--gold); }
+  .role-card .rc-tag { font-size:11px; color:var(--dim); letter-spacing:2px; margin-bottom:5px; }
+  .role-card .rc-t { font-size:19px; letter-spacing:3px; color:var(--gold); margin-bottom:4px; }
+  .role-card .rc-s { font-size:12px; color:var(--dim); margin-bottom:12px; }
+  .role-card .rc-d { font-size:13px; color:var(--dim); line-height:1.85; }
+  .decision-card { background:var(--bg2); border:1px solid var(--gold); border-radius:10px; padding:20px 24px; max-width:640px; margin:24px auto; }
+  .decision-card .dq { color:var(--gold); font-size:16.5px; line-height:1.9; margin-bottom:16px; }
+  .opt-v { display:block; width:100%; text-align:left; background:rgba(0,0,0,.25); border:1px solid var(--line); border-radius:8px; padding:13px 17px; color:var(--ink); font-size:15px; line-height:1.7; margin-bottom:11px; cursor:pointer; }
+  .opt-v:hover { border-color:var(--cinnabar); }
+  .opt-v small { display:block; color:var(--dim); font-size:12.5px; margin-top:4px; }
+  .history-book { background:rgba(58,107,138,.1); border:1px solid var(--azurite); border-radius:10px; padding:24px 28px; max-width:680px; margin:26px auto; line-height:2.1; font-size:15.5px; }
+  .history-book h4 { color:var(--azurite); letter-spacing:3px; margin-bottom:12px; }
+  .lesson-card { background:rgba(201,163,90,.08); border:1px dashed var(--gold); border-radius:10px; padding:22px 26px; max-width:680px; margin:20px auto; line-height:2.05; font-size:15px; }
+  .lesson-card h4 { color:var(--gold); letter-spacing:3px; margin-bottom:10px; }
+  .epilogue { text-align:center; color:var(--gold); font-size:18px; letter-spacing:4px; margin:24px 0; line-height:1.9; }
+  .epilogue::before,.epilogue::after { content:"———"; color:var(--line); margin:0 14px; }
+  .chatbox { max-width:760px; margin:0 auto; background:rgba(12,9,7,.5); border:1px solid var(--line); border-radius:10px; padding:18px; height:52vh; overflow-y:auto; }
+  .msg { margin-bottom:14px; display:flex; gap:10px; }
+  .msg .avatar { width:40px; height:40px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:16px; color:#fff; }
+  .msg .body { max-width:80%; }
+  .msg .who { font-size:12px; color:var(--dim); margin-bottom:3px; }
+  .msg .bubble { background:var(--bg2); border:1px solid var(--line); border-radius:2px 10px 10px 10px; padding:10px 14px; font-size:15px; line-height:1.9; }
+  .msg.me { flex-direction:row-reverse; }
+  .msg.me .bubble { background:rgba(179,64,47,.16); border-color:#7a3a30; border-radius:10px 2px 10px 10px; }
+  .msg .note { font-size:12px; color:var(--dim); margin-top:4px; }
+  .chips { display:flex; flex-wrap:wrap; gap:9px; justify-content:center; margin:14px 0; }
+  .chip { background:var(--bg2); border:1px solid var(--line); border-radius:16px; padding:7px 15px; color:var(--ink); font-size:13.5px; cursor:pointer; }
+  .chip:hover { border-color:var(--gold); color:var(--gold); }
+  .input-row { display:flex; gap:10px; max-width:760px; margin:14px auto 0; }
+  #rtInput { flex:1; background:var(--bg2); border:1px solid var(--line); border-radius:5px; color:var(--ink); font-family:inherit; font-size:15px; padding:11px 14px; outline:none; }
+  #rtSend { background:var(--cinnabar); color:#fff; border:none; border-radius:5px; padding:0 24px; font-size:15px; letter-spacing:2px; cursor:pointer; }
+  .conclusion-box { background:var(--bg2); border:1px solid var(--gold); border-radius:10px; padding:22px 26px; max-width:680px; margin:30px auto; }
+  .conclusion-box h4 { color:var(--gold); letter-spacing:3px; margin-bottom:8px; }
+  #conclInput { width:100%; min-height:110px; background:rgba(0,0,0,.3); border:1px solid var(--line); border-radius:6px; color:var(--ink); font-family:inherit; font-size:15px; line-height:2; padding:14px 16px; outline:none; resize:vertical; }
+  .poem-card { background:#0d0a08; border:1px solid var(--gold); border-radius:8px; padding:22px 26px; text-align:center; max-width:560px; margin:26px auto; font-size:18px; line-height:2.3; letter-spacing:3px; color:var(--gold); }
+  .compare-box { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:20px 24px; max-width:680px; margin:20px auto; line-height:2; font-size:14.5px; }
+  .compare-box h4 { color:var(--azurite); letter-spacing:3px; margin-bottom:10px; }
+  .learned-list li { margin-bottom:10px; }
+
+  /* 质询抽屉 */
+  #drawer { position:fixed; right:0; top:0; bottom:0; width:min(400px,92vw); z-index:60; background:var(--bg2); border-left:1px solid var(--line);
+    transform:translateX(100%); transition:transform .3s; display:flex; flex-direction:column; padding:16px; }
+  #drawer.open { transform:translateX(0); }
+  #drawer h4 { color:var(--gold); font-size:15px; letter-spacing:2px; margin-bottom:4px; }
+  #dchat { flex:1; overflow-y:auto; padding:8px 0; }
+  .dline { margin-bottom:12px; font-size:14px; line-height:1.8; }
+  .dline .dw { font-size:11.5px; color:var(--dim); margin-bottom:2px; }
+  .dline .db { background:rgba(0,0,0,.3); border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+  .dline.me .db { background:rgba(179,64,47,.14); border-color:#7a3a30; }
+  .drow { display:flex; gap:8px; margin-top:10px; }
+  #dInput { flex:1; background:rgba(0,0,0,.3); border:1px solid var(--line); border-radius:5px; color:var(--ink); font-family:inherit; padding:9px 12px; font-size:14px; outline:none; }
+  #dSend { background:var(--cinnabar); border:none; color:#fff; border-radius:5px; padding:0 16px; cursor:pointer; }
+  #dClose { position:absolute; top:12px; right:14px; background:none; border:none; color:var(--dim); font-size:20px; cursor:pointer; }
+</style>
+</head>
+<body>
+
+<div id="entry">
+  <div class="inner">
+    <div class="series">如 果 · 活 的 历 史 社 区</div>
+    <h1>让历史自己吵起来</h1>
+    <div class="whats">如果你写下过一个"如果"——<br>
+      <b>八秒后</b>，它就是一张案卷；<b>半分钟后</b>，里面的人自己在发帖、对喷、站队、过日子。<br>
+      你可以搬小板凳看热闹，也可以推剧情一把——<b>不过说好了，他们都有自己的脾气，不一定听你的。</b></div>
+    <input id="topicInput" placeholder="写下一个历史事件或「如果」，如：玄武门之变" autocomplete="off">
+    <div class="sug">
+      <button onclick="quick('玄武门之变')">玄武门之变</button>
+      <button onclick="quick('如果关羽在华容道没放走曹操')">关羽没放曹操</button>
+      <button onclick="quick('商鞅之死')">商鞅之死</button>
+      <button onclick="quick('如果明朝没有闭关锁国')">明朝不闭关</button>
+    </div>
+    <button id="forgeBtn" onclick="doForge()">让 它 发 生 ▸</button>
+    <div class="speed-note">案卷 8 秒 · 社区 30 秒开张 · 剧本与画卷在你看热闹时生成</div>
+  </div>
+</div>
+
+<div id="waking" class="hidden">
+  <div class="wake-title" id="wakeTitle"></div>
+  <div class="wake-roles" id="wakeRoles"></div>
+  <div class="wake-sub" id="wakeSub">世界正在苏醒……</div>
+</div>
+
+<div id="topbar" class="hidden">
+  <div class="tb-title" id="tbTitle"></div>
+  <div class="tb-group">
+    <button class="tb-btn active" data-v="world" onclick="showView('world')">动态</button>
+    <button class="tb-btn" data-v="mode1" onclick="showView('mode1')">重演<span class="dot" id="b1">…</span></button>
+    <button class="tb-btn" data-v="mode2" onclick="showView('mode2')">代入<span class="dot" id="b2">…</span></button>
+    <button class="tb-btn" onclick="openNote()" style="color:var(--gold)">手 记</button>
+    <button class="tb-btn" data-v="mode3" onclick="showView('mode3')">圆桌<span class="dot" id="b3">…</span></button>
+  </div>
+</div>
+
+<!-- 世界视图：社区动态 -->
+<div id="world" class="hidden">
+  <div id="feed">
+    <div class="case-banner">
+      <h2 id="caseTitle"></h2>
+      <div class="cy" id="caseYear"></div>
+      <div class="cd" id="caseDossier"></div>
+    </div>
+    <div class="composer">
+      <div class="c-label">推剧情一把——他们不一定听你的</div>
+      <div class="c-row">
+        <input id="pushInput" placeholder="发一条消息给这个世界，比如：有人说，其实当晚还有第四个人在场……" autocomplete="off">
+        <button id="pushBtn" onclick="pushPlot()">发帖</button>
+      </div>
+      <button id="flyBtn" onclick="pushPlot(true)">▸ 啥也不说，让子弹再飞一会儿</button>
+    </div>
+    <div id="postList"></div>
+  </div>
+  <div id="side">
+    <div class="side-box"><h4>在 场 的 人</h4><div id="roleList"></div></div>
+    <div class="side-box"><h4>史 官 署</h4>
+      <button class="mode-entry" onclick="showView('mode3')" id="me3">⚖ 圆桌对质<small>听审 · 质询 · 结案（生成中…）</small></button>
+      <button class="mode-entry" onclick="showView('mode1')" id="me1">▶ 重演<small>罗生门式看懂事件（生成中…）</small></button>
+      <button class="mode-entry" onclick="showView('mode2')" id="me2">◉ 代入<small>换个身份活一遍（生成中…）</small></button>
+    </div>
+    <div class="side-box"><h4>世 界 状 态</h4><div class="status-line" id="statusLine">苏醒中……</div></div>
+  </div>
+</div>
+
+<div id="mode1" class="mode-page hidden"><div class="stage-wrap" id="m1stage"></div></div>
+<div id="mode2" class="mode-page hidden"><div class="stage-wrap" id="m2stage"></div></div>
+<div id="mode3" class="mode-page hidden">
+  <div class="stage-wrap">
+    <div class="rt-head"><h2 id="rtTitle">圆桌对质</h2><p style="color:var(--dim); font-size:14px; margin-top:6px;">当事人到场 · 你执史笔 · 听审、质询、结案</p></div>
+    <div class="chatbox" id="rtChat"></div>
+    <div class="chips" id="rtChips"></div>
+    <div class="input-row"><input id="rtInput" placeholder="史官发问……" autocomplete="off"><button id="rtSend">发问</button></div>
+    <div id="conclZone" class="hidden">
+      <div class="conclusion-box">
+        <h4>◈ 史官结案</h4>
+        <div style="color:var(--dim); font-size:13.5px; margin-bottom:14px;">听罢各方陈词——写下你的定论，与千年史笔对照。</div>
+        <div class="chips">
+          <button class="chip" onclick="fillStarter('此事之起，实因……')">起笔一</button>
+          <button class="chip" onclick="fillStarter('责不在一人，而在……')">起笔二</button>
+          <button class="chip" onclick="fillStarter('后世最该记住的一件事是……')">起笔三</button>
+        </div>
+        <textarea id="conclInput" placeholder="你的结案陈词……"></textarea>
+        <button class="btn-main" id="conclBtn" style="margin:16px auto 0;">落 笔 呈 堂</button>
+      </div>
+    </div>
+    <div id="rtResult" class="hidden"></div>
+  </div>
+</div>
+
+<div id="drawer">
+  <button id="dClose" onclick="document.getElementById('drawer').classList.remove('open')">×</button>
+  <h4 id="dTitle">质询</h4>
+  <div style="color:var(--dim); font-size:12px; margin-bottom:8px;">单独提审。戳他的矛盾，看他破不破防。</div>
+  <div id="dchat"></div>
+  <div class="drow"><input id="dInput" placeholder="问他……" autocomplete="off"><button id="dSend">问</button></div>
+</div>
+
+<script>
+/* ============ 如果 · 活的历史社区（forge v2） ============ */
+/* 永远用相对路径：同源（dev 5173 / prod 18085）都走相对 /api/court，由 Vite proxy 或 iptables+后端 mount 处理
+   ——之前用绝对 URL 走 18085 + iptables REDIRECT 会让请求变成 absolute-form 404 */
+const API = "/api/court";
+const $ = s => document.querySelector(s);
+let sleepSkip=false;
+const sleep = ms => new Promise(r => setTimeout(r, sleepSkip?Math.min(ms,120):ms));
+function quick(t){ $("#topicInput").value = t; }
+
+let CASE=null, CASE_ID=null, STAGE=1;
+let zhVoice=null, voiceOn=true, currentAudio=null;
+function pickVoice(){ const v=speechSynthesis.getVoices(); zhVoice=v.find(x=>/zh[-_]CN/i.test(x.lang))||v.find(x=>/^zh/i.test(x.lang))||null; }
+if ("speechSynthesis" in window){ speechSynthesis.onvoiceschanged=pickVoice; pickVoice(); }
+function cleanSpeech(t){ return t.replace(/<[^>]+>/g,"").replace(/[「」『』（）()：:·、——…！？!?@]/g,"").replace(/\s+/g," ").trim(); }
+function stopSpeech(){ if(currentAudio){try{currentAudio.pause();}catch(e){} currentAudio=null;} try{speechSynthesis.cancel();}catch(e){} }
+let _speechRelease=null;
+function stopSpeech(){
+  if(currentAudio){try{currentAudio.pause();}catch(e){} currentAudio=null;}
+  try{speechSynthesis.cancel();}catch(e){}
+  if(_speechRelease){ const r=_speechRelease; _speechRelease=null; r(); }
+}
+let speakToken = 0;
+const SPEAK_DONE = Promise.resolve();
+/* speak：防叠音锁 + 读完 promise（duration 兜底 + autoplay 缓冲）——await 它才会等语音真正播完 */
+async function speak(text, role){
+  const my = ++speakToken;
+  if(!voiceOn) return SPEAK_DONE;
+  stopSpeech();
+  const clean=cleanSpeech(text); if(!clean) return SPEAK_DONE;
+  try{
+    const res=await fetch(API+"/tts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:clean.slice(0,300),voice:role||"n"})});
+    const d=await res.json();
+    if(d.ok && voiceOn && my===speakToken){
+      return new Promise(res2=>{
+        const audio=new Audio(d.audio_url);
+        currentAudio=audio;
+        let settled=false; let fallbackTimer=null;
+        const done=()=>{ if(!settled){ settled=true; if(fallbackTimer) clearTimeout(fallbackTimer);
+          if(_speechRelease===h) _speechRelease=null; res2(); } };
+        const h=done; _speechRelease=done;
+        audio.onended=done; audio.onerror=done;
+        audio.onloadedmetadata=()=>{         // duration 兜底：onended 异常时按时长收尾
+          if(audio.duration && isFinite(audio.duration)){
+            fallbackTimer=setTimeout(done, (audio.duration+0.5)*1000);
+          }
+        };
+        audio.play().catch(()=>setTimeout(done, 400));  // autoplay 被拦：短缓冲不秒过
+      });
+    }
+  }catch(e){}
+  if(my!==speakToken || !voiceOn) return SPEAK_DONE;
+  return new Promise(res2=>{
+    try{
+      const u=new SpeechSynthesisUtterance(clean.slice(0,200));
+      if(zhVoice) u.voice=zhVoice; u.lang="zh-CN"; u.rate=.95;
+      let settled=false;
+      const done=()=>{ if(!settled){ settled=true; if(_speechRelease===h) _speechRelease=null; res2(); } };
+      const h=done; _speechRelease=done;
+      u.onend=done; u.onerror=done;
+      speechSynthesis.speak(u);
+      setTimeout(done, 700+clean.length*260);
+    }catch(e){ res2(); }
+  });
+}
+/* 单击画面：跳过当前台词（语音停+打字加速） */
+document.addEventListener("click", e=>{
+  if(e.target.closest("button, input, textarea, .chip, a")) return;
+  sleepSkip=true;
+  stopSpeech();
+  setTimeout(()=>sleepSkip=false, 90);
+});
+function toggleVoice(){ voiceOn=!voiceOn; if(!voiceOn) stopSpeech(); }
+function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function atify(s){ return esc(s).replace(/@([\u4e00-\u9fa5\w]{1,6})/g,'<span class="at">@$1</span>'); }
+
+const ROLE_COLORS = ["#b3402f","#3a6b8a","#7a5a9a","#4a7d6b"];
+function roleIdx(id){ return Math.max(0, CASE.roles.findIndex(r=>r.id===id)); }
+function roleColor(id){ return ROLE_COLORS[roleIdx(id)%4]; }
+function roleName(id){ const r=CASE.roles.find(x=>x.id===id); return r?r.name:id; }
+
+/* ---------- 造案（苏醒式） ---------- */
+async function doForge(){
+  const topic=$("#topicInput").value.trim();
+  if(!topic){ $("#topicInput").focus(); return; }
+  $("#forgeBtn").disabled=true;
+  $("#entry").classList.add("hidden");
+  $("#waking").classList.remove("hidden");
+  $("#wakeSub").textContent="史官署正在拟案卷……";
+  const t0=Date.now();
+  try{
+    const res=await fetch(API+"/forge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic})});
+    const d=await res.json();
+    if(!d.case_id) throw new Error(d.detail || d.error || "生成失败，请稍后再试");
+    CASE_ID=d.case_id; CASE=d.package; STAGE=d.stage;
+    await wakeSequence(Date.now()-t0);
+  }catch(e){
+    $("#waking").classList.add("hidden");
+    $("#entry").classList.remove("hidden");
+    $("#forgeBtn").disabled=false;
+    alert("拟案失败：" + (e.message || "请稍后再试"));
+  }
+}
+async function wakeSequence(elapsed){
+  /* 标题打出 */
+  const wt=$("#wakeTitle");
+  const title=`《${CASE.title}》`;
+  wt.textContent="";
+  for(const ch of title){ wt.textContent+=ch; await sleep(70); }
+  /* 人物逐个上线 */
+  $("#wakeSub").textContent="当事人陆续到场……";
+  for(const r of CASE.roles){
+    $("#wakeRoles").insertAdjacentHTML("beforeend",
+      `<div class="wake-role"><i style="background:${ROLE_COLORS[roleIdx(r.id)%4]}"></i>${r.name}<span style="color:var(--dim); font-size:12px;">${r.temper||""}</span></div>`);
+    await sleep(260);
+  }
+  await sleep(500);
+  enterWorld(elapsed);
+}
+function enterWorld(elapsed){
+  $("#waking").classList.add("hidden");
+  $("#topbar").classList.remove("hidden");
+  $("#world").classList.remove("hidden");
+  $("#tbTitle").textContent=`${CASE.title} · ${CASE.year}`;
+  $("#caseTitle").textContent=CASE.title;
+  $("#caseYear").textContent=CASE.year+" · 开案用时 "+(elapsed/1000).toFixed(1)+"s";
+  $("#caseDossier").textContent=CASE.dossier;
+  /* 侧栏人物 */
+  const rl=$("#roleList");
+  CASE.roles.forEach(r=>{
+    rl.insertAdjacentHTML("beforeend",
+      `<div class="role-mini"><div class="p-av" style="background:${roleColor(r.id)}">${r.name[0]}</div>
+       <div class="rm-body"><div class="rm-name">${r.name} <span class="p-tag">${r.temper||""}</span></div>
+       <div class="rm-title">${r.title||""}</div><div class="rm-brief">${r.brief||""}</div></div></div>`);
+  });
+  addPost({sys:true, text:"—— 社区开张。下面是当事人们自己的声音 ——"});
+  pollStatus();
+  loadPosts(); // 第一批动态（后端已预热两批）
+  /* 不再自动循环续帖：deepseek 带宽让给圆桌/代入/图——推进权交给用户（发言或点「推进」） */
+}
+function showView(v){
+  ["world","mode1","mode2","mode3"].forEach(x=>{
+    $("#"+x).classList.toggle("hidden", x!==v);
+    const b=document.querySelector(`.tb-btn[data-v="${x}"]`); if(b) b.classList.toggle("active", x===v);
+  });
+  window.scrollTo(0,0); stopSpeech();
+  if(v==="mode1"&&!m1Started){ if((CASE.frames||[]).length){m1Started=true;runMode1();} }
+  if(v==="mode2"&&!m2Started){ if((CASE.mode2_roles||[]).length){m2Started=true;runMode2();} else $("#m2stage").innerHTML=`<div class="rashomon-title" style="margin-top:40px;">代入剧本撰写中</div><div class="rashomon-sub">可先回「动态」看他们吵架……</div>`; }
+  if(v==="mode3") runMode3();
+}
+
+/* ---------- 世界状态轮询 ---------- */
+function pollStatus(){
+  fetch(`${API}/forge/${encodeURIComponent(CASE_ID)}/status`).then(r=>r.json()).then(d=>{
+    STAGE=d.stage;
+    CASE=Object.assign(CASE, d.package||{});
+    const s=$("#statusLine");
+    const stageText = STAGE>=3 ? "全部就绪" : STAGE>=2.5 ? "剧本就绪 · 画卷绘制中" :
+                      STAGE>=1.5 ? "人设就绪 · 圆桌可开 · 剧本撰写中" :
+                      STAGE>=1 ? "人物已到场 · 档案整理中" : STAGE===-1 ? "部分生成失败（可玩已就绪内容）" : "苏醒中";
+    s.innerHTML=`阶段：<b>${stageText}</b><br>案卷号：${CASE_ID.slice(6,16)}…`;
+    const gate=(btn,sb,min,label,okText)=>{ const b=$(btn); const ok=STAGE>=min&&STAGE!==-1||STAGE===3;
+      b.disabled = !(STAGE>=min); const sm=b.querySelector("small"); if(sm) sm.textContent = STAGE>=min?okText:"生成中…"; const dot=$(sb); if(dot) dot.textContent = STAGE>=min?"":"…"; };
+    const fieldGate=(btn,sb,okText,cond)=>{
+      const b=$(btn); const ok=cond();
+      b.disabled=!ok; const sm=b.querySelector("small"); if(sm) sm.textContent=ok?okText:"生成中…";
+      const dot=$(sb); if(dot) dot.textContent=ok?"":"…";
+    };
+    fieldGate("#me3","#b3","听审 · 质询 · 结案（就绪）",()=>(CASE.opening_script||[]).length>0);
+    fieldGate("#me1","#b1","罗生门式看懂事件（就绪）",()=>(CASE.frames||[]).length>0);
+    fieldGate("#me2","#b2","换个身份活一遍（就绪）",()=>(CASE.mode2_roles||[]).length>0);
+    if(STAGE!==3&&STAGE!==-1) setTimeout(pollStatus,3000);
+  }).catch(()=>setTimeout(pollStatus,6000));
+}
+
+/* ---------- 社区动态 ---------- */
+let postsAll=[];
+function addPost(p){
+  postsAll.push(p);
+  const list=$("#postList");
+  if(p.sys){ list.insertAdjacentHTML("beforeend",`<div class="post sys">${p.text}</div>`); }
+  else{
+    const reply = p.reply_to ? (()=>{ const t=postsAll.filter(x=>!x.sys)[p.reply_to-1]; return t?`<div class="p-reply">回复 ${t.name}：${esc(t.text).slice(0,36)}…</div>`:""; })() : "";
+    const isYou = p.role==="__you";
+    list.insertAdjacentHTML("beforeend",
+      `<div class="post"><div class="p-head">
+        <div class="p-av" style="background:${isYou?"#6b5b45":roleColor(p.role)}">${isYou?"你":p.name[0]}</div>
+        <span class="p-name">${p.name}</span><span class="p-tag ${isYou?"p-you":""}">${isYou?"介入者":(p.temper||"")}</span></div>
+        ${reply}<div class="p-text">${atify(p.text)}</div>
+        ${isYou?"":`<div class="p-acts"><button onclick="askRole('${p.role}')">质询 ${p.name}</button><button onclick="toggleLearn(this,'${p.role}')">学 · 史实对照</button></div>`}
+        <div class="learnSlot"></div>
+      </div>`);
+  }
+  window.scrollTo({top:document.body.scrollHeight, behavior:"smooth"});
+}
+let postsLoading=false;
+async function loadPosts(){
+  if(postsLoading) return; postsLoading=true;
+  const t=document.createElement("div"); t.className="thinking-row"; t.textContent="这边的人在打字……"; $("#postList").appendChild(t);
+  try{
+    const res=await fetch(`${API}/forge/${encodeURIComponent(CASE_ID)}/posts`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
+    const d=await res.json();
+    t.remove();
+    (d.new||[]).forEach((p,i)=>setTimeout(()=>addPost(p), i*1200));
+    const n=(d.new||[]).length;
+    setTimeout(()=>renderAdvance(), (n+1)*1200+800);   // 帖子滚完后露出「推进」
+  }catch(e){ t.remove(); addPost({sys:true,text:"（社区连接失败，稍后再试）"}); }
+  postsLoading=false;
+}
+/* 推进权在用户：发言=自动推进；沉默时点「推进」按钮才前进（不空耗生成带宽） */
+function renderAdvance(){
+  const old=document.getElementById("advanceBtn");
+  if(old) return;
+  const list=$("#postList");
+  list.insertAdjacentHTML("beforeend",
+    `<button id="advanceBtn" style="display:block;width:100%;padding:13px;margin:6px 0 20px;
+      background:transparent;border:1.5px dashed var(--line);border-radius:10px;color:var(--dim);
+      font-size:14px;letter-spacing:4px;cursor:pointer;transition:all .25s;"
+      onmouseover="this.style.color='var(--gold)';this.style.borderColor='var(--gold)'"
+      onmouseout="this.style.color='var(--dim)';this.style.borderColor='var(--line)'"
+      onclick="advanceWorld()">推 进 这 个 世 界 ▸</button>`);
+}
+async function advanceWorld(){
+  const btn=document.getElementById("advanceBtn");
+  if(btn){ btn.remove(); }
+  await loadPosts();
+  renderAdvance();
+}
+async function pushPlot(fly){
+  const msg = fly ? "" : $("#pushInput").value.trim();
+  if(!fly && !msg){ $("#pushInput").focus(); return; }
+  $("#pushBtn").disabled=true; $("#flyBtn").disabled=true;
+  if(!fly){ addPost({role:"__you", name:"你", text:msg}); $("#pushInput").value=""; }
+  const t=document.createElement("div"); t.className="thinking-row"; t.textContent="他们看见了你的帖子……"; $("#postList").appendChild(t);
+  try{
+    const res=await fetch(`${API}/forge/${encodeURIComponent(CASE_ID)}/posts`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg})});
+    const d=await res.json();
+    t.remove();
+    const ab=document.getElementById("advanceBtn"); if(ab) ab.remove();
+    (d.new||[]).forEach((p,i)=>setTimeout(()=>addPost(p), i*1200));
+    setTimeout(()=>renderAdvance(), ((d.new||[]).length+1)*1200+800);
+  }catch(e){ t.remove(); }
+  $("#pushBtn").disabled=false; $("#flyBtn").disabled=false;
+}
+
+/* ---------- 帖子「学」：史实对照卡 ---------- */
+async function toggleLearn(btn, roleId){
+  const post=btn.closest(".post");
+  const slot=post.querySelector(".learnSlot");
+  if(slot.innerHTML){ slot.innerHTML=""; return; }
+  slot.innerHTML=`<div style="color:var(--dim);font-size:12px;padding:8px;letter-spacing:2px;">史官署调档核对……</div>`;
+  const ptext=post.querySelector(".p-text").textContent;
+  try{
+    const res=await fetch(`${API}/forge/${encodeURIComponent(CASE_ID)}/learn`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({role_name:roleName(roleId), post_text:ptext})});
+    const d=await res.json();
+    slot.innerHTML="";
+    if(d && d.fact){
+      const vmap={"符合史实":"v1","立场修饰":"v2","与史实有出入":"v3"};
+      const vk=vmap[d.verdict]||"v2";
+      slot.innerHTML=`<div class="learn-card">
+        <span class="lc-verdict ${vk}">${esc(d.verdict||"史实对照")}</span>
+        <div class="lc-row"><b>他说：</b>${esc(d.claim||"")}</div>
+        <div class="lc-row"><b>史载：</b>${esc(d.fact||"")}</div>
+        <div class="lc-row"><b>知识点：</b>${esc(d.knowledge||"")}</div>
+        ${d.note?`<div class="lc-row" style="color:var(--dim)"><i>${esc(d.note)}</i></div>`:""}
+      </div>`;
+      speak("史载："+(d.fact||""),"n");
+    } else {
+      slot.innerHTML=`<div style="color:var(--dim);font-size:12px;padding:8px;">（这帖查无对证——世界在虚构里奔跑）</div>`;
+    }
+  }catch(e){ slot.innerHTML=""; }
+}
+
+/* ---------- 手记（学习总结，随时可看） ---------- */
+async function openNote(){
+  let layer=$("#noteLayer");
+  if(!layer){
+    layer=document.createElement("div"); layer.id="noteLayer";
+    layer.onclick=e=>{ if(e.target===layer) layer.remove(); };
+    layer.innerHTML=`<div class="nl-box" id="noteBox"></div>`;
+    document.body.appendChild(layer);
+  }
+  const box=$("#noteBox");
+  box.innerHTML=`<button class="nl-close" onclick="document.getElementById('noteLayer').remove()">合上手记</button>
+    <div style="color:var(--gold);font-size:12px;letter-spacing:4px;margin-bottom:10px;">史官手记 · 我学到了什么</div>
+    <div style="color:var(--dim);font-size:13px;padding:20px 0;letter-spacing:3px;text-align:center;">史官署誊录你的手记……</div>`;
+  layer.style.display="flex";
+  let d=null;
+  try{
+    const res=await fetch(API+"/debrief",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({questions:(window.drawerTranscript||[]).map(x=>x.line).slice(-8).filter(l=>l&&l.length>4),
+        verdict_text:"（v2 社区模式：围观+质询+史实对照）"})});
+    d=await res.json();
+  }catch(e){}
+  const learned=(d&&d.what_learned)||["事件脉络与各方立场","孤证不立，交叉验证","个人抉择与历史结构"];
+  const one=(d&&d.one_liner)||"读史前，先读写史的人。";
+  box.innerHTML=`<button class="nl-close" onclick="document.getElementById('noteLayer').remove()">合上手记</button>
+    <div style="color:var(--gold);font-size:12px;letter-spacing:4px;margin-bottom:14px;">史官手记 · 我学到了什么</div>
+    ${learned.map((x,i)=>`<div class="note-item"><span class="no">${"一二三"[i]||"·"}</span><span>${esc(x)}</span></div>`).join("")}
+    <div style="text-align:center;font-size:18px;letter-spacing:3px;color:var(--gold);margin:18px 0;font-weight:900">「${esc(one)}」</div>
+    <div style="color:var(--dim);font-size:12px;text-align:center;letter-spacing:2px;">去「重演」看时间线 · 去帖子点「学」验史实 · 去「代入」「圆桌」深究</div>`;
+  speak(one,"n");
+}
+
+/* ---------- 质询抽屉 ---------- */
+let drawerRole=null, drawerTranscript=[];
+function askRole(roleId){
+  if(STAGE<1.5){ alert("人设档案还在生成，几秒后再试。"); return; }
+  drawerRole=roleId;
+  $("#drawer").classList.add("open");
+  $("#dTitle").textContent="质询 · "+roleName(roleId);
+  $("#dchat").innerHTML="";
+}
+$("#dSend").onclick=async ()=>{
+  const q=$("#dInput").value.trim(); if(!q||!drawerRole) return;
+  const dc=$("#dchat");
+  dc.insertAdjacentHTML("beforeend",`<div class="dline me"><div class="dw">你</div><div class="db">${esc(q)}</div></div>`);
+  $("#dInput").value="";
+  dc.insertAdjacentHTML("beforeend",`<div class="dline" id="dthink"><div class="dw">……</div><div class="db">（沉吟）</div></div>`);
+  try{
+    const res=await fetch(`${API}/interrogate`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({case_id:CASE_ID, question:q, transcript:drawerTranscript.slice(-12)})});
+    const d=await res.json();
+    document.getElementById("dthink")?.remove();
+    drawerTranscript.push({role:"shiguan",name:"你",line:q},{role:d.speaker,name:d.name,line:d.line});
+    dc.insertAdjacentHTML("beforeend",`<div class="dline"><div class="dw">${d.name}${d.broke_defense?" · <span style='color:var(--cinnabar)'>破防</span>":""}</div><div class="db">${esc(d.line)}<div style="color:var(--dim);font-size:12px;margin-top:3px">〔${d.note||""}〕</div></div></div>`);
+    speak(d.line, speakFor(d.speaker));
+    dc.scrollTop=999999;
+  }catch(e){ document.getElementById("dthink")?.remove(); }
+};
+$("#dInput").addEventListener("keydown",e=>{ if(e.key==="Enter") $("#dSend").click(); });
+
+/* ---------- 模式一：重演 ---------- */
+let m1Started=false, m2Started=false;
+function imgURL(k, cacheBust){
+  if(!CASE_ID) return "";
+  const base=`/court-assets/${encodeURIComponent(CASE_ID)}_${k}.jpg`;
+  return cacheBust ? `${base}?t=${Date.now()}` : base;
+}
+/* 图 key 兼容：v2 旧 a/b/c → 新 f1-f6/cover */
+/* 分角色声线（CosyVoice） */
+const VOICE_BY_IDX = ["cx","xz","gl","td"];
+function speakFor(roleId){ const i=CASE.roles.findIndex(r=>r.id===roleId); return VOICE_BY_IDX[Math.max(0,i)%4]; }
+function sceneFrame(key, cap){
+  /* live_science 模式：原生 img，onerror 5s/10s/20s 三次重试（带 ?t 时间戳避免缓存 404） */
+  return `<div class="scene-frame">
+    <img src="${imgURL(key)}" alt="图未到"
+      onerror="var s=this,d=s.dataset||(s.dataset={}),n=d.t||0;
+        d.t=+n+1;
+        if(d.t<4) setTimeout(function(){s.src=imgURL(key, true)}, 5000*d.t);">
+    <div class="scene-cap">${cap}</div></div>`;
+}
+async function runMode1(){
+  const st=$("#m1stage"); st.innerHTML="";
+  st.insertAdjacentHTML("beforeend",`<div class="narr" id="m1narr"></div>`);
+  st.insertAdjacentHTML("beforeend", sceneFrame("cover", `<span class="who">序幕</span>`));
+  const narr=$("#m1narr");
+  for(const line of (CASE.prologue||["……"])){ narr.textContent=""; const vd=speak(line,"n"); for(const ch of line){ narr.textContent+=ch; await sleep(30);} await vd; await sleep(500); narr.insertAdjacentHTML("beforeend","<br>"); }
+  st.insertAdjacentHTML("beforeend",`<button class="btn-main" id="m1b1">展开六格画卷 ▸</button>`);
+  $("#m1b1").onclick=()=>{ $("#m1b1").remove(); playFrames(); };
+}
+async function playFrames(){
+  /* 一张一张放映：每帧独立场景块（不覆盖）+ 语音朗读帧文（读完才放下一张）+ 等图 */
+  const st=$("#m1stage"); const frames=CASE.frames||[];
+  const box=document.createElement("div");
+  st.appendChild(box);
+  for(let i=0;i<frames.length;i++){
+    const k="f"+(i+1);
+    const frame=document.createElement("div");
+    frame.innerHTML=sceneFrame(k, `<span class="who">官方记载 · ${"一二三四五六"[i]||i+1}</span><span>${esc(frames[i]?.text||"")}</span>`);
+    frame.style.cssText="animation:fadeUp .55s ease both;";
+    box.appendChild(frame);
+    frame.scrollIntoView({behavior:"smooth",block:"nearest"});
+    await speak(frames[i]?.text||"", "n");
+    await sleep(600);
+  }
+  st.insertAdjacentHTML("beforeend",`<div class="rashomon-title">—— 但是 ——</div><div class="rashomon-sub">在场的人，记得的都不一样。</div><button class="btn-main" id="m1b2">进入罗生门 ▸</button>`);
+  $("#m1b2").onclick=()=>{ $("#m1b2").remove(); playRashomon(0); };
+}
+async function playRashomon(i){
+  const st=$("#m1stage"); const RS=CASE.rashomon||[];
+  if(i>=RS.length){ playQuiz(); return; }
+  const R=RS[i];
+  st.insertAdjacentHTML("beforeend",`<div class="rashomon-title">${R.title}</div><div class="rashomon-sub">${R.sub}</div>`);
+  st.insertAdjacentHTML("beforeend", sceneFrame("f2",`<span class="who">同一时刻 · 几双眼睛</span>`));
+  for(const l of (R.lines||[])){
+    st.insertAdjacentHTML("beforeend",`<div class="testimony"><div class="t-who" style="color:${roleColor(l.r)}">${l.who}</div><div class="t-line">${esc(l.text)}</div></div>`);
+    const vd=speak(l.text, speakFor(l.r)); await vd; await sleep(400);
+  }
+  st.insertAdjacentHTML("beforeend",`<button class="btn-main" style="font-size:15px;padding:10px 34px;" id="m1rb${i}">下一个瞬间 ▸</button>`);
+  $("#m1rb"+i).onclick=()=>{ $("#m1rb"+i).remove(); playRashomon(i+1); };
+  window.scrollTo(0,document.body.scrollHeight);
+}
+async function playQuiz(){
+  const st=$("#m1stage");
+  st.insertAdjacentHTML("beforeend",`<div class="rashomon-title">三题自检</div><div id="m1quiz"></div>`);
+  let right=0;
+  (CASE.quiz||[]).forEach((Q,qi)=>{
+    const card=document.createElement("div"); card.className="quiz-card"; card.innerHTML=`<div class="q">${qi+1}. ${esc(Q.q)}</div>`;
+    Q.opts.forEach((o,oi)=>{
+      const b=document.createElement("button"); b.className="quiz-opt"; b.textContent=o;
+      b.onclick=()=>{ if(oi===Q.a){b.classList.add("right");right++;}else{b.classList.add("wrong");card.querySelectorAll(".quiz-opt")[Q.a].classList.add("right");}
+        card.querySelectorAll(".quiz-opt").forEach(x=>x.disabled=true);
+        if(qi===(CASE.quiz||[]).length-1) st.insertAdjacentHTML("beforeend",`<div class="quiz-card" style="text-align:center;">答对 ${right}/${(CASE.quiz||[]).length}<br><br><button class="btn-main" style="display:inline-block;font-size:14px;padding:9px 28px;" onclick="showView('mode2')">去代入 ▸</button> <button class="btn-main" style="display:inline-block;font-size:14px;padding:9px 28px;margin-left:10px;" onclick="showView('mode3')">去圆桌 ▸</button></div>`);
+      };
+      card.appendChild(b);
+    });
+    $("#m1quiz").appendChild(card);
+  });
+}
+
+/* ---------- 模式二：代入 ---------- */
+let curRole=null, curChoices=[];
+function runMode2(){
+  const st=$("#m2stage"); st.innerHTML="";
+  st.insertAdjacentHTML("beforeend",`<div class="rashomon-title">换一个位置，活一遍</div><div class="rashomon-sub">执棋者，还是棋子？</div>
+  <div class="role-cards">${(CASE.mode2_roles||[]).map((r,i)=>`<button class="role-card" onclick="pickRole(${i})"><div class="rc-tag">${r.tag}</div><div class="rc-t">${r.name}</div><div class="rc-s">${r.sub}</div><div class="rc-d">${esc((r.desc||"").slice(0,60))}…</div></button>`).join("")}</div>`);
+}
+function pickRole(i){
+  curRole=CASE.mode2_roles[i]; curChoices=[];
+  const st=$("#m2stage"); st.innerHTML="";
+  st.insertAdjacentHTML("beforeend",`<div class="rashomon-title">${curRole.name}</div><div class="rashomon-sub">${curRole.sub}</div>
+  <div class="case-banner"><div class="cd">${esc(curRole.desc)}</div></div>
+  <button class="btn-main" id="m2b0">入 场 ▸</button>`);
+  $("#m2b0").onclick=()=>{ $("#m2b0").remove(); playRoleScene(0); };
+}
+async function playRoleScene(i){
+  const st=$("#m2stage"); const DS=curRole.decisions||[];
+  if(i>=DS.length){ playRoleEnding(); return; }
+  const S=DS[i];
+  st.insertAdjacentHTML("beforeend", sceneFrame("f"+(i*2+2),`<span class="who">第${"一二三"[i]}幕 · ${curRole.name}</span>`));
+  const narr=document.createElement("div"); narr.className="narr"; st.appendChild(narr);
+  narr.textContent="";
+  const nvd=speak(S.narr,"n");
+  for(const ch of S.narr){ narr.textContent+=ch; await sleep(24); }
+  await nvd;
+  /* 剧情：其他人物对该角色说话（对白推进冲突，各有声线） */
+  for(const d of (S.dialog||[])){
+    st.insertAdjacentHTML("beforeend",`<div class="testimony"><div class="t-who" style="color:${roleColor(d.r)}">${esc(roleName(d.r))}</div><div class="t-line"><span class="tw${i}"></span></div></div>`);
+    const tw=st.lastElementChild.querySelector(".tw"+i);
+    const vd=speak(d.line, speakFor(d.r));
+    for(const ch of d.line){ tw.textContent+=ch; await sleep(26); }
+    await vd; await sleep(300);
+  }
+  const card=document.createElement("div"); card.className="decision-card"; card.innerHTML=`<div class="dq">${esc(S.q)}</div>`;
+  (S.opts||[]).forEach(o=>{
+    const b=document.createElement("button"); b.className="opt-v"; b.innerHTML=`${esc(o.t)}<small>${esc(o.s||"")}</small>`;
+    b.onclick=async ()=>{ card.remove(); curChoices.push(o.t);
+      st.insertAdjacentHTML("beforeend",`<div class="testimony" style="border-left-color:var(--cinnabar);"><div class="t-line">${esc(o.react)}</div></div>`);
+      const vd=speak(o.react,"n"); vd.then(()=>playRoleScene(i+1)); };
+    card.appendChild(b);
+  });
+  st.appendChild(card); window.scrollTo(0,document.body.scrollHeight);
+}
+async function playRoleEnding(){
+  const st=$("#m2stage");
+  st.insertAdjacentHTML("beforeend", sceneFrame("f6",`<span class="who">后来 · AI 为你推演的结局</span>`));
+  st.insertAdjacentHTML("beforeend",`<div class="history-book" style="border-color:var(--gold);"><h4 style="color:var(--gold);">◈ 此后的一生</h4><div id="m2ending" style="min-height:80px;">（推演中……）</div><div id="m2hnote" style="margin-top:14px;color:var(--dim);font-size:14px;"></div></div>`);
+  window.scrollTo(0,document.body.scrollHeight);
+  let data=null;
+  try{
+    const res=await fetch(`${API}/consequence`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({role_desc:curRole.role_desc||curRole.desc, choices:curChoices})});
+    data=await res.json();
+  }catch(e){}
+  const el=$("#m2ending");
+  if(data&&data.ending){ el.textContent=""; const vd=speak(data.ending,"n"); for(const ch of data.ending){ el.textContent+=ch; await sleep(22); } await vd;
+    if(data.history_note) $("#m2hnote").textContent="◈ "+data.history_note;
+    if(data.epilogue) st.insertAdjacentHTML("beforeend",`<div class="epilogue">${data.epilogue}</div>`);
+  } else el.textContent="后来的事，史书没有记。";
+  st.insertAdjacentHTML("beforeend",`<div class="lesson-card"><h4>◈ 这一刻你学到的</h4>① <b>史料是筛选的结果</b>。② <b>个人与结构</b>。③ <span style="color:var(--cinnabar);cursor:pointer;" onclick="showView('mode3')">去圆桌</span>，听他们当面对质。</div>
+  <button class="btn-main" onclick="showView('world')">回到社区动态 ▸</button>`);
+}
+
+/* ---------- 模式三：圆桌 ---------- */
+let rtTranscript=[], rtQuestions=[], rtEvidence=false, rtBusy=false, rtStarted=false;
+function fillStarter(t){ $("#conclInput").value=t; }
+async function runMode3(){
+  if(rtStarted) return;
+  if(!(CASE.opening_script||[]).length){ alert("对质档案生成中，几秒后再试。"); return; }
+  rtStarted=true;
+  addRT("shiguan", `（惊堂木）升堂——${CASE.title}，众证人入庭！`);
+  for(const t of CASE.opening_script){
+    addRT(t.role, t.line);
+    rtTranscript.push({role:t.role,name:roleName(t.role),line:t.line});
+    await speak(t.line, speakFor(t.role)); await sleep(300);
+  }
+  const chips=$("#rtChips");
+  (CASE.suggested_questions||[]).forEach(q=>{ const b=document.createElement("button"); b.className="chip"; b.textContent=q; b.onclick=()=>rtAsk(q); chips.appendChild(b); });
+  const ev=CASE.physical_evidence;
+  const lb=document.createElement("button"); lb.className="chip"; lb.style.cssText="background:var(--cinnabar);color:#fff;"; lb.textContent="🗝 调取"+(ev?.name||"物证");
+  lb.onclick=()=>{ if(rtEvidence) return; rtEvidence=true; addRT(CASE.roles[0]?.id,`【${ev.name}】${ev.desc}`,"沉默的证人"); rtTranscript.push({role:"evidence",name:ev.name,line:ev.desc}); lb.disabled=true; };
+  chips.appendChild(lb);
+  const vb=document.createElement("button"); vb.className="chip"; vb.textContent="✒ 结案"; vb.onclick=()=>{$("#conclZone").classList.remove("hidden"); window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"});};
+  chips.appendChild(vb);
+  addRT("shiguan","该你发问了——戳他们的矛盾，调出物证，然后写下结案。");
+}
+function addRT(role,line,note){
+  const me=role==="shiguan";
+  const av=me?"史":roleName(role)[0];
+  $("#rtChat").insertAdjacentHTML("beforeend",
+    `<div class="msg ${me?'me':''}"><div class="avatar" style="background:${me?'#6b5b45':roleColor(role)}">${av}</div><div class="body"><div class="who">${me?'史官（你）':roleName(role)}</div><div class="bubble">${esc(line)}${note?`<div class="note">〔${note}〕</div>`:""}</div></div></div>`);
+  $("#rtChat").scrollTop=999999;
+}
+async function rtAsk(q){
+  if(rtBusy||!q.trim()) return;
+  rtBusy=true; $("#rtSend").disabled=true; $("#rtInput").value="";
+  addRT("shiguan",q); rtQuestions.push(q);
+  try{
+    const res=await fetch(`${API}/interrogate`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({case_id:CASE_ID,question:q,transcript:rtTranscript.slice(-14),evidence_shown:rtEvidence})});
+    const d=await res.json();
+    rtTranscript.push({role:"shiguan",name:"史官",line:q},{role:d.speaker,name:d.name,line:d.line});
+    addRT(d.speaker,d.line,d.note); speak(d.line, speakFor(d.speaker));
+    if(d.broke_defense) addRT("shiguan","◈ 谎言捕捉 +1 · "+d.name+"破防了");
+  }catch(e){ addRT("shiguan","（连接失败）"); }
+  rtBusy=false; $("#rtSend").disabled=false;
+}
+$("#rtSend").onclick=()=>rtAsk($("#rtInput").value);
+$("#rtInput").addEventListener("keydown",e=>{ if(e.key==="Enter") rtAsk($("#rtInput").value); });
+$("#conclBtn").onclick=async ()=>{
+  const concl=$("#conclInput").value.trim();
+  if(!concl){ alert("史官落笔前，总要先写点什么。"); return; }
+  $("#conclBtn").disabled=true; $("#conclBtn").textContent="落笔中……";
+  let d=null;
+  try{
+    const res=await fetch(`${API}/verdict`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({case_id:CASE_ID,conclusion:concl,evidence_used:rtEvidence?[CASE.physical_evidence?.name||"物证"]:[]})});
+    d=await res.json();
+  }catch(e){}
+  if(!d){ $("#conclBtn").textContent="落 笔 呈 堂"; $("#conclBtn").disabled=false; return; }
+  $("#conclZone").classList.add("hidden");
+  const R=$("#rtResult"); R.classList.remove("hidden");
+  R.insertAdjacentHTML("beforeend",`<div class="history-book" style="border-color:var(--gold);"><h4 style="color:var(--gold);">◈ 你的结案陈词</h4>${esc(concl)}</div>`);
+  (d.reactions||[]).forEach(r=>R.insertAdjacentHTML("beforeend",`<div class="testimony"><div class="t-who">${r.name} · 当庭反应</div><div class="t-line">${esc(r.line)}</div></div>`));
+  R.insertAdjacentHTML("beforeend",`<div class="poem-card">${esc(d.libai_poem||"").split("\n").join("<br>")}<div style="font-size:12.5px;color:var(--dim);margin-top:8px;">—— 庭外醉评</div></div>
+  <div class="compare-box"><h4>⚖ 史书对照</h4>${esc(d.verdict_reference||"")}</div><div class="lesson-card" id="rtLearned"><h4>◈ 今日所学</h4><div style="color:var(--dim)">（史官合上卷宗……）</div></div>`);
+  let db=null;
+  try{ const r2=await fetch(`${API}/debrief`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({questions:rtQuestions,verdict_text:concl})}); db=await r2.json(); }catch(e){}
+  const L=$("#rtLearned");
+  if(db&&db.what_learned){ L.innerHTML=`<h4>◈ 今日所学</h4><ul class="learned-list" style="padding-left:22px;">${db.what_learned.map(x=>`<li>${x}</li>`).join("")}</ul><div style="color:var(--dim);font-size:14px;margin-top:8px;">史官点评：${db.method_note||""}</div><div class="epilogue" style="margin:18px 0 4px;">${db.one_liner||"读史前，先读写史的人。"}</div>`; }
+  else L.innerHTML=`<h4>◈ 今日所学</h4>读任何史料前，先问：这是谁写的，他想让我相信什么？`;
+  window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"});
+};
+</script>
+</body>
+</html>
