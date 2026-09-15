@@ -2,7 +2,7 @@
 
 唯一画像链路：
 - 长期记忆：user_profile_facts / user_profile_overview / user_profile_skills / user_profile_fact_history。
-- 短期记忆：会话滚动摘要和最近对话由 ContextOrchestrator 负责，与本服务输出的长期画像一起注入。
+- 短期记忆：会话滚动摘要由框架 SessionMemory 维护（存 session.workspace，经装配层合并进 system），最近对话窗口同样由框架 memory 管理。
 - consolidate 异步执行，不阻塞主对话；主路径只读取已编译好的 overview，保证速度稳定。
 """
 

@@ -3,7 +3,9 @@
     <div class="callback-card">
       <div v-if="loading" class="callback-loading">
         <div class="spinner-lg"></div>
-        <p class="callback-text">正在通过 GitHub 登录...</p>
+        <p class="callback-text">
+          {{ rewardFlow ? "正在绑定并验证 GitHub…" : "正在通过 GitHub 登录…" }}
+        </p>
       </div>
       <div v-else-if="errorMsg" class="callback-error">
         <svg
@@ -18,9 +20,13 @@
           <line x1="15" y1="9" x2="9" y2="15" />
           <line x1="9" y1="9" x2="15" y2="15" />
         </svg>
-        <p class="error-title">登录失败</p>
+        <p class="error-title">
+          {{ rewardFlow ? "绑定或验证失败" : "登录失败" }}
+        </p>
         <p class="error-detail">{{ errorMsg }}</p>
-        <button class="retry-btn" @click="goLogin">返回登录页</button>
+        <button class="retry-btn" @click="goLogin">
+          {{ rewardFlow ? "返回设置" : "返回登录页" }}
+        </button>
       </div>
     </div>
   </div>
@@ -38,9 +44,10 @@ const { setAuth } = useAuth();
 
 const loading = ref(true);
 const errorMsg = ref("");
+const rewardFlow = sessionStorage.getItem("github-oauth-purpose") === "reward";
 
 function goLogin() {
-  router.replace("/login");
+  router.replace(rewardFlow ? "/settings" : "/login");
 }
 
 onMounted(async () => {
@@ -53,9 +60,16 @@ onMounted(async () => {
   }
 
   try {
-    const res = await authApi.githubCallback(code);
-    setAuth(res);
-    router.replace("/chat");
+    const res = await authApi.githubCallback(code, route.query.state);
+    sessionStorage.removeItem("github-oauth-purpose");
+    if (res.github_reward) {
+      sessionStorage.setItem(
+        `github-reward:${res.user_id}`,
+        res.github_reward.message,
+      );
+    }
+    if (!rewardFlow) setAuth(res);
+    router.replace(rewardFlow ? "/settings" : "/chat");
   } catch (e) {
     errorMsg.value = e.message || "GitHub 登录失败，请重试";
     loading.value = false;

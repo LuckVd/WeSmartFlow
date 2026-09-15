@@ -52,23 +52,27 @@ class SmartSearchTool(BaseTool):
 
     def __init__(
         self,
+        tavily_client=None,
         tavily_key: Optional[str] = None,
         anysearch_key: Optional[str] = None,
         llm_func=None,
-        before_call_hook=None,
+        user_id: str = "",
     ):
         """
         Args:
-            tavily_key: Tavily API Key
+            tavily_client: 工厂产出的 BaseSearchClient（已挂额度拦截 +
+                           记账 hook，见 services/search_factory）。
+            tavily_key:    未注入 client 时的回退 Key（兼容脚本用法）。
             anysearch_key: AnySearch API Key
-            llm_func: 异步 LLM 函数，用于复杂路由决策
-            before_call_hook: 调用前 hook（如额度检查）
+            llm_func:      异步 LLM 函数，用于复杂路由决策
         """
+        self._user_id = user_id
+        self._tavily_client = tavily_client
         self._tavily_key = tavily_key or os.getenv("TAVILY_API_KEY", "")
         self._anysearch_key = anysearch_key or os.getenv("ANYSEARCH_API_KEY", "")
         self._llm_func = llm_func
         self._service = None  # 懒加载
-        super().__init__(before_call_hook=before_call_hook)
+        super().__init__()
 
     def _get_service(self):
         """懒加载 SmartSearchService（避免 import 时就初始化）"""
@@ -76,6 +80,8 @@ class SmartSearchTool(BaseTool):
             from .service import SmartSearchService
 
             self._service = SmartSearchService(
+                user_id=self._user_id,
+                tavily_client=self._tavily_client,
                 tavily_key=self._tavily_key,
                 anysearch_key=self._anysearch_key,
                 llm_func=self._llm_func,

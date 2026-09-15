@@ -9,7 +9,6 @@ DailyBriefService：每日资讯简报生成服务（供简报页使用）
 
 from __future__ import annotations
 
-import os
 import json
 import logging
 from datetime import datetime, timezone
@@ -17,12 +16,10 @@ from datetime import datetime, timezone
 from repositories import UserRepository, DailyBriefRepository
 from utils.log_safe import safe_log
 from services.llm_factory import get_llm
-from services.quota import check_and_consume
 from agent_core.agent.react import ReActAgent
 from agent_core.tool.registry import ToolRegistry
-from agent_core.context.simple import SimpleContextBuilder
+from agent_core.context.static import StaticPromptBuilder
 from agent_core.tool.web import TavilySearch, WebFetch, ArxivSearch
-from database import get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -145,25 +142,16 @@ class DailyBriefService:
 
     async def _generate(self, user_id: str, interests: list[str]) -> dict:
         """用 ReAct Agent 自主搜索各关键词，整理成结构化简报 JSON"""
-        tavily_key = get_setting(user_id, "tavily_api_key") or os.getenv(
-            "TAVILY_API_KEY", ""
-        )
+        from services.search_factory import get_search_client
 
-        # 构建搜索工具的额度 hook
-        def _search_hook():
-            check_and_consume(user_id, "search")
-
-        # 构建 ReAct Agent，注册搜索工具（TavilySearch 注入额度 hook）
-        registry = ToolRegistry(
-            [
-                TavilySearch(api_key=tavily_key, before_call_hook=_search_hook),
-                WebFetch(),
-                ArxivSearch(),
-            ]
+        # 构建 ReAct Agent；搜索工具走工厂（额度拦截 + 记账挂在 client 上）
+        registry = ToolRegistry([WebFetch(), ArxivSearch()])
+        registry.register(
+            TavilySearch(client=get_search_client(user_id, scene="search"))
         )
         agent = ReActAgent(
-            llm=get_llm(user_id),
-            context_builder=SimpleContextBuilder(_BRIEF_SYSTEM_PROMPT),
+            llm=get_llm(user_id, scene="system"),
+            prompt_builder=StaticPromptBuilder(_BRIEF_SYSTEM_PROMPT),
             tool_registry=registry,
             max_steps=len(interests) * 3 + 2,  # 每个关键词最多搜3次，留2步余量
         )

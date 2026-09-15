@@ -2,10 +2,15 @@
 
 本模块刻意保持"叶子"地位：
 - 不导入 ``agent.base`` / ``tool.registry`` / ``llm.base`` 等任何项目内部模块
-- 仅依赖 Python 标准库
+- 仅依赖标准库与 ``agent_core.runtime.events``（同样是叶子模块）
 
 这样 ``agent.base``（``BaseAgent`` 实现）与 ``tool.registry``
 （执行工具时 yield 事件）都可以单向依赖本模块，避免互相 import 形成环。
+
+**业务事件的归属**：框架只认识 :class:`DomainEvent` 这个不透明信封，
+不解释其 ``kind`` 含义。具体业务事件（卡片生成、掌握度更新等）由业务层
+在 ``agents/events.py`` 中定义。本模块底部保留的三个具名业务事件属于
+**兼容遗留**，新代码请改用 ``DomainEvent``。
 """
 
 from __future__ import annotations
@@ -13,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Union
+
+from ..runtime.events import DomainEvent
 
 
 # ============================================================
@@ -26,6 +33,8 @@ class AgentFinishReason(Enum):
     STOP = "stop"  # 正常结束
     MAX_STEPS = "max_steps"  # 达到最大步数
     ERROR = "error"  # 运行时错误
+    CANCELLED = "cancelled"  # 调用方主动取消
+    BUDGET = "budget"  # 超出运行预算（token / 成本 / 时限）
 
 
 # ============================================================
@@ -88,7 +97,7 @@ class AgentToolRunEvent:
     id: str  # tool_call id，用于关联到对应的 AgentToolCallEvent
     tool_name: str
     step: int
-    content: "Union[str, AgentStreamEvent]"
+    content: "Union[str, list, AgentStreamEvent]"
     index: int = 0  # 该工具调用在本轮 tool_calls 中的顺序（从 0 开始）
 
 
@@ -104,7 +113,7 @@ class AgentToolResultEvent:
     id: str
     tool_name: str
     arguments: Dict[str, Any]
-    result: "Union[str, AgentStreamEvent]"
+    result: "Union[str, list, AgentStreamEvent]"
     step: int
     index: int = 0  # 该工具调用在本轮 tool_calls 中的顺序（从 0 开始）
 
@@ -115,16 +124,29 @@ class AgentFinalEvent:
 
     content: str
     finish_reason: AgentFinishReason
+    detail: str = ""  # 补充说明（如超出的预算维度、取消原因）
 
 
 # ============================================================
-# 业务语义事件（由工具 hook 触发，可直接推送给前端）
+# 业务语义事件（遗留，新代码请用 DomainEvent）
 # ============================================================
+#
+# 这三个类把教育业务概念（卡片类型、知识节点、掌握度）写进了框架的事件
+# 协议里，属于层次污染。它们保留在此仅为兼容既有 import，等业务侧迁移到
+# ``DomainEvent`` 后即可删除。
+#
+# 迁移方式::
+#
+#     # 旧
+#     yield FileCreatedEvent(file_id=fid, title=t, file_type="html")
+#     # 新（业务侧在 agents/events.py 定义构造器）
+#     ctx.emit(DomainEvent("file_created", {"file_id": fid, "title": t,
+#                                           "file_type": "html"}))
 
 
 @dataclass
 class FileCreatedEvent:
-    """文件（PDF 卡片等）生成完毕。"""
+    """[遗留] 文件（PDF 卡片等）生成完毕。"""
 
     file_id: str  # 相对路径，如 "{uuid}.pdf"
     title: str = ""  # 文件标题（如卡片标题）
@@ -133,7 +155,7 @@ class FileCreatedEvent:
 
 @dataclass
 class NodeCreatedEvent:
-    """知识节点被创建。"""
+    """[遗留] 知识节点被创建。"""
 
     node_id: str
     title: str
@@ -141,7 +163,7 @@ class NodeCreatedEvent:
 
 @dataclass
 class MasteryUpdatedEvent:
-    """节点掌握度发生变化。"""
+    """[遗留] 节点掌握度发生变化。"""
 
     node_id: str
     delta: float  # 本次变化量
@@ -156,22 +178,43 @@ AgentStreamEvent = Union[
     AgentToolRunEvent,
     AgentToolResultEvent,
     AgentFinalEvent,
+    DomainEvent,
+    # --- 遗留业务事件 ---
     FileCreatedEvent,
     NodeCreatedEvent,
     MasteryUpdatedEvent,
 ]
 
 
-def extract_event_text(result: "Union[str, AgentStreamEvent]") -> str:
+def extract_event_text(result: "Union[str, list, AgentStreamEvent]") -> str:
     """从工具结果中提取可写入 history 的文本字符串。
 
     - str：直接返回
     - 带 content 字段的事件（AgentFinalEvent / AgentThinkEvent 等）：返回 content
-    - 其他事件：返回空字符串（业务事件不携带文本，不应写入 history）
+    - 其他事件（含 DomainEvent）：返回空字符串（业务事件不携带文本，不应写入 history）
     """
     if isinstance(result, str):
         return result
+    if isinstance(result, list):
+        return "\n".join(
+            block.get("text", "")
+            for block in result
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    if isinstance(result, DomainEvent):
+        return ""
     return getattr(result, "content", "")
+
+
+def is_domain_event(event: Any) -> bool:
+    """判断是否为业务语义事件（含遗留三类）。
+
+    框架在写入 history 时需要跳过业务事件——它们是副作用通知，不是对话内容。
+    """
+    return isinstance(
+        event,
+        (DomainEvent, FileCreatedEvent, NodeCreatedEvent, MasteryUpdatedEvent),
+    )
 
 
 __all__ = [
@@ -183,9 +226,11 @@ __all__ = [
     "AgentToolRunEvent",
     "AgentToolResultEvent",
     "AgentFinalEvent",
+    "DomainEvent",
     "FileCreatedEvent",
     "NodeCreatedEvent",
     "MasteryUpdatedEvent",
     "AgentStreamEvent",
     "extract_event_text",
+    "is_domain_event",
 ]

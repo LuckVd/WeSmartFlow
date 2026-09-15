@@ -122,7 +122,16 @@ StreamEvent = Union[StreamChunkEvent, ToolCallDeltaEvent, StreamFinishEvent]
 
 
 class BaseLLM(ABC):
-    """LLM 抽象基类。"""
+    """LLM 抽象基类。
+
+    **无状态约定**：本类及其子类不得持有任何"单次运行"的状态。
+    运行期状态（工具调用序号、预算消耗等）统一由
+    :class:`~agent_core.runtime.run_context.RunContext` 承载。
+
+    这条约定使 LLM 实例可以安全地在并发 Agent 之间共享与池化——
+    改造前 ``tool_call_count`` 挂在此处，一旦复用客户端就会导致
+    并发 Agent 的工具序号互相污染。
+    """
 
     def __init__(
         self, model_name: str, before_call: BeforeCallHook | None = None, **kwargs: Any
@@ -130,8 +139,6 @@ class BaseLLM(ABC):
         self.model_name = model_name
         self._before_call = before_call
         self.default_config: Dict[str, Any] = kwargs
-        # 累积工具调用总数，用于计算跨轮次的全局 tool index，保证每轮 index 不重叠
-        self.tool_call_count: int = 0
 
     def _fire_before_call(self) -> None:
         """同步触发 before_call hook（额度检查等）。"""

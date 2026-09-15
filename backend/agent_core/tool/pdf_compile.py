@@ -16,6 +16,50 @@ from .base import BaseTool
 logger = logging.getLogger(__name__)
 
 
+def _cjk_font_chain() -> str:
+    """生成跨平台的 CJK 主字体选择代码。
+
+    用 fontspec 的 \\IfFontExistsTF 按优先级探测系统里真实存在的字体，
+    避免硬编码某个字体导致在其它平台（如 macOS 缺 Droid Sans Fallback）
+    编译失败。返回一串嵌套的 \\IfFontExistsTF{...}{...}{...}，最内层
+    兜底为空（找不到任何中文字体则不设置，交由 xeCJK 默认处理）。
+    """
+    fonts = (
+        "Droid Sans Fallback",  # Linux 服务器常见兜底
+        "Noto Sans CJK SC",  # Linux / 跨平台
+        "PingFang SC",  # macOS
+        "Songti SC",  # macOS
+        "Heiti SC",  # macOS
+        "WenQuanYi Zen Hei",  # Linux
+    )
+    inner = ""
+    for font in reversed(fonts):
+        inner = f"\\IfFontExistsTF{{{font}}}{{\\setCJKmainfont{{{font}}}}}{{{inner}}}"
+    return inner
+
+
+def _prepare_tex_for_compile(src: Path, dst: Path) -> Path:
+    r"""复制 .tex 到 dst 并预处理：
+    注入 \setCJKmainfont 让 xeCJK 能找到字体（项目源 .tex 没设字体）。
+    主题（SimplePlus-BeamerTheme）已通过 TEXINPUTS 注入编译环境，
+    这里不再替换 \usetheme，直接使用源 tex 声明的主题。
+    返回 dst 路径，调用方应使用此路径代替 src 调 xelatex。
+    """
+    raw = src.read_text(encoding="utf-8", errors="ignore")
+    lines = raw.splitlines()
+    out = []
+    cjk_injected = False
+    for ln in lines:
+        if "\\usepackage{xeCJK}" in ln and not cjk_injected:
+            out.append(ln)
+            out.append(_cjk_font_chain())
+            cjk_injected = True
+            continue
+        out.append(ln)
+    dst.write_text("\n".join(out), encoding="utf-8")
+    return dst
+
+
 def validate_pdf_file(pdf_path: Path, min_size: int = 1024) -> Optional[str]:
     """校验 PDF 是否是可交付的完整文件；返回 None 表示有效，否则返回失败原因。"""
     try:
@@ -256,14 +300,20 @@ class LatexPdfCompileTool(BaseTool):
                 tmp_dir = Path(tmp_dir_name)
                 tmp_pdf_path = tmp_dir / pdf_path.name
                 tmp_log_path = tmp_dir / log_path.name
+                # 预处理：注入 CJK 字体（主题由 TEXINPUTS 环境变量解析）
+                compile_tex = _prepare_tex_for_compile(tex, tmp_dir / tex.name)
 
                 if compiler_used == "latexmk":
                     result = self._compile_with_latexmk(
-                        tex, env=env, timeout=timeout, output_dir=tmp_dir
+                        compile_tex, env=env, timeout=timeout, output_dir=tmp_dir
                     )
                 else:
                     result = self._compile_with_xelatex(
-                        tex, env=env, timeout=timeout, runs=runs, output_dir=tmp_dir
+                        compile_tex,
+                        env=env,
+                        timeout=timeout,
+                        runs=runs,
+                        output_dir=tmp_dir,
                     )
 
                 self._copy_compile_log(tmp_log_path, log_path)

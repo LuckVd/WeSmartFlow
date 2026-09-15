@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.llm_factory import get_llm
+from services.external_usage import current_usage, before_raw, record_raw
 
 _CASES_DIR = Path(__file__).parent / "cases"
 
@@ -81,7 +82,9 @@ async def interrogate(
         f"史官发问：「{question}」\n\n"
         "请决定谁回应、如何回应，按系统要求的 JSON 输出。"
     )
-    response = await get_llm(user_id, with_quota=False).async_think(
+    response = await get_llm(
+        current_usage().user_id if user_id == "default" else user_id, scene="court"
+    ).async_think(
         messages=[
             {"role": "system", "content": _director_system},
             {"role": "user", "content": prompt},
@@ -144,7 +147,9 @@ async def verdict(
         f"真实史书记载（用于对照）：{case['verdict_reference']}\n\n"
         "请生成各角色（被告与证人）对这份判决的当场反应、李白点评诗、史官结语。"
     )
-    response = await get_llm(user_id, with_quota=False).async_think(
+    response = await get_llm(
+        current_usage().user_id if user_id == "default" else user_id, scene="court"
+    ).async_think(
         messages=[
             {"role": "system", "content": _verdict_system},
             {"role": "user", "content": prompt},
@@ -198,7 +203,9 @@ async def finale(
         "请生成每个角色对玩家的临别赠言（注意：赠言要体现该角色的立场与性格，"
         "对玩家既不必客气也不必苛责——像人对人说话），以及一句总评。"
     )
-    response = await get_llm(user_id, with_quota=False).async_think(
+    response = await get_llm(
+        current_usage().user_id if user_id == "default" else user_id, scene="court"
+    ).async_think(
         messages=[
             {"role": "system", "content": _finale_system},
             {"role": "user", "content": prompt},
@@ -243,6 +250,7 @@ async def illustrate(prompt: str, user_id: str = "default") -> Dict[str, Any]:
         "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
     )
     model = cfg.get("IMG_MODEL", "qwen-image-2.0")
+    before_raw("image", model=model, provider="qwen")
     if not api_key:
         return {"ok": False, "error": "missing IMG_API_KEY"}
     payload = {
@@ -269,6 +277,7 @@ async def illustrate(prompt: str, user_id: str = "default") -> Dict[str, Any]:
         )
         if not url:
             return {"ok": False, "error": "no image url in response"}
+        record_raw("image", model=model, provider="qwen")
         import urllib.request as _ur
 
         req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -306,7 +315,9 @@ async def consequence(
         f"玩家做出的选择：{choices_text}\n\n"
         "请推演这个人物的命运。"
     )
-    response = await get_llm(user_id, with_quota=False).async_think(
+    response = await get_llm(
+        current_usage().user_id if user_id == "default" else user_id, scene="court"
+    ).async_think(
         messages=[
             {"role": "system", "content": _consequence_system},
             {"role": "user", "content": prompt},
@@ -350,7 +361,9 @@ async def debrief(
         f"该生的最终判决：{verdict_text}\n\n"
         "请生成学习总结（三条收获分别对应：史实、史料实证方法、立场与视角）。"
     )
-    response = await get_llm(user_id, with_quota=False).async_think(
+    response = await get_llm(
+        current_usage().user_id if user_id == "default" else user_id, scene="court"
+    ).async_think(
         messages=[
             {"role": "system", "content": _debrief_system},
             {"role": "user", "content": prompt},

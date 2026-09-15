@@ -1,32 +1,32 @@
 """ReAct Agent 实现。
 
 范式：Reason + Act
-每一步：LLM 推理（可能包含 Thought）→ 若有工具调用则执行 → 将结果追加 history → 继续推理
-直到 LLM 不再调用工具（输出最终答案）或达到 max_steps。
+每一步：LLM 推理（可能包含 Thought）→ 若有工具调用则执行 → 将结果追加 history
+→ 继续推理，直到 LLM 不再调用工具（输出最终答案）或触发预算上限。
+
+**实现说明**：本类不再自己写循环。真正的循环在
+:func:`~agent_core.agent.loop.tool_calling_loop` 中只有一份（流式实现），
+``async_stream`` 直接返回它，``async_run`` / ``run`` 通过消费它并只取终态
+来实现。这样三个入口的行为必然一致——改造前三份独立循环已经出现工具
+``index`` 传递不一致的静默 bug。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from ..context.base import BaseContextBuilder
-from ..context.simple import SimpleContextBuilder
-from ..llm.base import BaseLLM, StreamChunkEvent, ToolCallDeltaEvent, StreamFinishEvent
+from ..context.builder import SystemPromptBuilder
+from ..context.static import StaticPromptBuilder
+from ..llm.base import BaseLLM
+from ..memory.base import Message
+from ..runtime.run_context import RunContext
 from ..tool.registry import ToolRegistry
 from .base import AgentResult, BaseAgent
 from .events import (
-    AgentFinishReason,
-    AgentFinalEvent,
     AgentStreamEvent,
-    AgentThinkChunkEvent,
-    AgentThinkEvent,
-    AgentToolCallChunkEvent,
-    AgentToolCallEvent,
-    AgentToolResultEvent,
-    extract_event_text,
 )
+from .loop import tool_calling_loop
 
 logger = logging.getLogger(__name__)
 
@@ -54,167 +54,146 @@ Thought: <分析当前情况，明确已知信息、缺少什么、下一步应�
 class ReActAgent(BaseAgent):
     """ReAct 范式 Agent。
 
-    ``context_builder`` 可选，不传时自动使用内置的 ReAct 专用 system prompt。
+    ``prompt_builder`` 可选，不传时自动使用内置的 ReAct 专用 system prompt。
 
-    循环结构::
-
-        history = [user_message]
-        messages = build_messages(history)
-        loop (max_steps):
-            response = think(messages, tools)
-            add_assistant_message(history, response)
-            if response.has_tool_calls:
-                执行所有工具 → add_tool_result(history, ...)
-                messages = build_messages(history)   # 重建，不追加新 user
-            else:
-                返回 STOP，response.content 即最终答案
-
-    子类可覆写 ``_on_tool_result()`` 在每次工具返回后插入额外逻辑。
+    子类可覆写 ``_async_on_tool_result()`` 在每次工具返回后插入额外逻辑。
     """
 
     def __init__(
         self,
         llm: BaseLLM,
-        context_builder: Optional[BaseContextBuilder] = None,
+        prompt_builder: Optional[SystemPromptBuilder] = None,
         tool_registry: Optional[ToolRegistry] = None,
         max_steps: int = 20,
         llm_config: Optional[Dict[str, Any]] = None,
+        memory_factory: Optional[Any] = None,
+        context_window: Optional[int] = None,
     ):
         """
         Args:
             llm:             LLM 实例。
-            context_builder: 上下文构建器。为 None 时使用内置 ReAct 专用 prompt。
+            prompt_builder: system prompt 构建器。为 None 时使用内置 ReAct 专用 prompt。
             tool_registry:   工具注册表，为 None 时表示无工具。
-            max_steps:       推理循环最大步数。
+            max_steps:       推理循环最大步数（未显式传入 ctx 时作为默认预算）。
             llm_config:      每次调用 LLM 时透传的额外参数（temperature 等）。
+            memory_factory:  记忆工厂，签名 ``() -> BaseMemory``。
+                             默认 :class:`FullMemory`（不裁剪）。
+                             长对话场景可传 ``lambda: WindowMemory(30)`` 等。
+            context_window:  模型上下文窗口（token）。传入后装配层会扣除
+                             system 与 tool schema 的开销，把剩余预算下发给
+                             记忆用于裁剪。为 None 时从
+                             ``ctx.settings.llm.context_window`` 取值；
+                             仍为 0 则不做预算控制。
         """
-        if context_builder is None:
-            context_builder = SimpleContextBuilder(_DEFAULT_REACT_SYSTEM_PROMPT)
+        if prompt_builder is None:
+            prompt_builder = StaticPromptBuilder(_DEFAULT_REACT_SYSTEM_PROMPT)
         super().__init__(
             llm=llm,
-            context_builder=context_builder,
+            prompt_builder=prompt_builder,
             tool_registry=tool_registry,
             max_steps=max_steps,
             llm_config=llm_config,
+            memory_factory=memory_factory,
         )
-
-    def _run(self, user_input: str, **kwargs: Any) -> AgentResult:
-        history: List[Dict[str, Any]] = []
-
-        # 将 user 消息加入 history，再构建完整 messages（system + history）
-        self.context_builder.add_user_message(history, user_input)
-        messages = self.context_builder.build_messages(history, **kwargs)
-
-        tools = self.tool_registry.get_definitions() or None
-
-        for step in range(self.max_steps):
-            logger.debug("[ReAct] ── step %d ──", step + 1)
-
-            response = self.think(messages, tools=tools)
-
-            # 打印 Thought（LLM 在工具调用前输出的思考过程）
-            if response.content:
-                logger.debug("[ReAct] Thought: %s", response.content)
-
-            # 将 assistant 消息追加到 history
-            self.context_builder.add_assistant_message(history, response)
-
-            if not response.has_tool_calls:
-                logger.debug("[ReAct] 完成，共 %d 步", step + 1)
-                return AgentResult(
-                    finish_reason=AgentFinishReason.STOP,
-                    final_response=response,
-                    history=history,
-                )
-
-            # 执行所有工具调用，结果追加到 history
-            for tc in response.tool_calls:
-                logger.debug("[ReAct] Action: %s(%s)", tc.name, tc.arguments)
-                result = self.tool_registry.execute(tc.name, tc.arguments)
-                logger.debug(
-                    "[ReAct] Observation: %s",
-                    result[:300] if isinstance(result, str) else result,
-                )
-                self.context_builder.add_tool_result(history, tc.id, tc.name, result)
-                self._on_tool_result(tc.name, tc.arguments, result, history, **kwargs)
-
-            # 重建 messages（system + 更新后的 history，不追加新 user）
-            messages = self.context_builder.build_messages(history, **kwargs)
-
-        logger.warning("[ReAct] 达到最大步数 %d，强制结束", self.max_steps)
-        return AgentResult(
-            finish_reason=AgentFinishReason.MAX_STEPS,
-            final_response=None,
-            history=history,
-        )
+        self.context_window = context_window
 
     # ------------------------------------------------------------------
-    # 异步推理循环
+    # 流式推理 —— 唯一的真实实现
     # ------------------------------------------------------------------
 
-    async def _async_run(self, user_input: str, **kwargs: Any) -> AgentResult:
-        """异步版本的 ReAct 推理循环。
+    async def async_stream(
+        self,
+        user_input: str,
+        ctx: Optional[RunContext] = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[AgentStreamEvent, None]:
+        """异步流式推理，每个关键节点 yield 一个事件。
 
-        与同步 ``_run()`` 逻辑完全一致，但使用：
-        - ``async_think()`` 异步调用 LLM
-        - ``tool_registry.async_execute()`` 异步执行工具
+        事件类型（按发生顺序）：
+        - AgentThinkChunkEvent    — LLM 思考文本的实时分片
+        - AgentToolCallChunkEvent — tool_call 参数分片
+        - AgentThinkEvent         — 本轮思考完成汇总
+        - AgentToolCallEvent      — 即将调用某个工具
+        - AgentToolRunEvent       — 工具执行过程
+        - DomainEvent             — 工具 hook 产出的业务事件
+        - AgentToolResultEvent    — 工具执行完毕
+        - AgentFinalEvent         — 最终回复（推理结束）
 
-        这使得在 IO 密集场景（网络请求、文件读写）下不会阻塞事件循环。
+        Args:
+            user_input:   用户输入文本。
+            ctx:          运行上下文。为 None 时按 ``max_steps`` 构造默认上下文。
+            **kwargs:     透传给 prompt_builder；其中 ``chat_history``
+                          会被预置进对话记忆（见 :meth:`_prepare_memory`）。
+
+        Yields:
+            AgentStreamEvent
         """
-        history: List[Dict[str, Any]] = []
+        ctx = self._prepare_context(ctx)
+        memory = self._prepare_memory(ctx, **kwargs)
+        memory.append({"role": "user", "content": user_input})
+        # 挂回 ctx（per-run 对象，并发安全），供 _async_run 回填 history
+        ctx.memory = memory
 
-        self.context_builder.add_user_message(history, user_input)
-        messages = self.context_builder.build_messages(history, **kwargs)
+        async for event in tool_calling_loop(
+            llm=self.llm,
+            tools=self.tool_registry,
+            ctx=ctx,
+            memory=memory,
+            system_prompt=self._system_prompt_fn(user_input=user_input, **kwargs),
+            llm_config=self.llm_config or None,
+            on_tool_result=self._make_tool_result_callback(**kwargs),
+            context_window=self._resolve_context_window(ctx),
+        ):
+            yield event
 
-        tools = self.tool_registry.get_definitions() or None
+    # ------------------------------------------------------------------
+    # 非流式入口
+    # ------------------------------------------------------------------
+    #
+    # 复用 BaseAgent._async_run（消费 async_stream 取终态），仅补上
+    # history 字段——这样循环调用代码始终只有一份。
 
-        for step in range(self.max_steps):
-            logger.debug("[ReAct-Async] ── step %d ──", step + 1)
+    async def _async_run(
+        self, user_input: str, ctx: Optional[RunContext] = None, **kwargs: Any
+    ) -> AgentResult:
+        """异步推理：消费 ``async_stream`` 并补齐 history。"""
+        ctx = self._prepare_context(ctx)
+        result = await super()._async_run(user_input, ctx, **kwargs)
+        if ctx.memory is not None:
+            result.history = ctx.memory.all_messages()
+        return result
 
-            response = await self.async_think(messages, tools=tools)
+    # ------------------------------------------------------------------
+    # 内部辅助
+    # ------------------------------------------------------------------
 
-            if response.content:
-                logger.debug("[ReAct-Async] Thought: %s", response.content)
+    def _resolve_context_window(self, ctx: RunContext) -> Optional[int]:
+        """确定本次运行的上下文窗口。
 
-            self.context_builder.add_assistant_message(history, response)
+        优先级：构造参数 > ``ctx.settings.llm.context_window`` > 不限制。
 
-            if not response.has_tool_calls:
-                logger.debug("[ReAct-Async] 完成，共 %d 步", step + 1)
-                return AgentResult(
-                    finish_reason=AgentFinishReason.STOP,
-                    final_response=response,
-                    history=history,
-                )
+        返回 None 表示不做预算控制——此时装配层退化为"全量塞入"，
+        与未接入预算前的行为一致。
+        """
+        if self.context_window:
+            return self.context_window
+        window = getattr(ctx.settings.llm, "context_window", 0)
+        return window or None
 
-            # 并行执行所有工具调用
-            async def _exec(tc_item: Any) -> Tuple[Any, str]:
-                res = await self.tool_registry.async_execute(
-                    tc_item.name, tc_item.arguments
-                )
-                return tc_item, res
+    def _make_tool_result_callback(self, **kwargs: Any):
+        """把子类的 ``_async_on_tool_result`` 适配为循环所需的回调。"""
 
-            pairs = await asyncio.gather(*[_exec(tc) for tc in response.tool_calls])
+        async def _callback(
+            tool_name: str,
+            arguments: Dict[str, Any],
+            result: str,
+            history: List[Message],
+        ) -> None:
+            await self._async_on_tool_result(
+                tool_name, arguments, result, history, **kwargs
+            )
 
-            # 按原始顺序写入 history
-            for tc, result in pairs:
-                logger.debug(
-                    "[ReAct-Async] Observation[%s]: %s",
-                    tc.name,
-                    result[:300] if isinstance(result, str) else result,
-                )
-                self.context_builder.add_tool_result(history, tc.id, tc.name, result)
-                await self._async_on_tool_result(
-                    tc.name, tc.arguments, result, history, **kwargs
-                )
-
-            messages = self.context_builder.build_messages(history, **kwargs)
-
-        logger.warning("[ReAct-Async] 达到最大步数 %d，强制结束", self.max_steps)
-        return AgentResult(
-            finish_reason=AgentFinishReason.MAX_STEPS,
-            final_response=None,
-            history=history,
-        )
+        return _callback
 
     # ------------------------------------------------------------------
     # 扩展钩子
@@ -248,172 +227,8 @@ class ReActAgent(BaseAgent):
         """每次工具执行完成后的异步钩子，子类可覆写。
 
         默认调用同步版 ``_on_tool_result()``。
-
-        Args:
-            tool_name:  工具名称。
-            arguments:  工具调用参数。
-            result:     工具执行结果字符串。
-            history:    当前 history（已包含本次 tool result）。
         """
         self._on_tool_result(tool_name, arguments, result, history, **kwargs)
 
-    # ------------------------------------------------------------------
-    # 流式推理（异步生成器）
-    # ------------------------------------------------------------------
 
-    async def async_stream(
-        self, user_input: str, **kwargs: Any
-    ) -> AsyncGenerator[AgentStreamEvent, None]:
-        """异步流式推理，每个关键节点 yield 一个事件。
-
-        事件类型（按发生顺序）：
-        - AgentThinkChunkEvent — LLM 思考文本的实时分片（流式）
-        - AgentThinkEvent      — 本轮思考完成汇总（含完整 Thought 文本）
-        - AgentToolCallEvent   — 即将调用某个工具
-        - AgentToolResultEvent — 工具执行完毕
-        - AgentFinalEvent      — 最终回复（推理结束）
-
-        Args:
-            user_input: 用户输入文本。
-            **kwargs:   透传给 context_builder.build_messages() 的额外参数。
-
-        Yields:
-            AgentStreamEvent
-        """
-        history: List[Dict[str, Any]] = []
-        self.context_builder.add_user_message(history, user_input)
-        messages = self.context_builder.build_messages(history, **kwargs)
-        tools = self.tool_registry.get_definitions() or None
-
-        for step in range(1, self.max_steps + 1):
-            logger.debug("[ReAct-Stream] ── step %d ──", step)
-
-            # 使用 stream_think 实时流出文本
-            response = None
-            async for event in self.llm.stream_think(
-                messages,
-                tools=tools,
-                tool_choice="auto" if tools else None,
-                config=self.llm_config,
-            ):
-                if isinstance(event, StreamChunkEvent):
-                    yield AgentThinkChunkEvent(
-                        delta=event.delta,
-                        content=event.content,
-                        step=step,
-                    )
-                elif isinstance(event, ToolCallDeltaEvent):
-                    yield AgentToolCallChunkEvent(
-                        index=event.index,
-                        id=event.id,
-                        tool_name=event.name,
-                        arguments_delta=event.arguments_delta,
-                        arguments_so_far=event.arguments_so_far,
-                        step=step,
-                    )
-                elif isinstance(event, StreamFinishEvent):
-                    response = event.response
-
-            # stream_think 异常时 response 可能为 None
-            if response is None or response.is_error:
-                error_msg = (
-                    response.metadata.get("error_message", "未知错误")
-                    if response
-                    else "流式调用异常"
-                )
-                logger.error("[ReAct-Stream] LLM 错误: %s", error_msg)
-                yield AgentFinalEvent(
-                    content=f"[Error] {error_msg}",
-                    finish_reason=AgentFinishReason.ERROR,
-                )
-                return
-
-            # 本轮思考完成，yield 汇总事件
-            if response.content:
-                logger.debug("[ReAct-Stream] Thought: %s", response.content)
-                yield AgentThinkEvent(content=response.content, step=step)
-
-            self.context_builder.add_assistant_message(history, response)
-
-            if not response.has_tool_calls:
-                # 最终回复
-                logger.debug("[ReAct-Stream] 完成，共 %d 步", step)
-                yield AgentFinalEvent(
-                    content=response.content,
-                    finish_reason=AgentFinishReason.STOP,
-                )
-                return
-
-            # 并行执行所有工具调用，先 yield 所有 AgentToolCallEvent
-            for tc in response.tool_calls:
-                yield AgentToolCallEvent(
-                    id=tc.id,
-                    tool_name=tc.name,
-                    arguments=tc.arguments,
-                    step=step,
-                    index=tc.index,
-                )
-                logger.debug("[ReAct-Stream] Action: %s(%s)", tc.name, tc.arguments)
-
-            # 并行流式执行：用 Queue 汇聚多个生成器的事件
-            # queue 中放 AgentToolRunEvent / AgentToolResultEvent，或 None 表示某个工具完成
-            _DONE = object()  # 哨兵
-            queue: asyncio.Queue = asyncio.Queue()
-
-            # 本轮起始 index = 当前累积调用总数，本轮结束后加上本轮工具数
-            round_start = self.llm.tool_call_count
-
-            async def _run_tool(tc_item: Any, tc_index: int) -> None:
-                """在独立 task 中流式执行单个工具，结果推入 queue。"""
-                async for run_event in self.tool_registry.async_stream_execute(
-                    tc_item.id, tc_item.name, tc_item.arguments, step, tc_index
-                ):
-                    await queue.put(run_event)
-                await queue.put(_DONE)
-
-            # 启动所有工具 task，全局 index = round_start + tc.index
-            tasks = [
-                asyncio.create_task(_run_tool(tc, round_start + tc.index))
-                for tc in response.tool_calls
-            ]
-            pending = len(tasks)
-
-            # 按到达顺序消费事件，同时收集每个工具的最终结果
-            results: Dict[str, Any] = {}
-            while pending > 0:
-                item = await queue.get()
-                if item is _DONE:
-                    pending -= 1
-                    continue
-                yield item
-                # AgentToolResultEvent 携带完整 result，直接记录
-                if isinstance(item, AgentToolResultEvent):
-                    results[item.id] = item.result  # str 或 AgentStreamEvent
-
-            # 等待所有 task 正常退出（异常已在 _run_tool 内部处理）
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 本轮工具调用结束，累积调用总数
-            self.llm.tool_call_count += len(response.tool_calls)
-
-            # 按原始顺序写入 history，保证 LLM 上下文顺序一致
-            for tc in response.tool_calls:
-                result = results.get(tc.id, "")
-                result_str = extract_event_text(result)
-                logger.debug(
-                    "[ReAct-Stream] Observation[%s]: %s", tc.name, result_str[:300]
-                )
-
-                self.context_builder.add_tool_result(
-                    history, tc.id, tc.name, result_str
-                )
-                await self._async_on_tool_result(
-                    tc.name, tc.arguments, result_str, history, **kwargs
-                )
-            messages = self.context_builder.build_messages(history, **kwargs)
-
-        logger.warning("[ReAct-Stream] 达到最大步数 %d，强制结束", self.max_steps)
-        yield AgentFinalEvent(
-            content="",
-            finish_reason=AgentFinishReason.MAX_STEPS,
-        )
+__all__ = ["ReActAgent"]

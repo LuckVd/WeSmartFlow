@@ -25,48 +25,116 @@
       </button>
     </div>
 
+    <!-- 功能可用性（issue #62/#103） -->
+    <div v-if="features" class="features-status card">
+      <span class="fs-title">功能状态</span>
+      <span
+        v-for="(ok, name) in features"
+        :key="name"
+        class="fs-chip"
+        :class="ok ? 'ok' : 'off'"
+      >
+        {{ featureLabels[name] || name }}{{ ok ? " ✓" : " 未配置" }}
+      </span>
+    </div>
+
     <!-- 用量概览 -->
     <div v-if="quotaLoaded" class="quota-overview card">
       <div class="quota-header">
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M12 20V10" />
-          <path d="M18 20V4" />
-          <path d="M6 20v-4" />
-        </svg>
-        <span class="quota-title">免费额度用量</span>
-        <span class="quota-hint">配置自己的 API Key 后不受额度限制</span>
+        <span class="quota-title">我的积分</span>
+        <span class="wallet-badge">跨月保留</span>
       </div>
-      <div class="quota-bars">
-        <div v-for="item in quotaItems" :key="item.key" class="quota-item">
-          <div class="qi-label">
-            <span class="qi-icon" v-html="item.icon" />
-            <span class="qi-name">{{ item.name }}</span>
-            <span v-if="!item.isPlatform" class="qi-badge unlimited"
-              >自有 Key · 无限</span
-            >
-            <span v-else class="qi-count"
-              >{{ item.used }} / {{ item.limit }}</span
-            >
-          </div>
-          <div v-if="item.isPlatform" class="qi-bar-track">
-            <div
-              class="qi-bar-fill"
-              :class="item.barClass"
-              :style="{ width: item.percent + '%' }"
-            />
-          </div>
-          <div v-else class="qi-bar-track">
-            <div class="qi-bar-fill unlimited-bar" style="width: 100%" />
-          </div>
+      <div class="wallet-balance-row">
+        <div>
+          <strong class="wallet-number">{{
+            formatCredits(wallet.remaining)
+          }}</strong
+          ><span class="wallet-unit">可用积分</span>
         </div>
+        <span class="quota-hint"
+          >本月已用 {{ formatCredits(wallet.used) }}</span
+        >
       </div>
+      <div
+        class="wallet-progress"
+        role="progressbar"
+        aria-label="可用积分"
+        :aria-valuenow="Math.max(0, wallet.remaining || 0)"
+        :aria-valuemax="walletCapacity"
+        :aria-valuemin="0"
+        :aria-valuetext="`${formatCredits(wallet.remaining)} 积分可用`"
+      >
+        <div
+          class="wallet-progress-fill"
+          :class="{ 'is-low': walletPercent < 20 }"
+          :style="{ width: walletPercent + '%' }"
+        />
+      </div>
+      <div class="wallet-scale">
+        <span>0</span><span>{{ formatCredits(walletCapacity) }} 积分</span>
+      </div>
+      <p v-if="wallet.balance < 0" class="wallet-note">
+        待抵扣 {{ formatCredits(-wallet.balance) }} 积分，后续赠送将优先抵扣。
+      </p>
+      <p class="wallet-note">
+        注册赠送
+        {{ formatCredits(wallet.signup_credits) }} 积分；次月起每月补充最多
+        {{ formatCredits(wallet.monthly_credits) }}，补至
+        {{ formatCredits(wallet.monthly_cap) }}。
+      </p>
+      <div class="wallet-reward">
+        <div class="wallet-reward-copy">
+          <a
+            href="https://github.com/Tencent/WeSmartFlow"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Star WeSmartFlow</a
+          >
+          <span
+            >额外获得
+            {{ formatCredits(wallet.github_reward_credits) }} 积分</span
+          >
+        </div>
+        <span v-if="wallet.github_reward_claimed" class="wallet-claimed"
+          >✓ 已领取</span
+        >
+        <button
+          v-else
+          class="wallet-claim-button"
+          :disabled="rewardLoading"
+          @click="claimGithubReward"
+        >
+          {{
+            rewardLoading
+              ? "正在跳转…"
+              : wallet.github_linked
+                ? "验证并领取"
+                : "绑定 GitHub 并领取"
+          }}
+        </button>
+      </div>
+      <p v-if="rewardMessage" class="wallet-note" role="status">
+        {{ rewardMessage }}
+      </p>
+      <details class="wallet-history">
+        <summary>积分明细</summary>
+        <div
+          v-for="(entry, index) in wallet.transactions"
+          :key="index"
+          class="wallet-entry"
+        >
+          <div>
+            <span>{{ transactionLabel(entry.kind) }}</span
+            ><time>{{ new Date(entry.created_at).toLocaleString() }}</time>
+          </div>
+          <span
+            class="wallet-entry-amount"
+            :class="{ 'is-gain': entry.amount > 0 }"
+            >{{ entry.amount > 0 ? "+" : entry.amount < 0 ? "−" : ""
+            }}{{ formatCredits(Math.abs(entry.amount)) }}</span
+          >
+        </div>
+      </details>
     </div>
 
     <div class="settings-layout">
@@ -404,8 +472,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from "vue";
-import { settingsApi } from "@/api";
+import { ref, reactive, onMounted, computed } from "vue";
+import { settingsApi, authApi } from "@/api";
+import { useAuth } from "@/composables/useAuth.js";
 
 const activeTab = ref("model");
 const showKey = ref(false);
@@ -433,7 +502,64 @@ const testImageUrl = ref(""); // 测试生成的图片 base64 data URL
 
 // 用量数据
 const quotaLoaded = ref(false);
-const quotaItems = ref([]);
+const features = ref(null);
+const featureLabels = {
+  llm: "AI 对话",
+  search: "联网搜索",
+  image: "图像生成",
+};
+async function loadFeatures() {
+  try {
+    const r = await settingsApi.getFeatures();
+    features.value = r.data;
+  } catch {
+    /* 静默失败：状态条不显示 */
+  }
+}
+loadFeatures();
+const wallet = ref({ remaining: 0, used: 0, transactions: [] });
+const rewardLoading = ref(false);
+const { user } = useAuth();
+const rewardMessage = ref("");
+const formatCredits = (credits) => Number(credits || 0).toLocaleString("zh-CN");
+const walletCapacity = computed(() =>
+  Math.max(
+    Number(wallet.value.signup_credits || 5000000) +
+      (wallet.value.github_reward_claimed
+        ? Number(wallet.value.github_reward_credits || 0)
+        : 0),
+    Number(wallet.value.remaining || 0),
+  ),
+);
+const walletPercent = computed(() =>
+  Math.min(
+    100,
+    Math.max(
+      0,
+      (Number(wallet.value.remaining || 0) / walletCapacity.value) * 100,
+    ),
+  ),
+);
+
+const transactionLabel = (kind) =>
+  ({
+    signup: "注册/迁移赠送",
+    monthly: "月度补充",
+    github_star: "GitHub Star 奖励",
+    usage: "API 消费",
+  })[kind] || kind;
+async function claimGithubReward() {
+  rewardLoading.value = true;
+  rewardMessage.value = "";
+  try {
+    const { authorize_url } = await authApi.getGitHubAuthorizeUrl(true);
+    sessionStorage.setItem("github-oauth-purpose", "reward");
+    window.location.href = authorize_url;
+  } catch (error) {
+    rewardMessage.value = error.message;
+    rewardLoading.value = false;
+  }
+}
 
 // 数据备份状态
 const exportingBackup = ref(false);
@@ -492,36 +618,13 @@ const tabs = [
 async function loadQuota() {
   try {
     const data = await settingsApi.getQuota();
-    const icons = {
-      llm: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`,
-      search: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
-      image: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
-    };
-    const names = { llm: "AI 对话", search: "搜索", image: "图像生成" };
-    quotaItems.value = ["llm", "search", "image"].map((key) => {
-      const info = data[key] || {
-        used: 0,
-        limit: 0,
-        remaining: 0,
-        is_platform: true,
-      };
-      const percent =
-        info.limit > 0 ? Math.min((info.used / info.limit) * 100, 100) : 0;
-      let barClass = "bar-ok";
-      if (percent >= 90) barClass = "bar-danger";
-      else if (percent >= 70) barClass = "bar-warn";
-      return {
-        key,
-        name: names[key],
-        icon: icons[key],
-        used: info.used,
-        limit: info.limit,
-        remaining: info.remaining,
-        isPlatform: info.is_platform,
-        percent,
-        barClass,
-      };
-    });
+    wallet.value = data;
+    const key = `github-reward:${user.value?.id || user.value?.user_id || ""}`;
+    rewardMessage.value = (sessionStorage.getItem(key) || "").replace(
+      "Star 奖励 5 元已到账。",
+      "Star 奖励 5,000,000 积分已到账。",
+    );
+    sessionStorage.removeItem(key);
     quotaLoaded.value = true;
   } catch (e) {
     console.error("加载用量数据失败", e);
@@ -922,6 +1025,188 @@ onMounted(() => {
 }
 
 /* 用量概览 */
+.features-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.fs-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.fs-chip {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+.fs-chip.ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+}
+.fs-chip.off {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.wallet-badge {
+  margin-left: auto;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+}
+.wallet-balance-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 16px;
+  flex-wrap: wrap;
+}
+.wallet-number {
+  font-size: 32px;
+  font-weight: 650;
+  letter-spacing: -1px;
+  font-variant-numeric: tabular-nums;
+}
+.wallet-unit {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.wallet-progress {
+  height: 9px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--border);
+}
+.wallet-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent, #6366f1);
+  transition: width 0.3s ease;
+}
+.wallet-progress-fill.is-low {
+  background: var(--orange, #d99b45);
+}
+.wallet-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.wallet-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.wallet-reward {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.wallet-reward-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.wallet-reward-copy a {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+.wallet-reward-copy a:hover {
+  text-decoration: underline;
+}
+.wallet-reward-copy span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.wallet-claim-button {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wallet-claim-button:hover {
+  border-color: var(--accent, #6366f1);
+}
+.wallet-claim-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.wallet-claimed {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.wallet-history {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.wallet-history summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.wallet-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.wallet-entry > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wallet-entry time {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.wallet-entry-amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.wallet-entry-amount.is-gain {
+  color: var(--accent, #6366f1);
+}
+@media (max-width: 480px) {
+  .wallet-number {
+    font-size: 27px;
+  }
+  .wallet-reward {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wallet-progress-fill {
+    transition: none;
+  }
+}
+
 .quota-overview {
   padding: 18px 22px;
   margin-bottom: 16px;

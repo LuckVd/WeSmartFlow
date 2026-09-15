@@ -61,6 +61,7 @@ class DocumentBrief(BaseSchema):
     file_type: str
     file_size: int
     status: str
+    error_msg: Optional[str] = None
     total_pages: Optional[int]
     node_ids: list[str]
     node_count: int

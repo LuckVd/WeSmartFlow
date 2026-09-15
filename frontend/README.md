@@ -29,7 +29,6 @@ frontend/
 │   ├── components/      # 可复用组件
 │   │   ├── EduViz/      #   交互式可视化沙盒
 │   │   │   ├── EduVizSandbox.vue  # iframe 沙盒渲染器
-│   │   │   ├── EduVizDemo.vue     # 可视化演示组件
 │   │   │   ├── eduviz-sdk.js      # EduViz SDK 核心库
 │   │   │   └── sandboxTemplate.js # 沙盒 HTML 模板
 │   │   ├── HtmlCard/    #   HTML 知识卡片渲染
@@ -70,16 +69,22 @@ frontend/
 
 ## 环境要求
 
-| 依赖    | 版本 | 说明     |
-| ------- | ---- | -------- |
-| Node.js | ≥ 18 | 运行时   |
-| npm     | ≥ 9  | 包管理器 |
+| 依赖    | 版本            | 说明     |
+| ------- | --------------- | -------- |
+| Node.js | 24+             | 运行时   |
+| npm     | 随 Node.js 安装 | 包管理器 |
 
 ## 安装与启动
 
+以下命令在 `frontend/` 目录执行；Conda 环境配置见[主 README](../README.md#-快速开始)，当前使用 Node.js 25。
+
 ```bash
-# 安装依赖
-npm install
+# 安装依赖，包括后端 EduViz 校验需要的 ESLint
+npm install --include=dev
+
+# 自动构建探索主题所需的依赖
+npm --prefix ../examples/Magic_English_Town install
+npm --prefix ../examples/chemastry_lab install
 
 # 开发模式（端口 5173）
 npm run dev
@@ -90,6 +95,10 @@ npm run build
 # 预览生产构建
 npm run preview
 ```
+
+`npm run dev` 和 `npm run build` 都会先构建[目录中登记的本地探索主题](../examples/explore-catalog.json)。运行前请完成上面的主题依赖安装。
+
+开发环境的 `/api`、`/files` 请求由 [vite.config.js](vite.config.js) 代理到 `http://localhost:8080`；生产部署需要单独配置 API 转发。`npm run preview` 用于预览构建产物，不会启动后端。
 
 ## 核心依赖
 
@@ -108,21 +117,27 @@ npm run preview
 | 页面     | 路由         | 功能                                     |
 | -------- | ------------ | ---------------------------------------- |
 | 登录     | `/login`     | 多方式登录（邮箱验证码 / GitHub / 微信） |
-| AI 辅导  | `/chat`      | 交互式对话学习 + 沉浸式课程生成（首页）  |
+| AI 辅导  | `/chat`      | 交互式对话学习                           |
 | 今日学习 | `/dashboard` | 个性化学习计划、学习热力图、待复习节点   |
 | 知识图谱 | `/graph`     | 力导向图可视化、节点详情、掌握度展示     |
-| 知识库   | `/knowledge` | 知识节点列表管理                         |
+| 知识库   | `/knowledge` | 兼容旧地址，重定向到 `/graph`            |
 | 测验     | `/quiz`      | 多题型测验（单选/填空/判断/开放题）      |
 | 文档     | `/documents` | 文档上传与知识抽取                       |
 | 学习记录 | `/sessions`  | 历史会话列表                             |
 | 每日简报 | `/brief`     | AI 生成的每日学习资讯                    |
 | 个人中心 | `/profile`   | 用户画像与学习统计                       |
 | 设置     | `/settings`  | LLM 配置、系统设置                       |
+| 项目首页 | `/`          | 公开介绍页                               |
+| 探索主题 | `/explore`   | 独立的互动学习体验                       |
+| 沉浸课程 | `/immersive` | 章节课件、讲解与练习                     |
+| 微信助手 | `/weclaw`    | WeClaw 绑定与通道管理                    |
+
+路由使用 hash 模式，例如 `/chat` 对应 `http://localhost:5173/#/chat`。首页与登录页公开访问，学习页面需要登录。
 
 ## 特性
 
 - **SSE 流式对话** — 实时展示 AI 回复，支持 Markdown + LaTeX + 代码高亮渲染
-- **HTML 知识卡片** — 安全渲染 Agent 生成的交互式 HTML 知识卡片（DOMPurify 净化）
+- **HTML 知识卡片** — 在 iframe 中展示后端规范化的 HTML 知识卡片，支持公式与插图
 - **EduViz 交互式可视化** — iframe 沙盒渲染 Agent 生成的教学可视化（算法演示、参数探索等）
 - **测验卡片** — 内嵌式多题型测验，即时反馈与评分
 - **沉浸式学习** — 多章节课件渐进式展示，支持音频播放
@@ -131,6 +146,35 @@ npm run preview
 - **暗色主题** — 支持亮色 / 暗色主题切换
 - **离开确认** — 生成中离开页面时弹出确认提示，防止意外中断
 - **响应式布局** — 适配桌面端浏览器
+
+## 流式生成与渲染
+
+| 入口               | 传输与结果                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| 辅导对话中的工具   | `/api/sessions/{session_id}/chat/stream` 通过 SSE 推送工具进度与最终结果              |
+| 独立 HTML 卡片生成 | `/api/cards/generate-html` 通过 SSE 推送进度与结果                                    |
+| 独立可视化生成     | `/api/viz/generate` 在消费后端工具流后返回 JSON `{ok, viz_id, error}`                 |
+| 已保存内容         | `/api/documents/{id}/raw` 读取主文件，同一文档下的 `/asset/{asset_path}` 读取伴生资源 |
+
+[HtmlCard.vue](src/components/HtmlCard/HtmlCard.vue) 将生成的文档加载到 iframe；[VizCard.vue](src/components/VizCard/VizCard.vue) 读取 JavaScript，再交给 [EduVizSandbox.vue](src/components/EduViz/EduVizSandbox.vue) 注入 SDK 与沙盒模板执行。
+
+EduViz 在约 900px 的内部宽度上渲染，再整体缩放以适配卡片。执行完成、尺寸就绪后才显示内容；运行异常显示在卡片中，主题切换会通知 iframe。后端的 600px 重排检查是提示项，不是前端缩放卡片的实际方式。
+
+修改 SDK API 时，也要同步 [CORE.md](../backend/agents/prompts/skills/eduviz_sdk/CORE.md)、[注册表](../backend/agents/tools/viz_registry.py) 与相关浏览器检查。部署时保持前端产物和后端校验使用的 SDK 版本一致。检查能力及局限见[后端指南](../backend/README.md#内容生成工具)。
+
+## 检查与排障
+
+在 `frontend/` 目录执行：
+
+```bash
+npm run validate:examples
+npx eslint src/components/EduViz/EduVizSandbox.vue src/components/EduViz/sandboxTemplate.js src/components/EduViz/eduviz-sdk.js
+```
+
+- 探索主题构建提示找不到 Vite：进入对应主题目录安装依赖。
+- API 请求失败：检查后端健康接口，以及开发代理或生产反向代理配置。
+- 可视化空白：查看卡片错误和浏览器控制台；重试已有代码不会重新生成一份代码。
+- Chromium 安装与浏览器回归命令见[后端指南](../backend/README.md#验证)。
 
 ## 开发规范
 

@@ -6,6 +6,8 @@ import {
   renameSync,
   rmSync,
   statSync,
+  readdirSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
@@ -107,6 +109,20 @@ for (const topic of buildableTopics) {
     fail(`${topic.title} 构建完成但缺少入口文件：${topic.build.entryFile}`);
   }
 
+  // Cover every generated chapter page as well as the six example entrypoints.
+  function injectAuth(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const file = resolve(dir, entry.name);
+      if (entry.isDirectory()) injectAuth(file);
+      else if (entry.name.endsWith(".html")) {
+        const html = readFileSync(file, "utf8");
+        if (!html.includes('src="/example-auth.js"')) {
+          writeFileSync(file, html.replace(/<head([^>]*)>/i, '<head$1><script src="/example-auth.js"></script>'));
+        }
+      }
+    }
+  }
+  injectAuth(stagingDir);
   mkdirSync(dirname(outputDir), { recursive: true });
   rmSync(outputDir, { recursive: true, force: true });
   renameSync(stagingDir, outputDir);

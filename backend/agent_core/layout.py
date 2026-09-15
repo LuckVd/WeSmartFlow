@@ -1,244 +1,56 @@
-"""用户数据目录布局。
+"""Agent 工作空间目录布局。
 
-统一定义每个用户的持久化数据路径，所有模块通过此类获取路径，
-而非自行硬编码拼接。
+框架只关心 Agent 自身需要的两个路径：
 
-每个用户拥有独立的 UserDataLayout 实例，对应一个数据根目录。
+- ``agent.md``  — Agent 自我定义（identity）
+- ``skills/``   — 用户自定义技能
 
-目录结构::
+业务产物（课程、章节、TeX、习题等）的目录协议属于业务领域，已移至
+``services/immersive/layout.py``。
 
-    <root>/
-    ├── agent.md                    # Agent 自我定义（identity）
-    ├── skills/                     # 用户自定义技能
-    │   └── <name>/
-    │       └── SKILL.md
-    └── courses/                    # 课程输出
-        └── <course_slug>/
-            ├── outline.json        # 大纲（顶层 Agent 输出）
-            ├── chapter_01/
-            │   ├── research.json   # 检索资料（researcher 输出）
-            │   ├── chapter_01.tex  # TeX 源码（tex_writer 输出）
-            │   ├── chapter_01.pdf  # 编译后 PDF
-            │   ├── chapter_01_exercises.md  # 习题（exercises_generator 输出）
-            │   └── images/         # 教学插图
-            ├── chapter_02/
-            │   └── ...
-            └── ..."""
+.. note::
+   改造前本模块含 ``CourseLayout``（定义 ``chapter_01.tex`` /
+   ``chapter_01_exercises.md`` 等文件名），那是"沉浸式课程生成"这一个业务
+   场景的文件契约，与通用 Agent 框架无关。现已拆出。
+
+   ``UserDataLayout`` 作为兼容别名保留，其 ``course()`` 方法委托给业务层实现。
+"""
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
-def _slugify(text: str) -> str:
-    """将文本转为安全的目录名片段。"""
+def slugify(text: str) -> str:
+    """将文本转为安全的目录名片段。
+
+    保留中文与字母数字，其余字符折叠为下划线，长度截断到 60。
+    """
     slug = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "_", (text or "").strip()).strip("_")
     return slug[:60] or "untitled"
 
 
-@dataclass
-class CourseLayout:
-    """单个课程的输出目录布局。
-
-    管理一门课程下所有章节的文件路径，作为 Agent 间数据传递的文件系统协议。
-
-    目录结构::
-
-        <course_dir>/
-        ├── outline.json
-        ├── chapter_01/
-        │   ├── research.json
-        │   ├── chapter_01.tex
-        │   ├── chapter_01.pdf
-        │   ├── chapter_01_exercises.md
-        │   └── images/
-        └── ...
-
-    Example::
-
-        course = layout.course("太阳系")
-        course.ensure_dirs()
-
-        # 顶层 Agent 写入大纲
-        course.save_outline(outline_data)
-
-        # researcher 写入资料
-        course.save_research(1, research_data)
-
-        # tex_writer 读取资料
-        research = course.load_research(1)
-    """
-
-    course_dir: Path
-
-    def __post_init__(self) -> None:
-        self.course_dir = Path(self.course_dir).resolve()
-        self.outline_file: Path = self.course_dir / "outline.json"
-
-    # ---- 章节目录 ----
-
-    def chapter_dir(self, chapter_id: int) -> Path:
-        """获取指定章节的输出目录。"""
-        return self.course_dir / f"chapter_{chapter_id:02d}"
-
-    def chapter_images_dir(self, chapter_id: int) -> Path:
-        """获取指定章节的图片目录。"""
-        return self.chapter_dir(chapter_id) / "images"
-
-    # ---- 章节文件路径 ----
-
-    def research_file(self, chapter_id: int) -> Path:
-        """获取指定章节的研究资料 JSON 路径。"""
-        return self.chapter_dir(chapter_id) / "research.json"
-
-    def tex_file(self, chapter_id: int) -> Path:
-        """获取指定章节的 TeX 源码路径。"""
-        return self.chapter_dir(chapter_id) / f"chapter_{chapter_id:02d}.tex"
-
-    def pdf_file(self, chapter_id: int) -> Path:
-        """获取指定章节的 PDF 路径。"""
-        return self.chapter_dir(chapter_id) / f"chapter_{chapter_id:02d}.pdf"
-
-    def exercises_file(self, chapter_id: int) -> Path:
-        """获取指定章节的习题 Markdown 路径。"""
-        return self.chapter_dir(chapter_id) / f"chapter_{chapter_id:02d}_exercises.md"
-
-    # ---- 大纲读写 ----
-
-    def save_outline(self, data: Dict[str, Any]) -> Path:
-        """保存课程大纲到 outline.json。"""
-        self.course_dir.mkdir(parents=True, exist_ok=True)
-        self.outline_file.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return self.outline_file
-
-    @staticmethod
-    def _sanitize_json(raw: str) -> str:
-        """清洗 LLM 输出的 JSON：去除非法控制字符 + 修复非法反斜杠转义。
-
-        处理两类常见问题：
-        1. 非法控制字符：LLM 在 JSON 字符串值中混入 raw \\n \\r 等
-        2. 非法反斜杠转义：LLM 输出 LaTeX 命令如 \\to, \\infty, \\text 等，
-           导致 json.loads 报 "Invalid \\escape" 错误。
-           JSON 合法转义仅有：\\" \\\\ \\/ \\b \\f \\n \\r \\t \\uXXXX
-        3. LaTeX 伪合法转义：\\to, \\text, \\nabla, \\rightarrow 等以合法
-           转义字符开头但实际是 LaTeX 命令的情况。
-        """
-        import re
-
-        # 第一步：移除 JSON 字符串值内的 raw 控制字符（\x00-\x08, \x0a-\x1f 除 \x09）
-        # 保留 \t (0x09) 因为它虽需转义但 Python json 解析器能容忍
-        cleaned = re.sub(r"[\x00-\x08\x0a-\x1f]", "", raw)
-
-        # 第二步：修复非法反斜杠转义（基础）
-        # 将 \ 后面不是合法 JSON 转义字符的情况，把 \ 替换为 \\（双反斜杠）
-        # 合法转义字符：" \ / b f n r t u
-        cleaned = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", cleaned)
-
-        # 第三步：修复 LaTeX "伪合法" 转义
-        # \t, \n, \r, \b, \f 在 JSON 中是合法转义（制表符、换行等），
-        # 但如果后面紧跟字母，则很可能是 LaTeX 命令（如 \to, \text, \nabla, \rightarrow, \frac, \binom）
-        # 将这些情况也替换为双反斜杠
-        cleaned = re.sub(r"\\([tnrbf])(?=[a-zA-Z])", r"\\\\\1", cleaned)
-
-        return cleaned
-
-    @staticmethod
-    def _safe_json_loads(raw: str) -> Any:
-        """尝试解析 JSON，失败时用激进策略修复后重试。"""
-        sanitized = CourseLayout._sanitize_json(raw)
-        try:
-            return json.loads(sanitized)
-        except json.JSONDecodeError:
-            # 激进策略：将所有非双反斜杠的单反斜杠都转义
-            # 先把已有的 \\ 替换为占位符，再把剩余的 \ 替换为 \\，最后恢复占位符
-            placeholder = "\x00BACKSLASH\x00"
-            aggressive = sanitized.replace("\\\\", placeholder)
-            aggressive = aggressive.replace("\\", "\\\\")
-            aggressive = aggressive.replace(placeholder, "\\\\")
-            return json.loads(aggressive)
-
-    def load_outline(self) -> Optional[Dict[str, Any]]:
-        """加载课程大纲，文件不存在返回 None。
-
-        自动清洗 LLM 输出中可能包含的非法 JSON 控制字符和 LaTeX 转义。
-        """
-        if not self.outline_file.exists():
-            return None
-        raw = self.outline_file.read_text(encoding="utf-8")
-        return self._safe_json_loads(raw)
-
-    # ---- 研究资料读写 ----
-
-    def save_research(self, chapter_id: int, data: Dict[str, Any]) -> Path:
-        """保存章节研究资料到 research.json。"""
-        ch_dir = self.chapter_dir(chapter_id)
-        ch_dir.mkdir(parents=True, exist_ok=True)
-        path = self.research_file(chapter_id)
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return path
-
-    def load_research(self, chapter_id: int) -> Optional[Dict[str, Any]]:
-        """加载章节研究资料，文件不存在返回 None。
-
-        自动清洗 LLM 输出中可能包含的非法 JSON 控制字符和 LaTeX 转义。
-        """
-        path = self.research_file(chapter_id)
-        if not path.exists():
-            return None
-        raw = path.read_text(encoding="utf-8")
-        return self._safe_json_loads(raw)
-
-    # ---- 目录创建 ----
-
-    def ensure_dirs(self, chapter_ids: Optional[list] = None) -> None:
-        """确保课程目录和指定章节目录存在。
-
-        Args:
-            chapter_ids: 需要创建的章节 ID 列表。为 None 时只创建课程根目录。
-        """
-        self.course_dir.mkdir(parents=True, exist_ok=True)
-        if chapter_ids:
-            for cid in chapter_ids:
-                self.chapter_dir(cid).mkdir(parents=True, exist_ok=True)
-                self.chapter_images_dir(cid).mkdir(parents=True, exist_ok=True)
-
-    def __repr__(self) -> str:
-        return f"CourseLayout(course_dir={self.course_dir})"
+#: 兼容别名（改造前为模块私有函数，业务侧曾直接 import）
+_slugify = slugify
 
 
 @dataclass
-class UserDataLayout:
-    """用户数据目录布局。
+class AgentWorkspace:
+    """Agent 工作空间目录布局。
 
-    一个实例对应一个用户的数据根目录，所有文件路径在初始化时一次性计算好。
-    用户画像已统一存储在数据库中，本布局只负责 Agent 自定义、技能与课程产物路径。
+    一个实例对应一个用户（或一个 Agent 实例）的数据根目录。
 
     Args:
-        root: 用户数据根目录路径。
-        user_id: 用户 ID，用于课程/技能等文件隔离。
+        root:    工作空间根目录路径。
+        user_id: 用户 ID，用于日志与业务侧文件隔离。
 
     Example::
 
-        layout = UserDataLayout(root=Path("./data/documents"), user_id="u_abc123")
-        layout.ensure_dirs()
-
-        # 各模块使用 layout 获取路径
-        skills_loader = SkillsLoader(layout)
-        ctx_builder = ContextBuilderWithProfileAndSkill(layout, user_id="u_abc123")
-
-        # 课程输出
-        course = layout.course("太阳系")
-        course.ensure_dirs(chapter_ids=[1, 2, 3])
+        ws = AgentWorkspace(root=Path("./data/documents"), user_id="u_abc123")
+        loader = SkillsLoader(workspace_skills_dir=ws.skills_dir)
     """
 
     root: Path
@@ -247,14 +59,11 @@ class UserDataLayout:
     def __post_init__(self) -> None:
         self.root = Path(self.root).resolve()
 
-        # ---- Agent 自我定义 ----
+        # Agent 自我定义
         self.identity_file: Path = self.root / "agent.md"
 
-        # ---- 用户自定义技能 ----
+        # 用户自定义技能
         self.skills_dir: Path = self.root / "skills"
-
-        # ---- 课程输出 ----
-        self.courses_dir: Path = self.root / "courses"
 
     def skill_file(self, name: str) -> Path:
         """获取指定技能的 SKILL.md 路径。
@@ -267,32 +76,75 @@ class UserDataLayout:
         """
         return self.skills_dir / name / "SKILL.md"
 
-    def course(self, topic: str) -> CourseLayout:
-        """获取指定课程的 CourseLayout 实例。
+    def ensure_dirs(self) -> None:
+        """确保工作空间目录存在。
+
+        不会自动调用，由使用方在需要写入时手动调用。
+        """
+        self.skills_dir.mkdir(parents=True, exist_ok=True)
+
+    def __repr__(self) -> str:
+        return f"AgentWorkspace(root={self.root}, user_id={self.user_id})"
+
+
+#: 业务侧课程布局工厂。由业务层在导入时注册，框架不感知其具体类型。
+#: 见 ``services/immersive/layout.py`` 底部的 ``register_course_layout()`` 调用。
+_course_layout_factory: Any = None
+
+
+def register_course_layout_factory(factory: Any) -> None:
+    """注册业务侧的课程布局工厂（由业务层调用）。
+
+    这是控制反转：框架提供挂载点，业务层提供实现，避免框架反向 import 业务模块。
+
+    Args:
+        factory: 签名为 ``(course_dir: Path) -> Any`` 的可调用对象。
+    """
+    global _course_layout_factory  # pylint: disable=global-statement
+    _course_layout_factory = factory
+
+
+class UserDataLayout(AgentWorkspace):
+    """[兼容] 用户数据目录布局。
+
+    保留 ``courses_dir`` 与 ``course()`` 以兼容既有业务调用；
+    ``course()`` 通过已注册的工厂委托给业务层实现。
+
+    新代码请直接使用 :class:`AgentWorkspace`（框架路径）与
+    ``services.immersive.layout.CourseLayout``（业务路径）。
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.courses_dir: Path = self.root / "courses"
+
+    def course(self, topic: str) -> Any:
+        """获取指定课程的布局实例（委托已注册的业务工厂）。
 
         Args:
             topic: 课程主题，会被 slugify 为目录名。
 
-        Returns:
-            CourseLayout 实例，管理该课程下所有章节的文件路径。
-
-        Example::
-
-            course = layout.course("太阳系")
-            course.ensure_dirs(chapter_ids=[1, 2, 3])
-            course.save_outline({"topic": "太阳系", "chapters": [...]})
+        Raises:
+            RuntimeError: 业务侧未注册课程布局工厂。
         """
-        slug = _slugify(topic)
-        return CourseLayout(course_dir=self.courses_dir / slug)
+        if _course_layout_factory is None:
+            raise RuntimeError(
+                "课程布局工厂未注册。请先 import services.immersive.layout，"
+                "或直接使用 CourseLayout(course_dir=...)"
+            )
+        return _course_layout_factory(self.courses_dir / slugify(topic))
 
     def ensure_dirs(self) -> None:
-        """确保所有必要目录存在。
-
-        不会自动调用，由使用方在需要写入时手动调用。
-        只读场景（如测试、检查）无需调用。
-        """
-        self.skills_dir.mkdir(parents=True, exist_ok=True)
+        super().ensure_dirs()
         self.courses_dir.mkdir(parents=True, exist_ok=True)
 
     def __repr__(self) -> str:
         return f"UserDataLayout(root={self.root}, user_id={self.user_id})"
+
+
+__all__ = [
+    "AgentWorkspace",
+    "UserDataLayout",
+    "register_course_layout_factory",
+    "slugify",
+]

@@ -32,6 +32,7 @@ def _row_to_schema(row: dict) -> ConceptSchema:
         status=row["status"],
         tags=loads(row["tags"], []),
         merged_into_id=row["merged_into_id"],
+        access_count=(row["access_count"] if "access_count" in row.keys() else 0),
         embedding_model=row["embedding_model"] or "",
         vector_id=row["vector_id"] or "",
         source_hash=(row["source_hash"] if "source_hash" in row.keys() else "") or "",
@@ -50,6 +51,7 @@ def _row_to_brief(row: dict) -> ConceptBrief:
         summary=row["summary"] or "",
         subject=row["subject"] or "",
         difficulty=row["difficulty"],
+        access_count=(row["access_count"] if "access_count" in row.keys() else 0),
     )
 
 
@@ -490,3 +492,23 @@ class ConceptRepository(KGBaseRepo):
         """
         row = self._fetchone("SELECT 1 FROM concept WHERE status='approved' LIMIT 1")
         return bool(row)
+
+    def increment_access(self, concept_ids: list[str], by: int = 1) -> None:
+        """批量累加概念级检索强度（被进入子图的出口节点 +by）。
+
+        检索命中时由 RetrieveService 异步调用；空列表直接返回。
+        单事务批量 UPDATE，失败仅打 warning，不影响读路径。
+        """
+        if not concept_ids:
+            return
+        unique = list(dict.fromkeys(cid for cid in concept_ids if cid))
+        if not unique:
+            return
+        with get_kg_db() as conn:
+            placeholders = ",".join("?" for _ in unique)
+            conn.execute(
+                f"UPDATE concept SET access_count = access_count + ? "
+                f"WHERE id IN ({placeholders})",
+                (by, *unique),
+            )
+            conn.commit()

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import COURSES_DIR
-from repositories import SessionRepository
+from repositories import QuestionBankRepository, SessionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +158,10 @@ def _parse_exercises_md(md_text: str) -> List[Dict[str, Any]]:
                 r"\*{0,2}\s*(?:答案|正确答案|解析|解释|分析)\s*\*{0,2}\s*[：:]", s
             ):
                 continue
-            # 去掉 "**题干：**" 前缀
-            s = re.sub(r"^\*{0,2}\s*(?:题干|题目)\s*\*{0,2}\s*[：:]\s*", "", s)
+            # 去掉 "**题干：**" 前缀（兼容 ** 在冒号前或冒号后两种写法）
+            s = re.sub(
+                r"^\*{0,2}\s*(?:题干|题目)\s*\*{0,2}\s*[：:]\s*\*{0,2}\s*", "", s
+            )
             if s:
                 stem_lines.append(s)
         stem = "\n".join(stem_lines).strip()
@@ -246,6 +248,64 @@ def _find_exercises_path(session_id: str, chapter_id: int) -> Optional[Path]:
     return None
 
 
+def import_questions_to_bank(
+    user_id: str,
+    node_ids: List[str],
+    questions: List[Dict[str, Any]],
+) -> int:
+    """把解析好的选择题导入题库，供做题模块复用。
+
+    只导入答案可定位（correctIndex >= 0）的选择题。题干重复由
+    question_bank 的 UNIQUE 约束静默拦截，因此可安全重复调用。
+
+    Args:
+        user_id:   用户 ID
+        node_ids:  关联的知识节点 ID 列表；题目按顺序轮流挂到各节点上
+        questions: _parse_exercises_md 的输出
+
+    Returns:
+        实际新增的题目数
+    """
+    if not node_ids or not questions:
+        return 0
+
+    bank = QuestionBankRepository()
+    added = 0
+    for i, q in enumerate(questions):
+        if q.get("correctIndex", -1) < 0:
+            continue
+        options = q.get("options") or []
+        labels = q.get("optionLabels") or []
+        if len(options) < 2:
+            continue
+
+        # 还原成 "A. xxx" 形式，与 LLM 出题及前端渲染保持一致
+        display_options = [
+            f"{labels[j] if j < len(labels) else chr(65 + j)}. {opt}"
+            for j, opt in enumerate(options)
+        ]
+        node_id = node_ids[i % len(node_ids)]
+        try:
+            if bank.add_new(
+                user_id=user_id,
+                node_id=node_id,
+                quiz_type="multiple_choice",
+                question=q.get("question", ""),
+                options=display_options,
+                correct_answer=chr(65 + q["correctIndex"]),
+                explanation=q.get("explanation", ""),
+                source="exercises_md",
+                difficulty=q.get("difficulty", "medium"),
+            ):
+                added += 1
+        except Exception:  # pylint: disable=broad-except
+            logger.warning("题目导入题库失败，跳过该题", exc_info=True)
+
+    if added:
+        logger.info("题库导入完成：新增 %d 题（user=%s）", added, user_id)
+    return added
+
+
 def get_exercises_for_chapter(
     session_id: str,
     chapter_id: int,
@@ -289,6 +349,14 @@ def get_exercises_for_chapter(
 
     md_text = path.read_text(encoding="utf-8")
     questions = _parse_exercises_md(md_text)
+
+    # 顺带把本章习题沉淀进题库，使做题模块能复用这些题（幂等，重复题干会被忽略）。
+    # 失败不影响本接口返回。
+    try:
+        if questions and session.node_ids_covered:
+            import_questions_to_bank(user_id, session.node_ids_covered, questions)
+    except Exception:  # pylint: disable=broad-except
+        logger.warning("习题沉淀进题库失败，不影响习题返回", exc_info=True)
 
     if limit > 0:
         questions = questions[:limit]

@@ -35,7 +35,7 @@
         width: naturalW + 'px',
         height: naturalH + 'px',
         transform: `translate(-50%, -50%) scale(${scale})`,
-        visibility: loading || !sizeReady ? 'hidden' : 'visible',
+        visibility: loading || error || !sizeReady ? 'hidden' : 'visible',
       }"
     >
       <!-- 头部信息 -->
@@ -94,7 +94,6 @@
         class="eduviz-iframe"
         :class="{ 'is-fullscreen': isFullscreen }"
         sandbox="allow-scripts allow-same-origin"
-        @load="onIframeLoad"
       ></iframe>
     </div>
   </div>
@@ -124,6 +123,7 @@ const error = ref("");
 const isFullscreen = ref(false);
 // 是否已收到第一次 resize 上报（收到前保持隐藏，避免跳变）
 const sizeReady = ref(false);
+const executionReady = ref(false);
 
 // 卡片原始尺寸
 const naturalW = ref(900);
@@ -156,13 +156,9 @@ function buildSandboxHtml(theme, code) {
   const sdkScript = "<" + "script>" + sdkSource + "</" + "script>";
   return SANDBOX_HTML.replace("__EDUVIZ_SDK_PLACEHOLDER__", () => sdkScript)
     .replace(/__THEME__/g, theme)
-    .replace("__USER_CODE__", () => code);
-}
-
-function onIframeLoad() {
-  // 不在这里关闭 loading，等 resize 上报后再显示，避免跳变
-  error.value = "";
-  emit("ready");
+    .replace("__USER_CODE_JSON__", () =>
+      JSON.stringify(code).replace(/</g, "\\u003c"),
+    );
 }
 
 let resizeTimer = null;
@@ -174,6 +170,13 @@ function handleMessage(event) {
   if (!msg || !msg.type) return;
 
   switch (msg.type) {
+    case "ready":
+      if (!error.value) {
+        executionReady.value = true;
+        loading.value = !sizeReady.value;
+        emit("ready");
+      }
+      break;
     case "resize":
       if (msg.height > 0 && msg.width > 0) {
         clearTimeout(resizeTimer);
@@ -182,7 +185,7 @@ function handleMessage(event) {
           naturalH.value = msg.height;
           updateScale();
           sizeReady.value = true;
-          loading.value = false; // 尺寸就绪后才关闭 loading
+          loading.value = !error.value && !executionReady.value;
         }, 100);
       } else if (msg.height > 0) {
         // 兼容只上报高度的情况
@@ -191,7 +194,7 @@ function handleMessage(event) {
           naturalH.value = msg.height;
           updateScale();
           sizeReady.value = true;
-          loading.value = false;
+          loading.value = !error.value && !executionReady.value;
         }, 100);
       }
       break;
@@ -207,9 +210,11 @@ function handleMessage(event) {
 }
 
 function reload() {
+  clearTimeout(resizeTimer);
   loading.value = true;
   error.value = "";
   sizeReady.value = false; // 重置，等待新的 resize 上报
+  executionReady.value = false;
   const iframe = iframeRef.value;
   if (iframe) {
     const theme = isDark.value ? "dark" : "light";
@@ -259,6 +264,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearTimeout(resizeTimer);
   window.removeEventListener("message", handleMessage);
   resizeObserver?.disconnect();
 });

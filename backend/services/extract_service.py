@@ -3,7 +3,7 @@ ExtractService：从文档提取知识节点
 
 流程：
 1. 读取文档文本（PDF/txt/md）
-2. 构建 ExtractAgent（注册工具、ContextBuilder、SkillsLoader）
+2. 构建 ExtractAgent（注册工具、SystemPromptBuilder、SkillsLoader）
 3. Agent 自主分析 → 搜索去重 → 创建节点并建立关系
 4. 更新 document.node_ids 和 document.status
 """
@@ -20,7 +20,7 @@ from agent_core.skills.loader import SkillsLoader
 from agent_core.tool.filesystem import ReadFileTool, ListDirTool
 from agent_core.tool.registry import ToolRegistry
 from agents import ChatAgent
-from agent_core.context import SkillPromptContextBuilder
+from agent_core.context import LayeredPromptBuilder
 from agents.tools.create_node import DocumentCreateNodeTool
 from agents.tools.search_nodes import SearchNodesTool
 from repositories import DocumentRepository
@@ -133,14 +133,9 @@ class ExtractService:
                 except (json.JSONDecodeError, AttributeError) as e:
                     logger.warning("解析节点创建结果失败: %s", e)
 
-        # 组装强大的工具集，使用hook机制
+        # 组装工具集；on_result hook 在注册时绑定（工具本身不持有 hook）
         tools = [
             SearchNodesTool(user_id=user_id),
-            DocumentCreateNodeTool(
-                user_id=user_id,
-                document_id=doc_id,
-                on_result_hook=_node_creation_hook,
-            ),
             ReadFileTool(
                 allowed_dir=BUILTIN_SKILLS_DIR,
                 extra_allowed_dirs=[_AGENTS_SKILLS_DIR],
@@ -151,8 +146,8 @@ class ExtractService:
             ),
         ]
 
-        # 使用更强的上下文构建器
-        context_builder = SkillPromptContextBuilder(
+        # 使用更强的system prompt 构建器
+        prompt_builder = LayeredPromptBuilder(
             prompt_file=Path(__file__).parent.parent
             / "agents"
             / "prompts"
@@ -160,10 +155,16 @@ class ExtractService:
             skills_loader=SkillsLoader(workspace_skills_dir=_AGENTS_SKILLS_DIR),
         )
 
+        registry = ToolRegistry(tools)
+        registry.register(
+            DocumentCreateNodeTool(user_id=user_id, document_id=doc_id),
+            on_result=_node_creation_hook,
+        )
+
         agent = ChatAgent(
             llm=get_llm(user_id),
-            context_builder=context_builder,
-            tool_registry=ToolRegistry(tools),
+            prompt_builder=prompt_builder,
+            tool_registry=registry,
             max_steps=50,  # 增加最大步数以获得更深入的分析
             llm_config={"temperature": 0.1},  # 降低温度以获得更稳定的输出
         )
@@ -202,7 +203,14 @@ class ExtractService:
 
             with pdfplumber.open(path) as pdf:
                 pages = [p.extract_text() or "" for p in pdf.pages]
-            return "\n\n".join(pages)
+            text = "\n\n".join(pages).strip()
+            # issue #17：扫描版 PDF 没有文本层，提取结果接近空——给出明确提示
+            if len(text) < 50:
+                raise RuntimeError(
+                    "未能从 PDF 提取到文本，这可能是扫描版 PDF（图片内容无文本层）。"
+                    "请换用可复制文本的 PDF 版本，或先用 OCR 工具转换后再上传。"
+                )
+            return text
         except ImportError:
             raise RuntimeError("请安装 pdfplumber: pip install pdfplumber")
 

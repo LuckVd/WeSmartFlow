@@ -4,9 +4,9 @@ from .agent_tool import AgentTool
 from .base import BaseTool
 from .decorator import FunctionTool, tool
 from .filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from .image_gen import ImageGenTool
 from .registry import ToolRegistry
 from .shell import ExecTool
-from .openai_image_gen import OpenAIImageGenTool
 from .pdf_compile import LatexPdfCompileTool, latex_pdf_compile_tool
 from .web import ArxivSearch, TavilySearch, WebFetch
 
@@ -24,8 +24,8 @@ __all__ = [
     "ListDirTool",
     # Shell
     "ExecTool",
-    # 图片生成
-    "OpenAIImageGenTool",
+    # 图片生成（壳工具，客户端见 agent_core.tool.imagegen）
+    "ImageGenTool",
     # PDF 编译
     "LatexPdfCompileTool",
     "latex_pdf_compile_tool",

@@ -1,29 +1,34 @@
 """
-GenerateInteractiveVizTool：两阶段循环生成交互式可视化代码
+GenerateInteractiveVizTool：两阶段流式生成交互式可视化代码
 
 阶段一 Design 循环（纯 LLM，无工具）：
-  design → judge → design → ... → 满意的 VizSpec（最多 MAX_DESIGN_ROUNDS 轮）
+  design → 结构校验 → 修正（必要时）→ VizSpec（最多 MAX_DESIGN_ROUNDS 轮）
 
-阶段二 Code 循环（纯 LLM Reflection）：
-  code → validate_viz_code → judge → code → ... → 可运行的代码（最多 MAX_CODE_ROUNDS 轮）
+阶段二 Code 循环：
+  code → 静态检查 → 浏览器交互检查 → judge → 修复（最多 MAX_CODE_ROUNDS 轮）
 
 生成的代码保存至 documents/viz/{viz_id}/viz.js，
 metadata 保存至 documents/viz/{viz_id}/meta.json，
-成功时返回 viz_id，前端按 viz_id 拉取代码并用 EduVizSandbox 渲染。
+async_stream_run 透传子 Agent 事件及阶段进度，最后输出 viz_id。
+前端按 viz_id 拉取代码并用 EduVizSandbox 渲染。
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import shutil
 import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-
-from json_repair import repair_json
 
 from agent_core.tool.base import BaseTool
+from agent_core.agent.events import AgentFinalEvent, AgentFinishReason
+from agent_core.agent.react import ReActAgent
+from agent_core.context.static import StaticPromptBuilder
+from agent_core.tool.registry import ToolRegistry
 from config import VIZ_DIR
 from repositories.document_repo import DocumentRepository
 from services.llm_factory import get_llm
@@ -31,6 +36,8 @@ from utils.log_safe import safe_log
 
 from .validate_viz_code import ValidateVizCodeTool
 from .viz_registry import list_patterns_with_meta, load_pattern
+from .viz_quality import VizQualityError, VizSpec, VizReview, parse_contract
+from .viz_runtime import VizRuntimeUnavailable, async_check_viz_runtime
 
 
 logger = logging.getLogger(__name__)
@@ -48,11 +55,43 @@ _CORE_PATH = (
 
 
 def _load_core_doc() -> str:
-    try:
-        return _CORE_PATH.read_text(encoding="utf-8")
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error("加载 CORE.md 失败: %s", e)
-        return "（SDK 文档加载失败）"
+    content = _CORE_PATH.read_text(encoding="utf-8")
+    if not content.strip():
+        raise VizQualityError("SDK 文档为空，无法生成可视化")
+    return content
+
+
+@dataclass
+class _StageResult:
+    """Internal stage result; never forwarded to the tool event stream."""
+
+    value: object
+
+
+async def _stream_turn(llm, messages, ctx=None, *, stage):
+    """Use the same streaming Agent loop as HTML cards, including shared budgets."""
+    agent = ReActAgent(
+        llm=llm,
+        prompt_builder=StaticPromptBuilder(messages[0]["content"]),
+        tool_registry=ToolRegistry(),
+        max_steps=1,
+        llm_config={"temperature": 0.2},
+    )
+    child_ctx = ctx.child(scope=f"{ctx.scope}/{stage}") if ctx else None
+    final = None
+    async for event in agent.async_stream(
+        messages[-1]["content"],
+        ctx=child_ctx,
+        chat_history=messages[1:-1],
+    ):
+        yield event
+        if isinstance(event, AgentFinalEvent):
+            final = event
+    if final is None:
+        raise RuntimeError(f"{stage} 未返回完整结果")
+    reason = getattr(final.finish_reason, "value", final.finish_reason)
+    if reason != AgentFinishReason.STOP.value:
+        raise RuntimeError(f"{stage} 已停止（{reason}），未保存不完整内容")
 
 
 # --------------------------------------------------------------------------
@@ -102,7 +141,7 @@ def _build_designer_system() -> str:
   "concept": "核心概念一句话",
   "viz_pattern": "{pattern_enum}",
   "controls": [
-    {{"type": "slider|toggle|select|stepper|button", "name": "控件名", "purpose": "作用说明", "range": "范围（slider 必填）"}}
+    {{"type": "slider", "name": "控件名", "purpose": "作用说明", "expected_change": "操作后画面和反馈怎样变化", "range": {{"min": 0.1, "max": 2, "step": 0.1, "default": 1}}}}
   ],
   "canvas": {{
     "type": "axis2d | raw_canvas | svg_d3 | p5 | three | plotly | none",
@@ -111,6 +150,8 @@ def _build_designer_system() -> str:
   "display": [
     {{"type": "latex|text|metric|progress", "name": "名称", "purpose": "展示什么"}}
   ],
+  "initial_state": "默认参数、首屏图形、引导语和关键数值",
+  "interaction_checks": [{{"action": "具体操作一", "expected": "可核对的图形或数值变化"}}, {{"action": "极值或边界操作", "expected": "正确的边界行为"}}],
   "interaction_flow": "用一段话描述用户如何操作、画面如何响应、学生能从中理解什么",
   "key_insight": "学生操作后应该获得的核心洞察"
 }}
@@ -119,124 +160,52 @@ def _build_designer_system() -> str:
 ## 设计原则
 
 - 每个可视化只讲一个概念，不要贪多
-- 控件数量 2-4 个，不要超过 5 个
+- 控件数量 1-5 个；类型可以是 slider/toggle/select/stepper/timeline/button
+- 默认用 1-3 个必要控件、一张主图和简短反馈；仅在用户明确需要时增加模式和辅助按钮
+- slider 的 range 必须给出有限数值 min/max/step/default；select 的 choices 是至少两项的对象数组，每项包含 label、value 字符串；其他控件不填 range/choices
+- 每个控件都需要 expected_change，禁止只改控件标签而不影响教学内容的假交互
 - 交互要直接体现概念的本质，不是装饰
 - canvas 类型选最合适的，不要强行用复杂库
-- 代码量控制在 120 行内（设计时就要考虑实现复杂度）
+- 首屏就有可理解的主图、操作提示和结果反馈；明确坐标轴、单位、图例和适用条件
+- 优先原生 Canvas/SVG 和 SDK，确有必要才引入第三方库；聚焦一个可完整实现的关系
+- 主画布内部宽度约 900px，前端整体缩放适配窄屏；优先清晰紧凑，不要求在 600px 下重新布局
+- 数字、按钮停点与公式使用同一组参数推导；不要把有限采样值写成精确的极限值
 
 **只输出 JSON，不要有任何其他文字。**
 """
 
 
-_DESIGN_JUDGE_SYSTEM = """\
-你是「可视化设计评审官」，负责评审 VizSpec 设计方案的质量。
-
-## 评审维度
-
-1. **教学有效性**：交互是否真正帮助理解概念？还是只是好看？
-2. **实现可行性**：控件和画布组合能否在 120 行 JS 内实现？
-3. **聚焦度**：是否只讲一个概念？有没有过度设计？
-4. **交互逻辑**：interaction_flow 是否清晰、合理？
-
-## 输出格式
-
-```json
-{
-  "pass": true | false,
-  "score": 1-10,
-  "issues": ["问题1", "问题2"],
-  "suggestions": ["改进建议1", "改进建议2"]
-}
-```
-
-**只输出 JSON，不要有任何其他文字。**
-"""
-
-
-def _design_viz(llm, title: str, concept: str, interaction_hint: str) -> dict:
-    """
-    Design 循环：design → judge → design → ...
-    返回最终通过评审的 VizSpec dict。
-    """
-    designer_system = _build_designer_system()
-    user_prompt = (
-        f"请为以下教学内容设计一个交互式可视化方案：\n\n标题：{title}\n概念：{concept}"
-    )
-    if interaction_hint:
-        user_prompt += f"\n交互形式建议：{interaction_hint}"
-
-    spec_json: Optional[str] = None
-    spec: dict = {}
-
+async def _design_viz(llm, title: str, concept: str, interaction_hint: str, ctx=None):
+    request = f"标题：{title}\n概念：{concept}\n交互建议：{interaction_hint}"
+    messages = [
+        {"role": "system", "content": _build_designer_system()},
+        {"role": "user", "content": request},
+    ]
+    feedback = ""
     for round_i in range(1, MAX_DESIGN_ROUNDS + 1):
-        logger.info("[Design] 第 %d 轮设计", round_i)
-
-        # --- Design ---
-        design_messages = [
-            {"role": "system", "content": designer_system},
-            {"role": "user", "content": user_prompt},
-        ]
-        if spec_json and round_i > 1:
-            # 把上一轮的 spec 和 judge 意见带入
-            design_messages[-1]["content"] = user_prompt  # 保持原始需求
-            # 已经在 user_prompt 里追加了 judge 反馈（见下方）
-
-        resp = llm.think(design_messages)
-        spec_json = resp.content.strip()
-
-        # 解析 JSON（用 json_repair 容错处理 LLM 输出的不规范 JSON）
+        yield f"正在设计可视化方案（第 {round_i}/{MAX_DESIGN_ROUNDS} 轮）..."
+        raw = ""
+        async for event in _stream_turn(llm, messages, ctx, stage="design"):
+            yield event
+            if isinstance(event, AgentFinalEvent):
+                raw = event.content or ""
+        messages.append({"role": "assistant", "content": raw})
         try:
-            spec = json.loads(repair_json(spec_json))
-        except Exception as e:  # pylint: disable=broad-except
-            logger.warning("[Design] 第 %d 轮 JSON 解析失败: %s", round_i, e)
-            spec = {"title": title, "concept": concept, "raw": spec_json}
-            # 解析失败直接用原始文本继续，不走 judge
-            continue
-
-        if round_i == MAX_DESIGN_ROUNDS:
-            logger.info("[Design] 达到最大轮数，使用当前方案")
-            break
-
-        # --- Judge ---
-        logger.info("[Design] 第 %d 轮评审", round_i)
-        judge_messages = [
-            {"role": "system", "content": _DESIGN_JUDGE_SYSTEM},
+            spec = parse_contract(raw, VizSpec).model_dump(exclude_none=True)
+            # A design is an implementation brief, not a second scored artifact.
+            # Validate structure here; verify factual claims against the actual code.
+            yield _StageResult(spec)
+            return
+        except VizQualityError as exc:
+            feedback = str(exc)
+        logger.info("[Design] 第 %d 轮未通过：%s", round_i, safe_log(feedback[:300]))
+        messages.append(
             {
                 "role": "user",
-                "content": f"请评审以下 VizSpec：\n\n```json\n{json.dumps(spec, ensure_ascii=False, indent=2)}\n```",
-            },
-        ]
-        judge_resp = llm.think(judge_messages)
-        judge_raw = judge_resp.content.strip()
-
-        try:
-            judge = json.loads(repair_json(judge_raw))
-        except Exception:  # pylint: disable=broad-except
-            logger.warning("[Design] Judge JSON 解析失败，跳过本轮评审")
-            break
-
-        score = judge.get("score", 10)
-        passed = judge.get("pass", True)
-        logger.info("[Design] Judge 评分: %s, pass: %s", score, passed)
-
-        if passed and score >= 7:
-            logger.info("[Design] 方案通过评审，进入 Code 阶段")
-            break
-
-        # 把 judge 意见追加到下一轮的 user_prompt
-        issues = judge.get("issues", [])
-        suggestions = judge.get("suggestions", [])
-        feedback = "\n".join(
-            ["\n\n## 上一轮设计的问题（请修正后重新设计）"]
-            + [f"- 问题：{i}" for i in issues]
-            + [f"- 建议：{s}" for s in suggestions]
+                "content": "本轮未通过，请根据反馈输出完整修订 JSON：\n" + feedback,
+            }
         )
-        user_prompt = f"请为以下教学内容设计一个交互式可视化方案：\n\n标题：{title}\n概念：{concept}"
-        if interaction_hint:
-            user_prompt += f"\n交互形式建议：{interaction_hint}"
-        user_prompt += feedback
-
-    return spec
+    raise VizQualityError("设计结构无效：" + feedback[:1200])
 
 
 # --------------------------------------------------------------------------
@@ -262,14 +231,22 @@ def _build_coder_system(core_doc: str, pattern_examples: str) -> str:
 - 不要写 `import` / `require`，所有库通过 `await EduViz.loadLib(...)` 加载
 - 直接写顶层代码，外层已经是 async function，可以直接 `await`
 - 用 `EduViz.colors()` 取主题色，保持视觉一致
-- 代码控制在 120 行内
+- 不以行数牺牲完整性；实现清楚、紧凑、可维护的代码
 
 ## 代码原则
 
 - **代码必须能跑**：不要写演示性的伪代码，每一行都要能在 iframe 沙箱中执行
-- **严格按 VizSpec 实现**：不要自作主张增减控件或改变交互逻辑
+- 以 VizSpec 的教学目标为准；发现方案中的数值或公式矛盾时，统一修正参数、读数和说明，不要照抄错误
+- 收到反馈时只修正对应问题，保留已验证的图形与交互，不要重新设计整个可视化
 - **只用 SDK 文档中的 API**：不要发明没有的方法
-- **修复时定向修复**：每次只改报错相关的部分，不要重写整个代码
+- 先创建所有控件、画布和反馈元素，最后绑定回调；SDK onChange/onStep/onFrame 注册时会立即执行
+- 所有交互共用一个 render/update，首屏立即绘制，主题变化也重绘；每个控件必须有实际效果
+- slider 的 min/max/step/default 必须与设计一致，极值和零附近不应出现 NaN、Infinity 或除零
+- 主图应有坐标标签、单位和图例；反馈说明变化意味着什么；不要用随机数伪造算法或科学关系
+- 内部渲染宽度约 900px，前端会整体缩放；不要求在 600px 下重新布局。canvas 保持比例，SVG 使用 viewBox
+- 读数和结论由同一份状态计算，按钮停点、公式代入与说明必须一致；区分采样近似值和理论极限
+- 检查步骤必须可由真实操作复现；算法展示中间状态，动画时间应决定模拟状态，不能只播放装饰
+- 示例只提供 API 用法，必须补全逻辑，禁止省略号、TODO、空回调、无效开关、占位图
 
 ---
 
@@ -279,27 +256,63 @@ def _build_coder_system(core_doc: str, pattern_examples: str) -> str:
 """
 
 
-_CODE_JUDGE_SYSTEM = """\
-你是「可视化代码评审官」，负责评审生成的 EduViz JS 代码质量。
+_CODE_JUDGE_SYSTEM = """你是可视化代码审查员，只识别影响使用或误导学习的确定性错误。
 
-## 评审维度
+需要阻止发布的情况：
+- 核心公式、计算结果或算法步骤错误；例如按钮实际停在 x=0.99，解释却声称当前读数取自 x=0.999。
+- 必要交互在代码中明确未实现、接错变量、必定抛错，或关键图形无法显示。
+- 实现遗漏了用户要求的核心教学内容。
+每个 blocking_issues 必须说明代码中的具体证据、触发操作、实际与正确结果，以及最小修复办法。
+不要臆测缺失需求，不要以未实现的额外功能阻止发布。
 
-1. **与 VizSpec 的一致性**：代码是否按照设计方案实现了所有控件和交互？
-2. **教学有效性**：交互逻辑是否正确体现了概念？
-3. **代码质量**：有没有明显的逻辑错误、死代码、冗余？
+仅写入 suggestions 的情况（不阻止发布）：
+- 配色、图例位置、文案润色、控件数量偏好、增加辅助信息、进一步优化响应式布局。
+- 浏览器报告中的 warnings：这些是非阻塞提示，不能直接升级为阻塞问题。
+- 方案与实现的非关键命名/参数调整：如果实现内部一致、教学目标正确，不要求恢复方案中的错误数值。
+前端使用约 900px 的内部画布并整体缩放，600px 重排不是发布条件。
+有限点的函数读数可以是近似值，但不能与代码参数矛盾，也不能冒充精确极限。
+先验证实际代码；设计方案只是参考。不要打总分，不要求零改进空间。
 
-## 输出格式
-
-```json
+只输出 JSON，两个字段都必须存在：
 {
-  "pass": true | false,
-  "issues": ["问题1", "问题2"],
-  "fix_hints": ["修复提示1", "修复提示2"]
+  "blocking_issues": [],
+  "suggestions": []
 }
-```
-
-**只输出 JSON，不要有任何其他文字。**
 """
+
+
+async def _review_code(llm, spec_str, code, report, ctx=None):
+    messages = [
+        {"role": "system", "content": _CODE_JUDGE_SYSTEM},
+        {
+            "role": "user",
+            "content": f"设计：\n{spec_str}\n代码：\n{code}\n浏览器报告：\n{json.dumps(report, ensure_ascii=False)}",
+        },
+    ]
+    # A malformed review is a reviewer failure, not a reason to regenerate working JS.
+    for attempt in range(2):
+        raw = ""
+        async for event in _stream_turn(llm, messages, ctx, stage="code_review"):
+            yield event
+            if isinstance(event, AgentFinalEvent):
+                raw = event.content or ""
+        try:
+            review = parse_contract(raw, VizReview)
+        except VizQualityError as exc:
+            if attempt:
+                raise RuntimeError("代码评审未返回有效结果，请重试") from exc
+            messages.extend(
+                [
+                    {"role": "assistant", "content": raw},
+                    {
+                        "role": "user",
+                        "content": "请仅修正评审 JSON 格式，不要生成代码：" + str(exc),
+                    },
+                ]
+            )
+            continue
+        yield _StageResult(review)
+        return
 
 
 def _extract_code(raw: str) -> str:
@@ -317,133 +330,96 @@ def _extract_code(raw: str) -> str:
     return text.strip()
 
 
-def _run_code_loop(
+async def _run_code_loop(
     work_dir: Path,
     spec: dict,
     user_id,
     core_doc: str,
     pattern_examples: str,
-) -> str | None:
-    """
-    Code Reflection 循环：code → validate_viz_code → judge → code → ...
-    纯 LLM 调用，无 Agent/工具框架。
-    返回最终通过的 JS 代码字符串，失败返回 None。
-    """
+    ctx=None,
+):
     validator = ValidateVizCodeTool()
-    llm = get_llm(user_id)
-    system_prompt = _build_coder_system(core_doc, pattern_examples)
+    unavailable = validator.environment_error()
+    if unavailable:
+        raise VizRuntimeUnavailable(unavailable)
+    llm = get_llm(user_id, scene="chat")
     spec_str = json.dumps(spec, ensure_ascii=False, indent=2)
-
-    # 对话历史（system + 多轮 user/assistant）
-    messages: list[dict] = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": (
-                f"请根据以下 VizSpec 生成交互式可视化代码：\n\n"
-                f"```json\n{spec_str}\n```\n\n"
-                f"直接输出 JavaScript 代码，不要有任何解释。"
-            ),
-        },
+    messages = [
+        {"role": "system", "content": _build_coder_system(core_doc, pattern_examples)},
+        {"role": "user", "content": f"根据以下设计输出完整 JavaScript：\n{spec_str}"},
     ]
-
-    code: str = ""
-
+    feedback = ""
     for round_i in range(1, MAX_CODE_ROUNDS + 1):
-        logger.info("[Code] 第 %d 轮生成", round_i)
-
-        # --- Code：调用 LLM 生成/修复代码 ---
-        resp = llm.think(messages)
-        raw_code = resp.content or ""
-        code = _extract_code(raw_code)
-
-        # 把 assistant 回复追加到历史
-        messages.append({"role": "assistant", "content": raw_code})
-
-        if not code:
-            logger.warning("[Code] 第 %d 轮输出为空", round_i)
-            if round_i < MAX_CODE_ROUNDS:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": "你的输出为空，请重新生成完整的 JavaScript 代码。",
-                    }
-                )
-            continue
-
-        # --- Validate：写入临时文件校验 ---
-        viz_path = work_dir / f"viz_r{round_i}.js"
-        viz_path.write_text(code, encoding="utf-8")
-        validate_result = validator.run(file_path=str(viz_path))
-
-        if validate_result != "ok":
-            logger.warning(
-                "[Code] 第 %d 轮校验失败: %s", round_i, validate_result[:200]
+        yield f"正在生成可视化代码（第 {round_i}/{MAX_CODE_ROUNDS} 轮）..."
+        raw = ""
+        async for event in _stream_turn(llm, messages, ctx, stage="code"):
+            yield event
+            if isinstance(event, AgentFinalEvent):
+                raw = event.content or ""
+        code = _extract_code(raw)
+        messages.append({"role": "assistant", "content": raw})
+        path = work_dir / f"viz_r{round_i}.js"
+        path.write_text(code, encoding="utf-8")
+        try:
+            if ctx:
+                ctx.checkpoint()
+            yield "正在进行 JavaScript 静态检查..."
+            # Node/ESLint use blocking subprocesses; keep the event loop responsive.
+            check = asyncio.to_thread(validator.run, file_path=str(path))
+            result = await ctx.wait(check) if ctx else await check
+            if result != "ok":
+                raise VizQualityError(result)
+            if ctx:
+                ctx.checkpoint()
+            yield "正在浏览器中检查画面与交互..."
+            remaining = ctx.budget.remaining_seconds if ctx else None
+            report = await async_check_viz_runtime(
+                path,
+                spec,
+                timeout=min(35, remaining) if remaining is not None else 35,
+                checkpoint=ctx.checkpoint if ctx else None,
             )
-            if round_i < MAX_CODE_ROUNDS:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"代码校验未通过，请修复以下问题后重新输出完整代码：\n\n"
-                            f"{validate_result[:1000]}\n\n"
-                            f"直接输出修复后的完整 JavaScript 代码，不要有任何解释。"
-                        ),
-                    }
+            if ctx:
+                ctx.checkpoint()
+            if not report["ok"]:
+                raise VizQualityError(json.dumps(report, ensure_ascii=False))
+            yield "正在评审教学逻辑与交互实现..."
+            review = None
+            async for event in _review_code(llm, spec_str, code, report, ctx):
+                if isinstance(event, _StageResult):
+                    review = event.value
+                else:
+                    yield event
+            if review is None:
+                raise RuntimeError("代码评审未返回有效结果")
+            if review.accepted:
+                yield _StageResult(
+                    (
+                        code,
+                        {
+                            "runtime": report,
+                            "review": review.model_dump(),
+                            "code_rounds": round_i,
+                        },
+                    )
                 )
-                continue
-            else:
-                logger.warning("[Code] 达到最大轮数，校验仍未通过，返回当前代码")
-                return code  # 折中返回，前端会显示运行错误
-
-        # --- Judge：评审代码与 VizSpec 的一致性 ---
+                return
+            feedback = "\n".join(review.blocking_issues)
+        except VizRuntimeUnavailable:
+            raise
+        except VizQualityError as exc:
+            feedback = str(exc)
+        logger.info("[Code] 第 %d 轮未通过：%s", round_i, safe_log(feedback[:300]))
         if round_i < MAX_CODE_ROUNDS:
-            logger.info("[Code] 第 %d 轮 Judge 评审", round_i)
-            judge_messages = [
-                {"role": "system", "content": _CODE_JUDGE_SYSTEM},
-                {
-                    "role": "user",
-                    "content": (
-                        f"VizSpec：\n```json\n{spec_str}\n```\n\n"
-                        f"生成的代码：\n```javascript\n{code}\n```\n\n"
-                        f"请评审代码是否正确实现了 VizSpec。"
-                    ),
-                },
-            ]
-            judge_resp = llm.think(judge_messages)
-            judge_raw = judge_resp.content.strip()
-
-            try:
-                judge = json.loads(repair_json(judge_raw))
-            except Exception:  # pylint: disable=broad-except
-                logger.warning("[Code] Judge JSON 解析失败，视为通过")
-                judge = {"pass": True}
-
-            if judge.get("pass", True):
-                logger.info("[Code] 第 %d 轮通过 Judge 评审", round_i)
-                return code
-
-            fix_hints = judge.get("fix_hints", judge.get("issues", []))
-            logger.info(
-                "[Code] 第 %d 轮 Judge 不通过，修复提示: %s", round_i, fix_hints
-            )
-            hints_text = "\n".join(f"- {h}" for h in fix_hints)
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        f"代码评审未通过，请修复以下问题后重新输出完整代码：\n\n"
-                        f"{hints_text}\n\n"
-                        f"直接输出修复后的完整 JavaScript 代码，不要有任何解释。"
-                    ),
-                }
-            )
-        else:
-            # 最后一轮，校验通过直接返回
-            logger.info("[Code] 第 %d 轮校验通过，返回代码", round_i)
-            return code
-
-    return code if code else None
+            yield "本轮检查未通过，正在准备修复..."
+        messages.append(
+            {
+                "role": "user",
+                "content": "本轮未通过。修复以下问题，输出完整 JavaScript：\n"
+                + feedback[:3000],
+            }
+        )
+    raise VizQualityError("代码未通过质量检查：" + feedback[:1600])
 
 
 # --------------------------------------------------------------------------
@@ -455,7 +431,7 @@ class GenerateInteractiveVizTool(BaseTool):
     """
     两阶段循环生成交互式可视化代码（基于 EduViz SDK）。
 
-    阶段一：Design 循环 — LLM 设计 VizSpec，Judge 评审，最多 MAX_DESIGN_ROUNDS 轮
+    阶段一：Design 循环 — LLM 设计 VizSpec，结构校验，最多 MAX_DESIGN_ROUNDS 轮
     阶段二：Code 循环  — Coder Agent 写代码，validate + Judge 评审，最多 MAX_CODE_ROUNDS 轮
 
     成功时返回 viz_id（前端通过 /api/viz/{viz_id} 拉取代码），
@@ -502,90 +478,118 @@ class GenerateInteractiveVizTool(BaseTool):
         "required": ["title", "concept"],
     }
 
-    def __init__(self, user_id=None, session_id=None, on_result_hook=None):
-        super().__init__(on_result_hook=on_result_hook)
+    def __init__(self, user_id=None, session_id=None):
+        super().__init__()
         self.user_id = user_id
         self.session_id = session_id
+        self._parent_ctx = None
 
-    def run(
+    def bind_context(self, ctx):
+        self._parent_ctx = ctx
+        return self
+
+    def run(self, **kwargs):
+        raise NotImplementedError(
+            "GenerateInteractiveVizTool 仅支持 async_stream_run 调用"
+        )
+
+    async def async_stream_run(
         self,
         title: str = "",
         concept: str = "",
         interaction_hint: str = "",
         node_ids: list = None,
         **kwargs,
-    ) -> str:
+    ):
+        """Yield progress and Agent events, ending with viz_id or an Error string."""
+        if not title.strip() or not concept.strip():
+            yield "Error: title 和 concept 不能为空"
+            return
+        if not self.user_id:
+            yield "Error: 缺少 user_id，无法登记可视化文档"
+            return
         viz_id = str(uuid.uuid4())
-        llm = get_llm(self.user_id)
-        core_doc = _load_core_doc()
-
-        # ── 阶段一：Design 循环 ──────────────────────────────────────────
-        logger.info("[GenerateViz] 开始 Design 循环: title=%s", safe_log(title))
+        viz_dir = VIZ_DIR / viz_id
+        published = False
         try:
-            spec = _design_viz(llm, title, concept, interaction_hint)
-        except Exception as e:  # pylint: disable=broad-except
-            logger.exception("Design 循环异常")
-            return f"Error: 设计阶段失败 — {e}"
-
-        logger.info(
-            "[GenerateViz] VizSpec 设计完成: %s",
-            safe_log(json.dumps(spec, ensure_ascii=False)[:200]),
-        )
-
-        # ── 阶段二：Code 循环 ────────────────────────────────────────────
-        # 只加载与 viz_pattern 匹配的单个示例，避免 token 浪费
-        pattern_example = load_pattern(spec.get("viz_pattern", ""))
-        logger.info(
-            "[GenerateViz] 开始 Code 循环, viz_pattern=%s",
-            safe_log(spec.get("viz_pattern", "unknown")),
-        )
-        with tempfile.TemporaryDirectory(prefix=f"viz_{viz_id}_") as _tmp:
-            work_dir = Path(_tmp)
-            try:
-                code = _run_code_loop(
-                    work_dir, spec, self.user_id or "default", core_doc, pattern_example
+            if self._parent_ctx:
+                self._parent_ctx.checkpoint()
+            core_doc = _load_core_doc()
+            unavailable = ValidateVizCodeTool.environment_error()
+            if unavailable:
+                raise VizRuntimeUnavailable(unavailable)
+            llm = get_llm(self.user_id, scene="chat")
+            yield f"正在生成交互式可视化「{title}」..."
+            spec = None
+            async for event in _design_viz(
+                llm, title, concept, interaction_hint, self._parent_ctx
+            ):
+                if isinstance(event, _StageResult):
+                    spec = event.value
+                else:
+                    yield event
+            if spec is None:
+                raise RuntimeError("设计阶段未返回有效方案")
+            with tempfile.TemporaryDirectory(prefix=f"viz_{viz_id}_") as tmp:
+                work_dir = Path(tmp)
+                result = None
+                async for event in _run_code_loop(
+                    work_dir,
+                    spec,
+                    self.user_id,
+                    core_doc,
+                    load_pattern(spec["viz_pattern"]),
+                    self._parent_ctx,
+                ):
+                    if isinstance(event, _StageResult):
+                        result = event.value
+                    else:
+                        yield event
+                if result is None:
+                    raise RuntimeError("代码阶段未返回有效结果")
+                code, quality = result
+                if self._parent_ctx:
+                    self._parent_ctx.checkpoint()
+                yield "检查通过，正在保存可视化..."
+                if self._parent_ctx:
+                    self._parent_ctx.checkpoint()
+                viz_dir.mkdir(parents=True, exist_ok=False)
+                viz_file = viz_dir / "viz.js"
+                viz_file.write_text(code, encoding="utf-8")
+                meta = {
+                    "viz_id": viz_id,
+                    "title": title,
+                    "concept": concept,
+                    "interaction_hint": interaction_hint,
+                    "viz_spec": spec,
+                    "user_id": self.user_id,
+                    "session_id": self.session_id,
+                    "quality": quality,
+                }
+                (viz_dir / "meta.json").write_text(
+                    json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
-            except Exception as e:  # pylint: disable=broad-except
-                logger.exception("Code 循环异常")
-                return f"Error: 代码生成阶段失败 — {e}"
-
-            if not code:
-                return "Error: 子 Agent 未生成有效代码"
-
-            # ── 持久化 ───────────────────────────────────────────────────
-            viz_dir = VIZ_DIR / viz_id
-            viz_dir.mkdir(parents=True, exist_ok=True)
-
-            viz_file = viz_dir / "viz.js"
-            viz_file.write_text(code, encoding="utf-8")
-
-            meta = {
-                "viz_id": viz_id,
-                "title": title,
-                "concept": concept,
-                "interaction_hint": interaction_hint,
-                "viz_spec": spec,
-                "user_id": self.user_id,
-                "session_id": self.session_id,
-            }
-            (viz_dir / "meta.json").write_text(
-                json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-
-            self._create_document_record(
-                viz_id=viz_id,
-                viz_file=viz_file,
-                title=title,
-                concept=concept,
-                interaction_hint=interaction_hint,
-                spec=spec,
-                node_ids=node_ids or [],
-            )
-
-            logger.info(
-                "[GenerateViz] 生成成功: viz_id=%s, title=%s", viz_id, safe_log(title)
-            )
-            return viz_id
+                preview = work_dir / "preview.png"
+                if preview.exists():
+                    shutil.copy2(preview, viz_dir / "preview.png")
+                self._create_document_record(
+                    viz_id,
+                    viz_file,
+                    title,
+                    concept,
+                    interaction_hint,
+                    spec,
+                    node_ids or [],
+                )
+            published = True
+            logger.info("[GenerateViz] 生成成功: viz_id=%s", viz_id)
+            yield viz_id
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("可视化生成失败")
+            yield f"Error: 可视化生成失败 — {exc}"
+        finally:
+            if not published:
+                shutil.rmtree(viz_dir, ignore_errors=True)
 
     def _create_document_record(
         self,
@@ -597,24 +601,16 @@ class GenerateInteractiveVizTool(BaseTool):
         spec: dict,
         node_ids: list,
     ) -> None:
-        if not self.user_id:
-            logger.warning("GenerateInteractiveVizTool 缺少 user_id，跳过文档登记")
-            return
-        try:
-            generation_prompt = concept
-            if interaction_hint:
-                generation_prompt += f"\n\n[交互形式]\n{interaction_hint}"
-
-            doc = DocumentRepository().register_produced(
-                doc_id=viz_id,
-                user_id=self.user_id,
-                title=title,
-                file_path=viz_file,
-                file_type="viz",
-                session_id=self.session_id,
-                generation_prompt=generation_prompt,
-                node_ids=node_ids,
-            )
-            logger.info("可视化文档记录创建成功: %s", doc.id)
-        except Exception as e:  # pylint: disable=broad-except
-            logger.warning("创建可视化文档记录失败（不影响生成）: %s", e)
+        generation_prompt = concept
+        if interaction_hint:
+            generation_prompt += f"\n\n[交互形式]\n{interaction_hint}"
+        DocumentRepository().register_produced(
+            doc_id=viz_id,
+            user_id=self.user_id,
+            title=title,
+            file_path=viz_file,
+            file_type="viz",
+            session_id=self.session_id,
+            generation_prompt=generation_prompt,
+            node_ids=node_ids,
+        )

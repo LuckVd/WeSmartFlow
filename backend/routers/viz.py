@@ -3,7 +3,7 @@
 
 提供给 /#/eduviz-demo 调试页面以及前端 EduVizSandbox 使用：
 
-- POST /api/viz/generate         同步调用 GenerateInteractiveVizTool 生成可视化
+- POST /api/viz/generate         消费流式工具，返回生成结果 JSON
 - GET  /api/viz/{viz_id}/meta    拉取可视化元信息（含 documents 记录与 meta.json）
 - GET  /api/viz                  列出当前用户名下的所有可视化（按时间倒序）
 
@@ -90,24 +90,31 @@ async def generate_viz(
     payload: GenerateVizRequest,
     user_id: str = Depends(get_current_user),
 ):
-    """同步调用 VizWriterAgent 生成一个交互式可视化。"""
+    """异步消费工具流，保留调试页面使用的 JSON 响应协议。"""
     try:
         tool = GenerateInteractiveVizTool(
             user_id=user_id,
             session_id=payload.session_id,
         )
-        result = tool.run(
+        result = None
+        async for event in tool.async_stream_run(
             title=payload.title,
             concept=payload.concept,
             interaction_hint=payload.interaction_hint or "",
             node_ids=payload.node_ids or [],
-        )
+        ):
+            result = event
     except Exception as e:  # pylint: disable=broad-except
         logger.exception("generate_viz 调用失败")
         return GenerateVizResponse(ok=False, error=f"内部异常: {e}")
 
     if isinstance(result, str) and result.startswith("Error"):
         return GenerateVizResponse(ok=False, error=result)
+
+    try:
+        result = sanitize_uuid(result)
+    except (HTTPException, TypeError, ValueError, AttributeError):
+        return GenerateVizResponse(ok=False, error="可视化未返回有效的生成结果")
 
     return GenerateVizResponse(ok=True, viz_id=result)
 

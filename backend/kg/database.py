@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS concept (
     -- 其它 origin 留空字符串。详见 ingest_okf 中的 _file_hash。
     source_hash     TEXT NOT NULL DEFAULT '',
 
+    -- 概念级检索强度：每次检索被进入子图（作为出口节点）时 +1。
+    -- 对应图扩展打分里的 ln(1+access_count)，驱动"该往哪展开"。
+    access_count    INTEGER NOT NULL DEFAULT 0,
+
     created_by      TEXT NOT NULL DEFAULT '',
     updated_by      TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
@@ -200,8 +204,15 @@ def init_kg_db() -> None:
                     "ALTER TABLE concept "
                     "ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''"
                 )
+            if "access_count" not in cols:
+                conn.execute(
+                    "ALTER TABLE concept "
+                    "ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0"
+                )
         except Exception:  # pylint: disable=broad-except
-            logger.exception("检查/补加 concept.source_hash 列失败，忽略继续")
+            logger.exception(
+                "检查/补加 concept.source_hash/access_count 列失败，忽略继续"
+            )
 
         # 老库兼容：proposal 异步落盘流水线 4 列（archive 模式幂等 ALTER）
         try:

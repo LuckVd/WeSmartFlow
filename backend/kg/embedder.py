@@ -76,6 +76,12 @@ class OpenAICompatEmbedder:
 
     def _call(self, inp) -> list[list[float]]:
         resp = self._client.embeddings.create(model=self.model, input=inp)
+        from services.usage_meter import record_usage
+
+        usage = resp.usage.model_dump() if resp.usage else {}
+        record_usage(
+            "__system__", scene="kg", model=self.model, usage=usage, is_system=True
+        )
         return [d.embedding for d in resp.data]
 
     def embed_one(self, text: str) -> list[float]:

@@ -390,7 +390,12 @@ class WebFetch(BaseTool):
 
 
 class TavilySearch(BaseTool):
-    """Tavily 搜索工具，专为 AI Agent 设计，返回经过 AI 提炼的搜索结果。需要 TAVILY_API_KEY。"""
+    """Tavily 搜索工具：BaseSearchClient 客户端的工具壳。
+
+    实际调用走注入的 :class:`~agent_core.tool.search.base.BaseSearchClient`
+    实例（工厂产出，已带额度拦截 + 记账 hook）；未注入时内部构造一个
+    裸客户端（无治理，仅供脚本 / 测试使用，业务代码不应走这条路）。
+    """
 
     name = "tavily_search"
     description = (
@@ -417,15 +422,24 @@ class TavilySearch(BaseTool):
         "required": ["query"],
     }
 
-    def __init__(self, api_key: str | None = None, before_call_hook=None):
+    def __init__(self, api_key: str | None = None, client: Any = None):
+        """
+        Args:
+            api_key: 未注入 client 时的回退 Key（兼容脚本用法）。
+            client:  :class:`BaseSearchClient` 实例（推荐，工厂产出）。
+        """
+        self._client = client
         self._api_key = api_key
-        super().__init__(before_call_hook=before_call_hook)
+        super().__init__()
 
-    def _get_api_key(self) -> str:
-        """优先使用构造时传入的 api_key，回退到环境变量。"""
-        if self._api_key:
-            return self._api_key
-        return os.getenv("TAVILY_API_KEY", "")
+    def _get_client(self):
+        if self._client is not None:
+            return self._client
+        from agent_core.tool.search.tavily import TavilySearchClient
+
+        return TavilySearchClient(
+            api_key=self._api_key or os.getenv("TAVILY_API_KEY", "")
+        )
 
     def run(
         self,
@@ -435,40 +449,30 @@ class TavilySearch(BaseTool):
         include_answer: bool = True,
         **kwargs: Any,
     ) -> str:
-        api_key = self._get_api_key()
-        if not api_key:
-            return "未配置 TAVILY_API_KEY，请在设置页面填写或在 .env 文件中添加 TAVILY_API_KEY=tvly-xxxxx"
+        from agent_core.tool.search.base import SearchError
 
         try:
-            from tavily import TavilyClient
-        except ImportError:  # pylint: disable=broad-except
-            return "未安装 tavily-python 库，请运行 pip install tavily-python"
-
-        try:
-            client = TavilyClient(api_key=api_key)
-            response = client.search(
+            r = self._get_client().search(
                 query=query,
-                search_depth=search_depth,
                 max_results=num_results,
+                search_depth=search_depth,
                 include_answer=include_answer,
             )
+        except SearchError as e:
+            return str(e)
 
-            parts = []
-            answer = response.get("answer")
-            if answer:
-                parts.append(f"【AI 答案摘要】\n{answer}")
+        parts = []
+        if r.answer:
+            parts.append(f"【AI 答案摘要】\n{r.answer}")
 
-            for i, r in enumerate(response.get("results", []), 1):
-                parts.append(
-                    f"[{i}] {r.get('title', '无标题')}\n"
-                    f"    {r.get('content', '无摘要')}\n"
-                    f"    链接: {r.get('url', '')}"
-                )
+        for i, item in enumerate(r.results, 1):
+            parts.append(
+                f"[{i}] {item.get('title', '无标题')}\n"
+                f"    {item.get('content', '无摘要')}\n"
+                f"    链接: {item.get('url', '')}"
+            )
 
-            return "\n\n".join(parts) if parts else "未找到相关信息"
-
-        except Exception as e:  # pylint: disable=broad-except
-            return f"搜索异常: {e}"
+        return "\n\n".join(parts) if parts else "未找到相关信息"
 
 
 # ============================================================

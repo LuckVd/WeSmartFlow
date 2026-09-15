@@ -99,25 +99,56 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- 测验题目表
-CREATE TABLE IF NOT EXISTS quizzes (
+-- ====================================================================
+-- 题目本体 与 作答记录 分离
+--   question_bank —— 题目本体，唯一存放处，可被反复取用
+--                    （来源：LLM 生成 / exercises.md 导入 / 人工录入）
+--   quizzes       —— 一次具体的作答实例，只存「谁、在哪次会话、答了哪道题、结果如何」
+--                    题干/选项/答案/解析一律通过 question_id 引用，不再冗余存储
+-- ====================================================================
+
+-- 题库表（题目本体）
+CREATE TABLE IF NOT EXISTS question_bank (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL,
     node_id         TEXT NOT NULL,
-    session_id      TEXT,
+    source          TEXT NOT NULL DEFAULT 'llm',      -- llm / exercises_md / manual
     quiz_type       TEXT NOT NULL,
     question        TEXT NOT NULL,
     options         TEXT,
     correct_answer  TEXT NOT NULL,
     explanation     TEXT NOT NULL DEFAULT '',
+    difficulty      TEXT NOT NULL DEFAULT 'medium',   -- easy / medium / hard
+    use_count       INTEGER NOT NULL DEFAULT 0,
+    last_used_at    TEXT,
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (node_id) REFERENCES nodes(id),
+    UNIQUE (user_id, node_id, question)
+);
+CREATE INDEX IF NOT EXISTS idx_question_bank_pick
+    ON question_bank(user_id, node_id, quiz_type, use_count);
+
+-- 作答记录表（一次作答实例）
+CREATE TABLE IF NOT EXISTS quizzes (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL,
+    node_id         TEXT NOT NULL,          -- 冗余一份便于按节点索引，语义等同题目所属节点
+    question_id     TEXT NOT NULL,          -- → question_bank.id，题目本体唯一来源
+    session_id      TEXT,
     user_answer     TEXT,
     is_correct      INTEGER,
     score           REAL,
     answered_at     TEXT,
     created_at      TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (node_id) REFERENCES nodes(id)
+    FOREIGN KEY (node_id) REFERENCES nodes(id),
+    FOREIGN KEY (question_id) REFERENCES question_bank(id)
 );
+CREATE INDEX IF NOT EXISTS idx_quizzes_user_node
+    ON quizzes(user_id, node_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_quizzes_question
+    ON quizzes(question_id);
 
 -- 学习日志表（热力图 & 统计）
 CREATE TABLE IF NOT EXISTS study_logs (
@@ -166,13 +197,69 @@ CREATE TABLE IF NOT EXISTS settings (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- API 使用量统计表
-CREATE TABLE IF NOT EXISTS api_usage (
-    user_id   TEXT NOT NULL,
-    category  TEXT NOT NULL,
-    count     INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (user_id, category),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+-- ====================================================================
+-- credits 用量体系
+--
+-- 按 token 与真实定价折算 credits，并保留场景/模型维度用于归因。
+--
+--   usage_events  —— 每次调用一条流水，可审计、可按场景归因
+--   usage_summary —— 按 (user_id, period) 汇总，热路径只读这张表
+--   credit_quotas —— 旧月度配额表，仅保留历史兼容，不参与余额控制
+-- ====================================================================
+
+CREATE TABLE IF NOT EXISTS usage_events (
+    id                TEXT PRIMARY KEY,
+    user_id           TEXT NOT NULL,
+    period            TEXT NOT NULL,              -- 'YYYY-MM'，额度重置周期
+    category          TEXT NOT NULL,              -- llm / search / image / audio
+    scene             TEXT NOT NULL DEFAULT 'unknown',
+                                                  -- quiz/chat/immersive/profile/kg/court...
+    model             TEXT NOT NULL DEFAULT '',
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    -- 思考 token：推理模型的隐式开销，单列以便评估 reasoning_effort 优化收益
+    reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
+    -- 命中提示缓存的 token：单价通常低一个数量级，需与新鲜 token 分开计价
+    cached_tokens     INTEGER NOT NULL DEFAULT 0,
+    credits           INTEGER NOT NULL DEFAULT 0,
+    -- 系统内部任务（用户未主动触发）不计入用户额度，但仍记账以保持成本可观测
+    is_system         INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_user_period
+    ON usage_events(user_id, period);
+CREATE INDEX IF NOT EXISTS idx_usage_events_scene
+    ON usage_events(period, scene);
+CREATE INDEX IF NOT EXISTS idx_usage_events_created
+    ON usage_events(created_at);
+
+CREATE TABLE IF NOT EXISTS usage_details (
+    event_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT '',
+    region TEXT NOT NULL DEFAULT '',
+    units REAL NOT NULL DEFAULT 0,
+    pricing_version TEXT NOT NULL DEFAULT '',
+    estimated INTEGER NOT NULL DEFAULT 0,
+    counts_quota INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS usage_summary (
+    user_id  TEXT NOT NULL,
+    period   TEXT NOT NULL,
+    credits  INTEGER NOT NULL DEFAULT 0,
+    calls    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, period)
+);
+
+-- 用户 credits 配额覆盖表。
+-- 旧表仅保留兼容；余额控制改用 credit_wallets。原先只有管理员
+-- 为特定用户调整过额度时才落库（覆盖默认）。
+CREATE TABLE IF NOT EXISTS credit_quotas (
+    user_id        TEXT PRIMARY KEY,
+    period_credits INTEGER NOT NULL,
+    updated_by     TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
 );
 
 -- ====================================================================
@@ -307,6 +394,12 @@ def init_db() -> None:
     """
     with _make_connection() as conn:
         conn.executescript(_CREATE_TABLES_SQL)
+        from migrate_credits import ensure_detail_columns
+
+        ensure_detail_columns(conn)
+        from services.credit_wallet import SCHEMA, initialize_existing
+
+        conn.executescript(SCHEMA)
 
         # 确保默认用户存在（外键约束需要）
         default_hash = _hash_password("123456")
@@ -317,6 +410,7 @@ def init_db() -> None:
             """,
             (default_hash,),
         )
+        initialize_existing(conn)
         conn.commit()
     logger.info("数据库初始化完成：%s", DB_PATH)
     _init_settings_for_user("default")

@@ -28,6 +28,8 @@ from .embedder import get_embedder
 
 logger = logging.getLogger(__name__)
 
+_SD_EPS = 1e-9
+
 
 # ============================================================
 # 关系类型 probe
@@ -236,6 +238,7 @@ def reload_probes() -> _SemanticProbes:
     这里直接清 lru_cache,下次 get_probes() 会触发重新 embed。
     """
     get_probes.cache_clear()
+    _entry_relation_vecs.cache_clear()
     return get_probes()
 
 
@@ -278,3 +281,112 @@ def softmax_normalize(
     }
     z = sum(exps.values()) or 1.0
     return {k: v / z for k, v in exps.items()}
+
+
+# ============================================================
+# 入口条件化的关系语义打分
+# ============================================================
+
+
+@lru_cache(maxsize=1024)
+def _entry_relation_vecs(
+    entry_name: str, relations: tuple[str, ...]
+) -> tuple[tuple[str, tuple[float, ...]], ...]:
+    """把「入口概念名 + 每条 probe 文本」逐条嵌入，按关系取未归一化均值向量。
+
+    返回 ``((relation, mean_vec), …)``（不可变元组，满足 lru_cache 要求）。
+
+    ★ 调用方必须传 **排序去重** 后的 ``relations`` 元组（缓存正确性）。
+      同一 relations 集合的不同顺序会各占一个缓存槽并重复 embed，
+      ``tuple(sorted(set(...)))`` 是标准写法。
+
+    ★ 均值向量**不归一化**：消费方 ``score_relations_from_entry`` 用 ``_cos``
+      （数量 A：先逐条算余弦再平均），端点鲁棒（不依赖 embedder 输出已归一化）。
+
+    ★ 关系无 probe 时退回关系名本身（``RELATION_PROBES.get(rel) or [rel]``），
+      保留与固定 8 种关系的兼容，也防御未来自由命名关系。
+    """
+    embedder = get_embedder()
+    if not embedder or getattr(embedder, "dim", 0) <= 0:
+        return ()
+
+    flat: list[str] = []
+    index: list[str] = []
+    for rel in relations:
+        for p in RELATION_PROBES.get(rel) or [rel]:
+            flat.append(f"{entry_name} {p}")
+            index.append(rel)
+
+    if not flat:
+        return ()
+
+    try:
+        vecs = embedder.embed_many(flat)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "relation_semantics: 入口条件 probe 嵌入失败 entry=%r err=%s",
+            entry_name,
+            exc,
+        )
+        return ()
+
+    bucket: dict[str, list[list[float]]] = {}
+    for rel, v in zip(index, vecs):
+        if v:
+            bucket.setdefault(rel, []).append(v)
+
+    out: list[tuple[str, tuple[float, ...]]] = []
+    for rel, vs in bucket.items():
+        mean = _mean_vec(vs)
+        if mean:
+            out.append((rel, tuple(mean)))
+    return tuple(out)
+
+
+def score_relations_from_entry(
+    query_emb: list[float],
+    entry_name: str,
+    *,
+    relations: tuple[str, ...] | None = None,
+) -> dict[str, float]:
+    """站在 ``entry_name`` 这个概念上，给出每种关系的入口内 z-score 权重。
+
+    原始分 = mean_i cos( embed(query), embed(entry_name + probe_i) )
+    权重   = (原始分 − 本入口均值) / 本入口标准差        ← 入口内 z-score
+
+    **返回值可为负数**（"低于本入口均值几个标准差"）。消费方（``_expand_subgraph``）
+    先调 ``softmax_normalize`` 把 z 转成正的概率权重，再代入乘法打分公式，
+    保证不引入负 candidate_score。
+
+    **为什么必须做 z-score**：共同的入口名前缀把各条拼接文本压到高相似区，
+    原始余弦差异只剩小数点后两位（实测带宽 ~0.05），softmax 后各关系概率差
+    仅约 1.1 倍（≈均匀分布）——关系语义打分名存实亡。z-score 把带宽拉到 ~3，
+    softmax 后头尾概率差 ~25 倍，区分度恢复正常。
+
+    ``relations`` 为 None 时退回 ``RELATION_PROBES`` 的全部关系；
+    调用方显式传入时必须传 **排序去重** 元组（``lru_cache`` 正确性要求）。
+    """
+    if not query_emb or not entry_name:
+        return {}
+    if relations is None:
+        relations = tuple(sorted(RELATION_PROBES))
+    if not relations:
+        return {}
+
+    pairs = _entry_relation_vecs(entry_name, relations)
+    if not pairs:
+        return {}
+
+    raw = {rel: _cos(query_emb, list(vec)) for rel, vec in pairs}
+    if len(raw) < 2:
+        # 单关系无参照组（标准差无意义）→ 返回 0.0，与本组均值齐平
+        return {rel: 0.0 for rel in raw}
+
+    vals = list(raw.values())
+    mu = sum(vals) / len(vals)
+    sd = math.sqrt(sum((v - mu) ** 2 for v in vals) / len(vals))
+    if sd <= _SD_EPS:
+        # 所有关系同分（probe 退化 / embedding 异常）→ 全 0，softmax 退回均匀分布
+        return {rel: 0.0 for rel in raw}
+
+    return {rel: (v - mu) / sd for rel, v in raw.items()}

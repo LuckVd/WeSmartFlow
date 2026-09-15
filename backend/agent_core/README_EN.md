@@ -27,13 +27,16 @@ agent_core/
 │   ├── filesystem.py#   Filesystem operation tools
 │   ├── shell.py     #   Shell command execution tool
 │   ├── pdf_compile.py#  LaTeX → PDF compilation tool
-│   ├── tts_say.py   #   macOS TTS text-to-speech tool
-│   └── openai_image_gen.py # Image generation tool
-├── context/         # Context builders
-│   ├── base.py      #   BaseContextBuilder base class
-│   ├── simple.py    #   SimpleContextBuilder
-│   ├── skill_prompt.py #  SkillPromptBuilder (skill injection)
-│   └── profile_skill.py # ProfileSkillBuilder (profile + skills)
+│   ├── image_gen.py #   Image generation tool shell (clients in imagegen/)
+│   ├── search/      #   Search clients (BaseSearchClient + Tavily)
+│   ├── imagegen/    #   Image-gen clients (Qwen / OpenAI)
+│   └── tts/         #   TTS clients (Qwen / MacSay / CosyVoice / Fallback)
+├── context/         # System prompt building
+│   ├── builder.py   #   SystemPromptBuilder protocol (str only)
+│   ├── static.py    #   StaticPromptBuilder (fixed text)
+│   ├── layered.py   #   LayeredPromptBuilder (role + providers + skills)
+│   ├── provider.py  #   ContextProvider protocol + StaticProvider
+│   └── assemble.py  #   Single entry: [system] + history assembly
 ├── llm/             # LLM adapter layer
 │   ├── base.py      #   BaseLLM abstract interface
 │   └── openai_llm.py#   OpenAI-compatible implementation (supports any compatible gateway)

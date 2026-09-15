@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from services.llm_factory import get_llm
+from services.external_usage import current_usage, before_raw, record_raw, UsageThread
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,10 @@ def _parse_json(raw: str) -> Dict[str, Any]:
 
 
 def _sync_llm(system: str, user: str, user_id: str = "default") -> Dict[str, Any]:
-    response = get_llm(user_id, with_quota=False).think(
+    # court 是用户可玩的 demo：消耗记入对应用户额度（由路由 JWT 上下文确定归属）
+    response = get_llm(
+        current_usage().user_id if user_id == "default" else user_id, scene="court"
+    ).think(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -90,8 +94,8 @@ def _sync_llm_race(system: str, user: str, user_id: str = "default") -> Dict[str
         except Exception as e:  # pylint: disable=broad-except
             err.append(e)
 
-    t1 = threading.Thread(target=_one, daemon=True)
-    t2 = threading.Thread(target=_one, daemon=True)
+    t1 = UsageThread(target=_one, daemon=True)
+    t2 = UsageThread(target=_one, daemon=True)
     t1.start()
     t2.start()
     done.wait(timeout=240)
@@ -103,7 +107,9 @@ def _sync_llm_race(system: str, user: str, user_id: str = "default") -> Dict[str
 async def _async_llm(
     system: str, user: str, user_id: str = "default"
 ) -> Dict[str, Any]:
-    response = await get_llm(user_id, with_quota=False).async_think(
+    response = await get_llm(
+        current_usage().user_id if user_id == "default" else user_id, scene="court"
+    ).async_think(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -404,6 +410,7 @@ def _gen_one_image(case_id: str, key: str, desc: str, size: str = "1664*928") ->
         "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
     )
     model = cfg.get("IMG_MODEL", "qwen-image-2.0")
+    before_raw("image", model=model, provider="qwen")
     try:
         payload = {
             "model": model,
@@ -432,6 +439,7 @@ def _gen_one_image(case_id: str, key: str, desc: str, size: str = "1664*928") ->
         )
         if not url:
             return False
+        record_raw("image", model=model, provider="qwen")
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         data = urllib.request.urlopen(req, timeout=120).read()
         # 压缩：qwen 原图 ~2.5MB，浏览器加载慢/卡——缩到 900px 宽 + q78 约 200KB（快 10 倍）
@@ -576,7 +584,7 @@ def _gen_frame_images(case_id: str, frames: list):
                 FORGE_TASKS[case_id]["images"].append(f"f{i}")
 
     threads = [
-        threading.Thread(target=_one, args=(i + 1, f.get("ip", "")), daemon=True)
+        UsageThread(target=_one, args=(i + 1, f.get("ip", "")), daemon=True)
         for i, f in enumerate(frames[:6])
     ]
     for t in threads:
@@ -658,7 +666,7 @@ def _thread_mode2(case_id: str):
                 logger.warning("forge 代入决策[%s]失败: %s", m.get("name", ""), e)
 
         threads = [
-            threading.Thread(target=_detail, args=(i, m), daemon=True)
+            UsageThread(target=_detail, args=(i, m), daemon=True)
             for i, m in enumerate(metas[:3])
         ]
         for t in threads:
@@ -768,15 +776,15 @@ def save_case(case_id: str, package: Dict[str, Any]):
 
 def start_background(case_id: str, topic: str, core: Dict[str, Any]):
     """六个任务全并行：总时长 = max(单任务)，而非逐个相加。"""
-    threading.Thread(
+    UsageThread(
         target=_thread_cover,
         args=(case_id, topic, core.get("title", topic)),
         daemon=True,
     ).start()
-    threading.Thread(target=_thread_timeline, args=(case_id,), daemon=True).start()
-    threading.Thread(target=_thread_1b, args=(case_id,), daemon=True).start()
-    threading.Thread(target=_thread_script_a, args=(case_id,), daemon=True).start()
-    threading.Thread(target=_thread_mode2, args=(case_id,), daemon=True).start()
-    threading.Thread(target=_thread_rashomon, args=(case_id,), daemon=True).start()
-    threading.Thread(target=_thread_whatif, args=(case_id,), daemon=True).start()
-    threading.Thread(target=_thread_posts_warm, args=(case_id,), daemon=True).start()
+    UsageThread(target=_thread_timeline, args=(case_id,), daemon=True).start()
+    UsageThread(target=_thread_1b, args=(case_id,), daemon=True).start()
+    UsageThread(target=_thread_script_a, args=(case_id,), daemon=True).start()
+    UsageThread(target=_thread_mode2, args=(case_id,), daemon=True).start()
+    UsageThread(target=_thread_rashomon, args=(case_id,), daemon=True).start()
+    UsageThread(target=_thread_whatif, args=(case_id,), daemon=True).start()
+    UsageThread(target=_thread_posts_warm, args=(case_id,), daemon=True).start()

@@ -1,15 +1,18 @@
 """
-create_quiz：Agent 已出好题目后，将题目存入数据库
+create_quiz：Agent 出题工具
+
+题目内容由 Agent 在参数里给定，落库与作答实例创建统一委托给
+``QuizService.serve_quiz``（级别 0：调用方指定题目），
+与 HTTP 出题入口 ``/api/quiz/generate`` 共用同一套管道。
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
 from agent_core.tool.base import BaseTool
-from repositories.base import new_id, utcnow_str
-from database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +63,52 @@ class CreateQuizTool(BaseTool):
         ],
     }
 
-    def __init__(self, user_id: str, session_id: str, on_result_hook=None):
-        super().__init__(on_result_hook=on_result_hook)
+    def __init__(self, user_id: str, session_id: str):
+        super().__init__()
         self._user_id = user_id
         self._session_id = session_id
+
+    async def async_run(
+        self,
+        node_id: str = "",
+        quiz_type: str = "",
+        question: str = "",
+        correct_answer: str = "",
+        explanation: str = "",
+        options: list[str] = None,
+        **kwargs,
+    ) -> str:
+        # 延迟导入：agents 与 services 互相引用，模块级导入会形成循环
+        from services.quiz_service import QuizService
+
+        try:
+            quiz = await QuizService().serve_quiz(
+                self._user_id,
+                node_id,
+                session_id=self._session_id,
+                quiz_type=quiz_type or "multiple_choice",
+                provided={
+                    "question": question,
+                    "options": options,
+                    "correct_answer": correct_answer,
+                    "explanation": explanation,
+                },
+                # LLM 可能传入臆造的 node_id，回退到已有节点而非报错中断对话
+                strict_node=False,
+            )
+        except ValueError as exc:
+            # 把失败原因交回 Agent，让它自行修正后重试，不抛异常中断整轮
+            logger.warning("create_quiz 出题失败: %s", exc)
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+
+        result = {
+            "quiz_id": quiz.id,
+            "question": quiz.question,
+            "type": quiz.quiz_type,
+        }
+        if quiz.options:
+            result["options"] = quiz.options
+        return json.dumps(result, ensure_ascii=False)
 
     def run(
         self,
@@ -75,64 +120,15 @@ class CreateQuizTool(BaseTool):
         options: list[str] = None,
         **kwargs,
     ) -> str:
-        quiz_id = new_id()
-        now = utcnow_str()
-
-        with get_db() as conn:
-            # 校验 node_id：LLM 可能传入不存在/非本用户的节点 id，直接插入会触发
-            # 外键约束失败并抛异常。无效时回退到该用户的一个已有节点；
-            # 若用户没有任何节点，则优雅返回错误（交给 agent），不崩溃。
-            valid = conn.execute(
-                "SELECT id FROM nodes WHERE id=? AND user_id=?",
-                (node_id, self._user_id),
-            ).fetchone()
-            if valid is None:
-                fallback = conn.execute(
-                    "SELECT id FROM nodes WHERE user_id=? LIMIT 1",
-                    (self._user_id,),
-                ).fetchone()
-                if fallback is None:
-                    logger.warning(
-                        "create_quiz: 用户 %s 无可关联知识节点，跳过出题", self._user_id
-                    )
-                    return json.dumps(
-                        {"error": "当前没有可关联的知识节点，请先创建知识点后再出题。"},
-                        ensure_ascii=False,
-                    )
-                logger.warning(
-                    "create_quiz: node_id=%r 无效，回退到已有节点 %s",
-                    node_id,
-                    fallback[0],
-                )
-                node_id = fallback[0]
-
-            conn.execute(
-                """
-                INSERT INTO quizzes
-                  (id, user_id, node_id, session_id, quiz_type, question, options,
-                   correct_answer, explanation, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    quiz_id,
-                    self._user_id,
-                    node_id,
-                    self._session_id,
-                    quiz_type,
-                    question,
-                    json.dumps(options, ensure_ascii=False) if options else None,
-                    correct_answer,
-                    explanation,
-                    now,
-                ),
+        """同步兜底路径（正常调用走 async_run）。"""
+        return asyncio.run(
+            self.async_run(
+                node_id=node_id,
+                quiz_type=quiz_type,
+                question=question,
+                correct_answer=correct_answer,
+                explanation=explanation,
+                options=options,
+                **kwargs,
             )
-
-        result = {
-            "quiz_id": quiz_id,
-            "question": question,
-            "type": quiz_type,
-        }
-        if options:
-            result["options"] = options
-
-        return json.dumps(result, ensure_ascii=False)
+        )

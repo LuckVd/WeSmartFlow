@@ -14,7 +14,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from agent_core.agent.events import AgentFinalEvent, FileCreatedEvent
+from agent_core.agent.events import AgentFinalEvent, DomainEvent
+from agents.events import KIND_FILE_CREATED
 from config import PUBLIC_BASE_URL
 from dependencies import create_access_token
 from models.session import SessionCreate
@@ -92,28 +93,26 @@ async def generate_reply(owner_user_id: str, peer_id: str, text: str) -> BotRepl
 
     reply = BotReply()
     async for event in service.stream_chat(owner_user_id, session_id, text):
-        if isinstance(event, FileCreatedEvent):
-            ft = (event.file_type or "").lower()
+        if isinstance(event, DomainEvent) and event.kind == KIND_FILE_CREATED:
+            file_id = event.payload.get("file_id", "")
+            title = event.payload.get("title", "") or ""
+            ft = (event.payload.get("file_type") or "").lower()
             if ft in _RENDER_AS_IMAGE:
                 # 卡片类：渲染成图片发送，同时附带网页端交互链接
                 reply.cards.append(
                     {
-                        "doc_id": event.file_id,
+                        "doc_id": file_id,
                         "card_type": ft,
-                        "title": event.title or "",
-                        "url": _build_asset_url(
-                            event.file_id, user_jwt, download=False
-                        ),
+                        "title": title,
+                        "url": _build_asset_url(file_id, user_jwt, download=False),
                     }
                 )
             else:
                 as_file = ft in _RENDER_AS_FILE
                 reply.links.append(
                     {
-                        "title": event.title,
-                        "url": _build_asset_url(
-                            event.file_id, user_jwt, download=as_file
-                        ),
+                        "title": title,
+                        "url": _build_asset_url(file_id, user_jwt, download=as_file),
                         "kind": "file" if as_file else "link",
                     }
                 )

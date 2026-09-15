@@ -11,10 +11,11 @@ ChatAgent：流式聊天 Agent
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 from agent_core.agent.events import AgentStreamEvent
 from agent_core.agent.react import ReActAgent
+from agent_core.runtime.run_context import RunContext
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,19 @@ class ChatAgent(ReActAgent):
     - stream_chat：流式输出，逐步 yield AgentStreamEvent（适合 SSE / 实时对话）
     - run（继承自 ReActAgent）：非流式运行，等待完整结果返回（适合后台任务）
 
-    工具注册、ContextBuilder 组装均由调用方（Service 层或子类）完成。
+    工具注册、SystemPromptBuilder 组装均由调用方（Service 层或子类）完成。
+
+    .. note::
+       本类现在只是 ``ReActAgent.async_stream`` 的语义化别名。新代码建议
+       直接用 ``agents.registry.build_agent()`` 按声明装配 Agent，并调用
+       ``async_stream(user_input, ctx=...)``。
     """
 
     async def stream_chat(
-        self, user_message: str, **kwargs: Any
+        self,
+        user_message: str,
+        ctx: Optional[RunContext] = None,
+        **kwargs: Any,
     ) -> AsyncGenerator[AgentStreamEvent, None]:
         """流式单轮对话，逐步 yield AgentStreamEvent。
 
@@ -38,9 +47,13 @@ class ChatAgent(ReActAgent):
         - AgentThinkEvent      — LLM 思考内容
         - AgentToolCallEvent   — 工具调用请求
         - AgentToolResultEvent — 工具执行结果
+        - DomainEvent          — 工具 hook 产出的业务事件
         - AgentFinalEvent      — 最终回复（结束标志）
 
-        kwargs 透传给 context_builder.build_messages()。
+        Args:
+            user_message: 用户输入。
+            ctx:          运行上下文（预算 / 取消 / 追踪）；None 时用默认值。
+            **kwargs:     透传给 prompt_builder。
         """
-        async for event in self.async_stream(user_message, **kwargs):
+        async for event in self.async_stream(user_message, ctx, **kwargs):
             yield event

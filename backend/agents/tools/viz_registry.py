@@ -42,8 +42,6 @@ APIS: dict[str, dict] = {
     # 工具 / 事件
     "loadLib": {"category": "util", "output": False},
     "state": {"category": "util", "output": False},
-    "emit": {"category": "util", "output": False},
-    "on": {"category": "util", "output": False},
     "colors": {"category": "util", "output": False},
     "onThemeChange": {"category": "util", "output": False},
     "setTheme": {"category": "util", "output": False},

@@ -312,6 +312,19 @@
               >最近 3 个月</span
             >
           </div>
+          <!-- 图例（issue #24：说明颜色深浅含义） -->
+          <div class="hm-legend">
+            <span class="hm-legend-label">少</span>
+            <span class="hm-legend-cell hm-lv0" title="0 分钟" />
+            <span class="hm-legend-cell hm-lv1" title="1-30 分钟" />
+            <span class="hm-legend-cell hm-lv2" title="31-60 分钟" />
+            <span class="hm-legend-cell hm-lv3" title="61-120 分钟" />
+            <span class="hm-legend-cell hm-lv4" title="120 分钟以上" />
+            <span class="hm-legend-label">多</span>
+            <span class="hm-legend-note"
+              >颜色深浅 = 当日学习时长，悬停查看具体分钟数</span
+            >
+          </div>
           <div class="heatmap-wrap">
             <div class="heatmap-weekdays">
               <span>Sun</span><span /><span>Tue</span> <span /><span>Thu</span
@@ -342,17 +355,6 @@
                 />
               </div>
             </div>
-          </div>
-          <div class="hm-legend">
-            <span>少</span>
-            <div class="hml-cells">
-              <div class="hml-cell hm-lv0" />
-              <div class="hml-cell hm-lv1" />
-              <div class="hml-cell hm-lv2" />
-              <div class="hml-cell hm-lv3" />
-              <div class="hml-cell hm-lv4" />
-            </div>
-            <span>多</span>
           </div>
         </div>
 
@@ -725,6 +727,28 @@ const greeting = computed(() => {
 }
 
 /* Heatmap */
+.hm-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.hm-legend-label {
+  color: var(--text-dim);
+}
+.hm-legend-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+}
+.hm-legend-note {
+  margin-left: 10px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
 .heatmap-wrap {
   display: flex;
   gap: 4px;
@@ -790,25 +814,6 @@ const greeting = computed(() => {
   outline: 1.5px solid var(--text-primary);
   outline-offset: 1px;
 }
-.hm-legend {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 8px;
-  justify-content: flex-end;
-  font-size: 10px;
-  color: var(--text-dim);
-}
-.hml-cells {
-  display: flex;
-  gap: 2px;
-}
-.hml-cell {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-}
-
 /* AI Rec card */
 .ai-rec-card {
   padding: 18px;

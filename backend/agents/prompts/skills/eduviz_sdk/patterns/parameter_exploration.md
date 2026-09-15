@@ -25,7 +25,6 @@ controls: slider × 1~3（主参数）; toggle（辅助线开关）; select（�
 // ① 先创建所有控件
 const a = EduViz.slider('振幅 A', { min: 0.1, max: 3, step: 0.1, default: 1, unit: '' })
 const f = EduViz.slider('频率 f', { min: 0.1, max: 5, step: 0.1, default: 1, unit: 'Hz' })
-const showGrid = EduViz.toggle('显示网格', { default: true })
 
 // ② 展示元素
 const formula = EduViz.latex('y = A\\sin(2\\pi f x)', { displayMode: true })
@@ -48,11 +47,6 @@ function update() {
 // ⑤ 最后统一绑 onChange（注册时立即触发 → 完成首屏绘制）
 a.onChange(update)
 f.onChange(update)
-showGrid.onChange(v => {
-  ax.redraw(() => {
-    ax.plot(x => a.value * Math.sin(2 * Math.PI * f.value * x), { color: 'brand', width: 2 })
-  })
-})
 EduViz.onThemeChange(() => update())
 ```
 

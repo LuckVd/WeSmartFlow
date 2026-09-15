@@ -755,6 +755,31 @@
             <button class="qb-chip" @click="sendMessage('给一个可视化例子')">
               给一个可视化例子
             </button>
+            <!-- 快捷反馈（issue #76/#69） -->
+            <button
+              class="qb-chip"
+              @click="sendMessage('讲得短一点，只保留核心结论')"
+            >
+              短一点
+            </button>
+            <button
+              class="qb-chip"
+              @click="sendMessage('举个例子说明刚才的内容')"
+            >
+              举个例子
+            </button>
+            <button
+              class="qb-chip"
+              @click="sendMessage('我没听懂，换个更通俗的方式再讲一遍')"
+            >
+              没听懂
+            </button>
+            <button
+              class="qb-chip"
+              @click="sendMessage('出一道小题让我练一下刚学的内容')"
+            >
+              出题练一下
+            </button>
           </div>
 
           <!-- 输入区 -->
@@ -2094,13 +2119,26 @@ async function sendWithSSE(text) {
   });
 }
 
+// 错误分类（issue #22：区分额度/鉴权/模型/超时，告诉用户下一步做什么）
+function classifyError(errMsg) {
+  const msg = typeof errMsg === "string" ? errMsg : "";
+  if (/额度|429|quota|Too Many Requests/i.test(msg))
+    return "本月免费额度已用完：可在设置中配置自己的 API Key（不受限），或下月自动重置。";
+  if (/401|403|鉴权|授权|api.?key|invalid.*key|unauthorized/i.test(msg))
+    return "API Key 无效或过期：请到设置页检查 Key 是否正确，保存后点「测试连接」。";
+  if (/model.*not.*(found|exist)|模型不存在|404/i.test(msg))
+    return "模型不存在：请到设置页确认模型名称拼写正确（如 deepseek-chat）。";
+  if (/timeout|超时/i.test(msg))
+    return "请求超时：网络不稳定或模型响应慢，请稍后重试；频繁超时可换更快的模型。";
+  if (/network|ECONNREFUSED|fetch|Failed to fetch|ERR_/i.test(msg))
+    return "网络连接失败：请检查网络，或确认后端服务已启动。";
+  return msg ? `请求失败：${msg}` : "连接失败，请检查后端服务是否启动。";
+}
+
 // 连接失败时的错误提示
 async function sendLocal(errMsg) {
   const idx = messages.value.length - 1;
-  const tip =
-    typeof errMsg === "string" && errMsg
-      ? `连接失败：${errMsg}`
-      : "连接失败，请检查后端服务是否启动。";
+  const tip = classifyError(errMsg);
   messages.value[idx] = {
     role: "assistant",
     thinking: false,
@@ -3810,6 +3848,7 @@ onUnmounted(() => {
 
 .quick-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
   padding: 8px 12px;
   border-top: 1px solid var(--border);

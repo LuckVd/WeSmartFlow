@@ -39,6 +39,7 @@ MAIN_EXPORT_TABLES = {
     },
     "knowledge": {
         "nodes": "nodes",
+        "question_bank": "question_bank",
         "quizzes": "quizzes",
         "study_logs": "study_logs",
         "daily_plans": "daily_plans",
@@ -67,6 +68,8 @@ MAIN_IMPORT_ORDER = [
     "user_profile_skills",
     "nodes",
     "sessions",
+    # question_bank 必须先于 quizzes：后者以 question_id 外键引用前者
+    "question_bank",
     "quizzes",
     "study_logs",
     "daily_plans",
@@ -84,6 +87,7 @@ MAIN_USER_TABLES = {
     "user_profile_skills",
     "nodes",
     "sessions",
+    "question_bank",
     "quizzes",
     "study_logs",
     "daily_plans",
@@ -224,6 +228,7 @@ def export_backup(user_id: str = Depends(get_current_user)):
         "sessions": {"metadata": [], "messages": {}, "workspaces": {}},
         "kg": {},
         "documents": {},
+        "graph_views": {},
     }
 
     with get_db() as conn:
@@ -234,8 +239,9 @@ def export_backup(user_id: str = Depends(get_current_user)):
         payload["user"] = dict(user_row) if user_row else {"id": user_id}
 
         for section, mapping in MAIN_EXPORT_TABLES.items():
+            bucket = payload.setdefault(section, {})
             for key, table in mapping.items():
-                payload[section][key] = _rows(conn, table, user_id)
+                bucket[key] = _rows(conn, table, user_id)
 
         session_rows = _rows(conn, "sessions", user_id)
         payload["sessions"]["metadata"] = session_rows

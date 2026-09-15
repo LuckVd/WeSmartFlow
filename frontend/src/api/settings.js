@@ -15,8 +15,11 @@ export const settingsApi = {
   // 保存设置
   save: (data) => api.post("/api/settings", data),
 
-  // 查询用户剩余免费次数
-  getQuota: () => api.get("/api/settings/quota"),
+  // 查询当期 credits 额度用量
+  getQuota: () => api.get("/api/usage/credits/quota"),
+
+  // 功能可用性（issue #62/#103：llm/search/image 是否已配置）
+  getFeatures: () => api.get("/api/settings/features"),
 
   // 测试 LLM 连接
   testLLM: () => api.post("/api/settings/test"),

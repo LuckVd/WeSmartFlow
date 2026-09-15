@@ -40,7 +40,7 @@ if str(_BACKEND) not in sys.path:
 
 from agent_core.agent.events import AgentFinishReason  # noqa: E402
 from agent_core.agent.react import ReActAgent  # noqa: E402
-from agent_core.context.simple import SimpleContextBuilder  # noqa: E402
+from agent_core.context.static import StaticPromptBuilder  # noqa: E402
 from agent_core.tool.registry import ToolRegistry  # noqa: E402
 
 from agents.tools.kg_tools import (  # noqa: E402
@@ -123,7 +123,7 @@ def _build_facet_agent(sandbox: Path) -> ReActAgent:
     )
     return ReActAgent(
         llm=get_system_llm(timeout=90),
-        context_builder=SimpleContextBuilder(_FACET_AUTHOR_SYSTEM_PROMPT),
+        prompt_builder=StaticPromptBuilder(_FACET_AUTHOR_SYSTEM_PROMPT),
         tool_registry=registry,
         max_steps=8,
     )
@@ -141,7 +141,7 @@ def _build_concept_agent(sandbox: Path) -> ReActAgent:
     )
     return ReActAgent(
         llm=get_system_llm(timeout=120),
-        context_builder=SimpleContextBuilder(_CONCEPT_AUTHOR_SYSTEM_PROMPT),
+        prompt_builder=StaticPromptBuilder(_CONCEPT_AUTHOR_SYSTEM_PROMPT),
         tool_registry=registry,
         max_steps=16,
     )

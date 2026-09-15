@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 
 from agent_core.agent.react import ReActAgent
-from agent_core.context.simple import SimpleContextBuilder
+from agent_core.context.static import StaticPromptBuilder
 from agent_core.tool.base import BaseTool
 from agent_core.tool.filesystem import WriteFileTool
 from agent_core.tool.pdf_compile import LatexPdfCompileTool
@@ -27,7 +27,6 @@ from agent_core.tool.registry import ToolRegistry
 from agents.tools.image_gen_factory import build_image_gen_tool
 from config import CARDS_DIR, TEX_TEMPLATE_DIR
 from services.llm_factory import get_llm
-from services.quota import check_and_consume
 from repositories.document_repo import DocumentRepository
 
 
@@ -102,19 +101,17 @@ array, enumitem
 def _build_card_writer_agent(work_dir: Path, user_id) -> ReActAgent:
     """创建 CardWriterAgent，工作目录限定在 work_dir 下，支持插图生成。"""
 
-    def _image_hook():
-        check_and_consume(user_id, "image")
-
     tools = ToolRegistry(
         [
             WriteFileTool(workspace=work_dir, allowed_dir=work_dir),
-            build_image_gen_tool(user_id, before_call_hook=_image_hook),
             LatexPdfCompileTool(TEX_TEMPLATE_DIR),
         ]
     )
+    # 图像工具走工厂构建（额度拦截 + 记账挂在 client 上），无需再绑 hook
+    tools.register(build_image_gen_tool(user_id))
     return ReActAgent(
-        llm=get_llm(user_id),
-        context_builder=SimpleContextBuilder(_CARD_WRITER_SYSTEM_PROMPT),
+        llm=get_llm(user_id, scene="chat"),
+        prompt_builder=StaticPromptBuilder(_CARD_WRITER_SYSTEM_PROMPT),
         tool_registry=tools,
         max_steps=15,
         llm_config={"temperature": 0.3},
@@ -161,8 +158,8 @@ class GenerateCardTool(BaseTool):
         "required": ["title", "content"],
     }
 
-    def __init__(self, user_id=None, session_id=None, on_result_hook=None):
-        super().__init__(on_result_hook=on_result_hook)
+    def __init__(self, user_id=None, session_id=None):
+        super().__init__()
         self.user_id = user_id
         self.session_id = session_id
 
@@ -279,7 +276,7 @@ class GenerateCardTool(BaseTool):
                 tex_content = (
                     final_tex.read_text(encoding="utf-8") if final_tex.exists() else ""
                 )
-                llm = get_llm(self.user_id)
+                llm = get_llm(self.user_id, scene="chat")
                 prompt = (
                     f"以下是一张标题为「{title}」的 LaTeX Beamer 知识卡片源码。\n"
                     f"请为这张卡片写一段口语化的讲解旁白，100-200字，"
@@ -359,7 +356,6 @@ class GenerateCardTool(BaseTool):
         import json
         import re
         import logging
-        from agent_core.tool.qwen_tts import synthesize_batch
 
         logger = logging.getLogger(__name__)
 
@@ -372,7 +368,7 @@ class GenerateCardTool(BaseTool):
             return
 
         # 用 LLM 生成讲解稿
-        llm = get_llm(self.user_id)
+        llm = get_llm(self.user_id, scene="chat")
         prompt = (
             f"以下是一份 LaTeX Beamer 知识卡片，共 {num_frames} 页。\n\n"
             f"请以老师的身份，为每一页写一段**简短的讲解旁白**（30-80字/页）。\n"
@@ -406,8 +402,15 @@ class GenerateCardTool(BaseTool):
             {"text": str(note), "filename": f"frame_{i + 1:03d}.wav"}
             for i, note in enumerate(notes)
         ]
-        # TTS 合成（qwen3-tts 优先，无 key 回退 macOS say，都无则不生成）
-        result = synthesize_batch(items=items, output_dir=str(audio_dir))
+        # TTS 走工厂（qwen3-tts 优先，单条失败回退 macOS say，都无则跳过）
+        from services.tts_factory import get_tts
+
+        tts = get_tts(self.user_id, scene="media")
+        if tts is None:
+            logger.info("卡片 %s 无可用 TTS 通道，跳过语音生成", card_id)
+            result = {"results": []}
+        else:
+            result = tts.synthesize_batch(items=items, output_dir=str(audio_dir))
 
         # 保存讲解稿
         notes_path = CARDS_DIR / card_id / "notes.json"

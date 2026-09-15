@@ -14,9 +14,22 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-# hook 签名：(tool_name, params, result, index) -> None 或 Awaitable[None]
-# index 为该工具调用在本轮 tool_calls 中的顺序（从 0 开始），用于保序处理
-ToolResultHook = Callable[[str, Dict[str, Any], Any, int], Union[None, Awaitable[None]]]
+# hook 签名：(tool_name, params, result, index) -> 事件 | 事件列表 | None
+#
+# index 为该工具调用的全局序号（跨轮次单调递增），用于保序处理。
+# 返回值：
+#   - None                     无副作用通知（多数 hook）
+#   - DomainEvent              单个业务事件，由 ToolRegistry 并入事件流
+#   - list[DomainEvent]        多个业务事件
+# 支持普通函数与 async 函数两种形式。
+#
+# 让 hook 能返回事件是刻意的设计：改造前 hook 签名为 ``-> None``，业务侧
+# 只能把事件塞进旁路队列再手工 flush，事件顺序取决于 flush 时机而非实际
+# 发生顺序。现在顺序由框架保证。
+ToolResultHook = Callable[
+    [str, Dict[str, Any], Any, int],
+    Union[None, Any, Awaitable[Any]],
+]
 
 
 # ============================================================
@@ -78,21 +91,18 @@ class BaseTool(ABC):
         "required": [],
     }
 
-    def __init__(
-        self,
-        on_result_hook: Optional[ToolResultHook] = None,
-        before_call_hook: Optional[Callable[[], Union[None, Awaitable[None]]]] = None,
-        **kwargs: Any,
-    ):
-        """允许通过构造函数覆盖类属性。
+    def __init__(self, **kwargs: Any):
+        """允许通过构造函数覆盖类属性（name / description / parameters）。
 
-        Args:
-            on_result_hook: 工具执行完毕后的回调，签名为
-                ``(tool_name: str, params: dict, result: Any, index: int = 0) -> None``。
-                支持普通函数和 async 函数，两种形式均可。
-                index 标识该工具调用在本轮 tool_calls 中的位置。
-            before_call_hook: 工具执行前的回调（如额度检查），签名为
-                ``() -> None``。支持普通函数和 async 函数。
+        Note:
+            工具本身**不持有任何 hook**。额度检查、业务事件产出等治理关注点
+            由 :meth:`ToolRegistry.register` 在注册时显式绑定，
+            并统一在 Registry 的执行路径上触发。
+
+            这样做的原因：hook 若存在工具实例上，就会出现「同一个 hook
+            走不同入口行为不同」的隐形陷阱——便捷入口拿不到全局 index、
+            也无处转发业务事件，只能丢弃。把治理收归 Registry 后，
+            工具回归纯粹的「能力单元」。
         """
         if "name" in kwargs:
             self.name = kwargs["name"]
@@ -105,9 +115,6 @@ class BaseTool(ABC):
             raise ValueError("工具必须定义 name")
         if not self.description:
             raise ValueError("工具必须定义 description")
-
-        self._on_result_hook: Optional[ToolResultHook] = on_result_hook
-        self._before_call_hook = before_call_hook
 
     # ------------------------------------------------------------------
     # JSON Schema 输出
@@ -429,7 +436,7 @@ class BaseTool(ABC):
         """
         异步流式执行工具，yield 文本片段或子 Agent 事件。
 
-        默认降级为调用 ``async_run()``，将结果作为单个字符串 yield。
+        默认降级为调用 ``async_run()``，保留多模态内容块列表。
         AgentTool 等有真正流式能力的子类应覆写此方法。
 
         Yields:
@@ -438,73 +445,49 @@ class BaseTool(ABC):
         # 通过 getattr 间接调用，避免静态扫描器对 async_run() 的签名匹配误报
         _async_run = getattr(self, "async_run")
         result = await _async_run(**kwargs)
-        yield result if isinstance(result, str) else str(result)
+        yield result if isinstance(result, (str, list)) else str(result)
 
     # ------------------------------------------------------------------
     # 便捷调用
     # ------------------------------------------------------------------
 
     def __call__(self, **kwargs: Any) -> Any:
-        """支持直接以函数形式调用: ``tool(city="北京")``"""
-        # 执行前 hook（额度检查等）
-        if self._before_call_hook is not None:
-            ret = self._before_call_hook()
-            if asyncio.iscoroutine(ret):
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(ret)
-                    else:
-                        loop.run_until_complete(ret)
-                except RuntimeError:
-                    asyncio.run(ret)
+        """支持直接以函数形式调用: ``tool(city="北京")``
+
+        只做「校验参数 → 调用 :meth:`run` → 返回结果」，不涉及任何治理。
+
+        .. warning::
+           这是**纯执行入口**，仅供脚本、调试与单测使用。
+           它不触发任何 hook，也没有预算检查与取消响应。
+
+           Agent 循环内的工具执行请一律走
+           :meth:`~agent_core.tool.registry.ToolRegistry.execute`
+           或 ``async_stream_execute`` —— 那里会分配真实的全局 index、
+           触发额度检查、转发业务事件、并做 ``ctx.checkpoint()``。
+        """
         casted = self.cast_params(kwargs)
         errors = self.validate_params(casted)
         if errors:
             raise ValueError(f"工具 {self.name} 参数校验失败: {'; '.join(errors)}")
         # 通过 getattr 间接调用，避免静态扫描器对 run() 的签名匹配误报
         _run = getattr(self, "run")
-        result = _run(**casted)
-        if self._on_result_hook is not None:
-            ret = self._on_result_hook(self.name, casted, result, 0)
-            # 若 hook 返回了协程但当前在同步上下文，丢给事件循环执行
-            if asyncio.iscoroutine(ret):
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(ret)
-                    else:
-                        loop.run_until_complete(ret)
-                except RuntimeError:
-                    asyncio.run(ret)
-        return result
+        return _run(**casted)
 
     async def async_call(self, **kwargs: Any) -> Any:
-        """异步便捷调用。"""
-        # 执行前 hook（额度检查等）
-        if self._before_call_hook is not None:
-            ret = self._before_call_hook()
-            if asyncio.iscoroutine(ret):
-                await ret
+        """异步纯执行入口。语义同 :meth:`__call__`，不触发任何 hook。"""
         casted = self.cast_params(kwargs)
         errors = self.validate_params(casted)
         if errors:
             raise ValueError(f"工具 {self.name} 参数校验失败: {'; '.join(errors)}")
         # 通过 getattr 间接调用，避免静态扫描器对 async_run() 的签名匹配误报
         _async_run = getattr(self, "async_run")
-        result = await _async_run(**casted)
-        if self._on_result_hook is not None:
-            ret = self._on_result_hook(self.name, casted, result, 0)
-            if asyncio.iscoroutine(ret):
-                await ret
-        return result
+        return await _async_run(**casted)
 
     async def async_stream_call(self, **kwargs: Any):
         """流式执行工具，仅负责参数校验和流式输出。
 
-        注意：hook 触发（before_call_hook / on_result_hook）由调用方
-        （ToolRegistry.async_stream_execute）统一管理，此处不触发，
-        避免在并行场景下 hook 乱序执行。
+        注意：治理 hook 由 ToolRegistry 在注册时绑定、并在其执行路径上
+        统一触发（见 ToolRegistry 文档），工具自身不涉及。
 
         Raises:
             ValueError: 参数校验失败时抛出，由调用方捕获并转为错误响应。

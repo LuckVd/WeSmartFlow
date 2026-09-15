@@ -70,7 +70,7 @@ async def quick_ask(
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
-    llm = get_llm(user_id)
+    llm = get_llm(user_id, scene="chat")
 
     # 构造简单的消息列表
     messages = []

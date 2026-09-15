@@ -1,11 +1,11 @@
 """历史法庭 demo 路由。
 
-认证：demo 阶段不做 JWT 校验（游客可玩），统一用 default 用户的 LLM 配置。
+认证：所有 demo API 校验 JWT，调用及后台任务归属当前登录用户。
 """
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from court.service import interrogate as svc_interrogate
@@ -20,7 +20,11 @@ import time
 from court import forge as forge_mod
 from court.tts import synthesize
 
-router = APIRouter(prefix="/api/court", tags=["court"])
+from services.external_usage import demo_usage
+
+router = APIRouter(
+    prefix="/api/court", tags=["court"], dependencies=[Depends(demo_usage("court"))]
+)
 
 
 class InterrogateRequest(BaseModel):

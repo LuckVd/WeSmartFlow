@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-server.py — 知识之境 · live_science 本地服务器（零第三方依赖）
+server.py — 知识之境 · live_science 本地服务器（复用主项目鉴权和用量服务）
 
 职责：
 1. 静态文件服务（替代 python -m http.server）
@@ -55,8 +55,16 @@ def load_env_config():
 
 CFG = load_env_config()
 
+# Integrated and standalone paid routes share authenticated usage accounting.
+import sys
+sys.path.insert(0, str(ROOT.parent.parent / "backend"))
+from services.external_usage import before_raw, record_raw, UsageThread, usage_scope
+from services.credit_quota import CreditsExceeded
+
+
 
 def _llm_request(base, key, model, messages, timeout, max_tokens, json_mode=False):
+    before_raw("llm", model=model)
     payload = {
         "model": model,
         "messages": messages,
@@ -79,6 +87,8 @@ def _llm_request(base, key, model, messages, timeout, max_tokens, json_mode=Fals
         raw = resp.read().decode("utf-8")
     data = json.loads(raw)
     msg = data["choices"][0]["message"]
+    from services.pricing import ensure_usage
+    record_raw("llm", model=model, usage=ensure_usage(data.get("usage"), messages, msg.get("content")))
     text = (msg.get("content") or "").strip()
     if not text:
         text = (msg.get("reasoning_content") or "").strip()
@@ -92,6 +102,8 @@ def call_llm(messages, timeout=60, max_tokens=3000, json_mode=False):
     try:
         return _llm_request(CFG["LLM_BASE_URL"], CFG["LLM_API_KEY"], CFG["LLM_MODEL"],
                             messages, timeout, max_tokens, json_mode)
+    except CreditsExceeded:
+        raise
     except Exception as e:
         if CFG["DASHSCOPE_API_KEY"]:
             print(f"[llm] 主通道失败({e})，回退 DashScope qwen-plus")
@@ -229,6 +241,8 @@ def slugify(s):
 
 def call_image(prompt, timeout=180):
     """qwen-image（DashScope multimodal-generation），返回图片二进制"""
+    model = CFG["IMG_MODEL"] or "qwen-image-2.0"
+    before_raw("image", model=model, provider="qwen")
     payload = json.dumps({
         "model": CFG["IMG_MODEL"] or "qwen-image-2.0",
         "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
@@ -261,6 +275,7 @@ def call_image(prompt, timeout=180):
     url = find_url(data.get("output"))
     if not url:
         raise RuntimeError("image gen 无图片返回: " + json.dumps(data, ensure_ascii=False)[:200])
+    record_raw("image", model=model, provider="qwen")
     with urllib.request.urlopen(url, timeout=timeout) as r:
         return r.read()
 
@@ -288,6 +303,7 @@ def extract_json(text):
 # ================= Tavily 史实调研 =================
 def call_tavily(query, timeout=30):
     """Tavily 搜索：返回答案摘要 + 结果正文片段"""
+    before_raw("search", provider="tavily")
     payload = json.dumps({
         "api_key": CFG["TAVILY_API_KEY"],
         "query": query,
@@ -302,6 +318,7 @@ def call_tavily(query, timeout=30):
         method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
+    record_raw("search", provider="tavily", units=(data.get("usage") or {}).get("credits", 2))
     parts = []
     if data.get("answer"):
         parts.append("【摘要】%s" % data["answer"])
@@ -1031,6 +1048,8 @@ def run_generate(job_id, topic, audience):
         engine = engine.replace("live_science_conic_v3", "live_science_%s_v1" % slug)
         engine = engine.replace("<title>知识之境 · 圆锥曲线 —— 两千三百年的六次重生</title>",
                                 "<title>知识之境 · %s</title>" % chap_title)
+        if "/example-auth.js" not in engine:
+            engine = engine.replace("<head>", '<head><script src="/example-auth.js"></script>', 1)
         (out_dir / "index.html").write_text(engine, encoding="utf-8")
         (out_dir / "README.md").write_text(
             "# 知识之境 · %s\n\n由篇章工厂生成（topic: %s, audience: %s）。\n\n"
@@ -1140,6 +1159,8 @@ def call_tts_dashscope(voice, text, instruct, timeout=90):
     instruct: 自然语言语气指令（如"空灵缓慢的女声"），是本模型的核心能力
     """
     text = tts_normalize(text)
+    model = CFG["TTS_MODEL"] or "qwen3-tts-instruct-flash"
+    before_raw("audio", model=model, provider="qwen")
     key = CFG["DASHSCOPE_API_KEY"] or os.environ.get("DASHSCOPE_API_KEY", "")
     if not key:
         raise RuntimeError("DASHSCOPE_API_KEY 未配置")
@@ -1162,6 +1183,7 @@ def call_tts_dashscope(voice, text, instruct, timeout=90):
     url = (data.get("output") or {}).get("audio", {}).get("url")
     if not url:
         raise RuntimeError(f"dashscope 无音频返回: {json.dumps(data, ensure_ascii=False)[:300]}")
+    record_raw("audio", model=model, provider="qwen", units=(data.get("usage") or {}).get("characters", len(text)))
     with urllib.request.urlopen(url, timeout=timeout) as r:
         return r.read(), "audio/wav"
 
@@ -1347,6 +1369,8 @@ def prerender_audio(story, out_dir):
 
 def call_tts(voice, text, speed, timeout=90):
     """调用 OpenAI 兼容 TTS，返回音频二进制"""
+    model = CFG["TTS_MODEL"] or "tts-1"
+    before_raw("audio", model=model, provider="openai")
     base = CFG["TTS_BASE_URL"].rstrip("/")
     url = f"{base}/audio/speech"
     payload = json.dumps({
@@ -1365,7 +1389,9 @@ def call_tts(voice, text, speed, timeout=90):
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read(), resp.headers.get("Content-Type", "audio/mpeg")
+        audio = resp.read()
+        record_raw("audio", model=model, provider="openai", units=len(text))
+        return audio, resp.headers.get("Content-Type", "audio/mpeg")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1374,7 +1400,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
     def end_headers(self):
@@ -1481,6 +1507,17 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        from dependencies import decode_access_token
+        try:
+            auth = self.headers.get("Authorization", "")
+            user_id = decode_access_token(auth.removeprefix("Bearer "))
+        except Exception:
+            self.send_error(401, "Authentication required")
+            return
+        with usage_scope(user_id, "live-science"):
+            self._do_POST()
+
+    def _do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -1498,7 +1535,7 @@ class Handler(SimpleHTTPRequestHandler):
                 import uuid
                 job_id = uuid.uuid4().hex[:8]
                 JOBS[job_id] = {"stage": "queued", "message": "排队中……"}
-                threading.Thread(target=run_generate, args=(job_id, topic, audience), daemon=True).start()
+                UsageThread(target=run_generate, args=(job_id, topic, audience), daemon=True).start()
                 self._json_ok({"ok": True, "job": job_id})
             except Exception as e:
                 self._json_ok({"ok": False, "error": str(e)})

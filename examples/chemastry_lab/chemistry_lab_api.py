@@ -33,11 +33,14 @@ from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
 from chem_contract import normalize_chat, normalize_reaction  # noqa: E402
 from services.content_guard import get_content_guard  # noqa: E402
-from services.llm_factory import get_system_llm  # noqa: E402
+from services.external_usage import current_usage, demo_usage
+from services.credit_quota import CreditsExceeded
+from fastapi import Depends
+from services.llm_factory import get_llm  # noqa: E402
 
 logger = logging.getLogger("chemistry-lab-agent")
 
-router = APIRouter(prefix="/api/demo/chemistry-lab", tags=["chemistry-lab"])
+router = APIRouter(prefix="/api/demo/chemistry-lab", tags=["chemistry-lab"], dependencies=[Depends(demo_usage("chemistry-lab"))])
 
 _rate_windows: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = threading.Lock()
@@ -581,7 +584,7 @@ async def _invoke(
                 "outside the final answer and return only the requested JSON object."
             )
         try:
-            llm = get_system_llm(timeout=_timeout_seconds())
+            llm = get_llm(current_usage().user_id, timeout=_timeout_seconds(), scene="chemistry-lab")
             config: dict[str, Any] = {
                 "temperature": 0.1,
                 "max_tokens": max_tokens,
@@ -597,6 +600,8 @@ async def _invoke(
                 ],
                 config=config,
             )
+        except CreditsExceeded:
+            raise
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Unable to create or call the WeSmartFlow LLM")
             raise HTTPException(status_code=503, detail="化学引擎暂时不可用。") from exc

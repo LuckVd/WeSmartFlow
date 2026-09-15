@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import os
 import asyncio
 import json
 import logging
@@ -20,7 +19,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from agent_core.agent import ReActAgent
-from agent_core.context.simple import SimpleContextBuilder
+from agent_core.context.static import StaticPromptBuilder
 from agent_core.tool import (
     ArxivSearch,
     TavilySearch,
@@ -28,13 +27,13 @@ from agent_core.tool import (
     WebFetch,
     WriteFileTool,
 )
-from database import get_setting
 
-from agent_core.layout import CourseLayout, UserDataLayout, _slugify
+from agent_core.layout import UserDataLayout, slugify as _slugify
 from agent_core.tool.pdf_compile import validate_pdf_file
 
 from services.asset_service import archive_immersive_chapter, pack_chapter_bundle
 from services.immersive.agents import build_sub_agents
+from services.immersive.layout import CourseLayout
 from services.immersive.node_extractor import extract_and_persist_nodes
 from services.immersive.persistence import (
     create_session,
@@ -460,7 +459,7 @@ async def build_personalized_plan(
 请为这位学习者生成个性化的学习建议。"""
 
     try:
-        llm = get_llm(user_id)
+        llm = get_llm(user_id, scene="immersive")
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -1015,13 +1014,11 @@ def _build_researcher_agent(layout: "UserDataLayout", user_id: str) -> "ReActAge
 
     每个并发任务需要独立的 agent 实例，避免内部 history 冲突。
     """
-    tavily_key = get_setting(user_id, "tavily_api_key") or os.getenv(
-        "TAVILY_API_KEY", ""
-    )
+    from services.search_factory import get_search_client
 
     return ReActAgent(
-        llm=get_llm(user_id),
-        context_builder=SimpleContextBuilder(
+        llm=get_llm(user_id, scene="immersive"),
+        prompt_builder=StaticPromptBuilder(
             "你是信息检索与整理助手。根据章节信息检索资料，整理为 JSON 写入指定路径。\n\n"
             "**JSON 输出格式**：\n"
             '{"chapter_id": N, "chapter_title": "...",\n'
@@ -1043,7 +1040,7 @@ def _build_researcher_agent(layout: "UserDataLayout", user_id: str) -> "ReActAge
         ),
         tool_registry=ToolRegistry(
             [
-                TavilySearch(api_key=tavily_key),
+                TavilySearch(client=get_search_client(user_id, scene="immersive")),
                 ArxivSearch(),
                 WebFetch(),
                 WriteFileTool(),
@@ -1148,6 +1145,8 @@ async def immersive_generate(
         )
 
         session_id = create_session(topic, user_id=user_id)
+        # 在规划等长耗时操作前下发会话身份，前端可立即保存恢复地址。
+        yield sse_event("session_created", session_id=session_id)
         logger.info(
             "沉浸式学习会话: %s (topic=%s, enable_audio=%s)",
             session_id,
@@ -1339,7 +1338,7 @@ async def immersive_generate(
 
         # ── 2. 并行 Research + 预习手册 ─────────────────────
 
-        tts_llm = get_llm(user_id) if enable_audio else None
+        tts_llm = get_llm(user_id, scene="immersive") if enable_audio else None
         chapter_results = []
         all_extracted_nodes = []  # 每章增量抽取的知识图谱节点（跨章按 id 去重）
         all_files_for_session = []
@@ -1709,7 +1708,10 @@ async def immersive_generate(
                     )
 
                     audio_results = await asyncio.to_thread(
-                        run_tts_for_chapter, course.chapter_dir(ch_id), speaker_notes
+                        run_tts_for_chapter,
+                        course.chapter_dir(ch_id),
+                        speaker_notes,
+                        user_id,
                     )
                     logger.info(
                         "TTS 完成: 第%d章, %d 段语音", ch_id, len(audio_results)
@@ -1964,7 +1966,7 @@ async def immersive_generate(
                     session_id,
                     topic,
                     [single_ch],
-                    tts_llm or get_llm(user_id),
+                    tts_llm or get_llm(user_id, scene="immersive"),
                     user_id,
                 )
                 if ch_nodes:
@@ -1999,7 +2001,7 @@ async def immersive_generate(
                 created_nodes.append(n)
 
         if not created_nodes:
-            extractor_llm = tts_llm or get_llm(user_id)
+            extractor_llm = tts_llm or get_llm(user_id, scene="immersive")
             created_nodes = await asyncio.to_thread(
                 extract_and_persist_nodes,
                 session_id,
@@ -2167,15 +2169,11 @@ async def immersive_resume(
             return
 
         # 找到 course_dir
-        from agent_core.layout import _slugify
-
         course_slug = f"{_slugify(topic)}_{session_id}"
         course_dir = COURSES_DIR / course_slug
         if not course_dir.exists():
             yield sse_event("error", message=f"课程目录不存在: {course_slug}")
             return
-
-        from agent_core.layout import CourseLayout, UserDataLayout
 
         course = CourseLayout(course_dir=course_dir)
         outline = course.load_outline()
@@ -2395,7 +2393,7 @@ async def immersive_resume(
         layout = UserDataLayout(root=DOCUMENTS_DIR, user_id=user_id)
         agents = build_sub_agents(layout, user_id=user_id)
 
-        tts_llm = get_llm(user_id) if enable_audio else None
+        tts_llm = get_llm(user_id, scene="immersive") if enable_audio else None
         chapter_results = []
         all_files_for_session = []
         pct_per_chapter = 75.0 / max(len(pending_chapters), 1)
@@ -2718,7 +2716,10 @@ async def immersive_resume(
                         encoding="utf-8",
                     )
                     audio_results = await asyncio.to_thread(
-                        run_tts_for_chapter, course.chapter_dir(ch_id), speaker_notes
+                        run_tts_for_chapter,
+                        course.chapter_dir(ch_id),
+                        speaker_notes,
+                        user_id,
                     )
 
             # 登记 讲解稿 / 音频包 到 documents（跳过 / 复用 / 新生成都会走进这里）
@@ -3058,7 +3059,7 @@ async def immersive_resume(
         from services.immersive.node_extractor import extract_and_persist_nodes
 
         # 知识图谱抽取与音频开关解耦，保证 LLM 实例始终可用
-        extractor_llm = tts_llm or get_llm(user_id)
+        extractor_llm = tts_llm or get_llm(user_id, scene="immersive")
         new_chapters_info = [chapters[i] for i, _ in pending_chapters]
         created_nodes = await asyncio.to_thread(
             extract_and_persist_nodes,

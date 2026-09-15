@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from dependencies import get_current_user
-from services.quota import QuotaExceededError
+from services.credit_quota import CreditsExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +76,8 @@ async def generate_html_card(
                 # AgentFinalEvent / 其它流式事件忽略
         except asyncio.CancelledError:
             logger.info("[generate_html_card] 生成被取消")
-        except QuotaExceededError as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'code': 'quota_exceeded'}, ensure_ascii=False)}\n\n"
+        except CreditsExceeded as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'code': 'credits_exceeded'}, ensure_ascii=False)}\n\n"
         except Exception as e:  # pylint: disable=broad-except
             logger.exception("[generate_html_card] 生成失败")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"

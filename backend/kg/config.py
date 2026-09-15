@@ -88,8 +88,19 @@ KG_ANCHOR_MAX_ENTRIES = _i("KG_ANCHOR_MAX_ENTRIES", 3)
 KG_ANCHOR_WEAK_SCORE = _f("KG_ANCHOR_WEAK_SCORE", 0.40)
 
 # 子图扩展（_expand_subgraph）
+# KG_REL_WEIGHT_FLOOR 已被入口条件化打分取代；保留定义，后续清理时删除。
 KG_REL_WEIGHT_FLOOR = _f("KG_REL_WEIGHT_FLOOR", 0.30)
+KG_REL_ZSCORE_TEMPERATURE = _f("KG_REL_ZSCORE_TEMPERATURE", 1.0)
 KG_NEIGHBOR_FANOUT = _i("KG_NEIGHBOR_FANOUT", 12)
+# 图扩展最大跳数上限：防止调用方传过大 hops 导致全图扩散、子图爆炸
+KG_EXPAND_MAX_HOPS = _i("KG_EXPAND_MAX_HOPS", 3)
+
+# 子图概率采样（_sample_edges）
+# SAMPLING=True  → 概率采样，同 query 两次可带回不同邻居（探索性强）
+# SAMPLING=False → 确定性 top-N（可复现，一致性优先）
+KG_EXPAND_SAMPLING = os.getenv("KG_EXPAND_SAMPLING", "1").strip() != "0"
+KG_EXPAND_TEMPERATURE = _f("KG_EXPAND_TEMPERATURE", 1.0)
+KG_EXPAND_TOP_P = _f("KG_EXPAND_TOP_P", 0.95)
 
 
 # ---- Chat 接入 / 自动闭环 ----

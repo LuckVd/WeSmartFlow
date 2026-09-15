@@ -1,14 +1,17 @@
-"""CosyVoice 语音合成（dashscope cosyvoice-v1 / v2）。
+"""CosyVoice 语音合成（court demo 专用）。
 
-角色 → 音色映射；v2 支持 instruction 情感参数（默认 v1，当前 key 仅有 v1 权限）。
-设置 .env TTS_MODEL=cosyvoice-v2 + 开通 v2 权限即启用情感语音。
-内存缓存；失败时前端回退浏览器 TTS。
+角色音色映射、情感指令、内存缓存属 court 业务，留在本模块；
+实际合成调用走 :func:`services.tts_factory.get_tts`（backend="cosyvoice"），
+额度拦截与记账挂在工厂产出的客户端上（demo 以系统任务记账）。
+
+失败时前端回退浏览器 TTS。
 """
 
 import base64
 import hashlib
 import logging
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict
@@ -38,16 +41,6 @@ INSTRUCTION_MAP = {
 }
 
 
-def _api_key() -> str:
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("IMG_API_KEY") and "=" in line:
-                return line.partition("=")[2].strip().strip('"').strip("'")
-    return ""
-
-
 def synthesize(text: str, voice_key: str = "n") -> Dict[str, Any]:
     """同步合成语音，返回 {ok, audio_url(data:audio/mp3;base64,...)}。"""
     text = (text or "").strip()
@@ -64,21 +57,27 @@ def synthesize(text: str, voice_key: str = "n") -> Dict[str, Any]:
     with _TTS_LOCK:
         if key in _TTS_CACHE:
             return _TTS_CACHE[key]
-    api_key = _api_key()
-    if not api_key:
-        return {"ok": False, "error": "no api key"}
-    try:
-        os.environ["DASHSCOPE_API_KEY"] = api_key
-        from dashscope.audio.tts_v2 import SpeechSynthesizer
 
-        kwargs: Dict[str, Any] = {"model": model, "voice": voice}
-        if model.startswith("cosyvoice-v2"):
-            kwargs["instruction"] = instruction
-        synth = SpeechSynthesizer(**kwargs)
-        audio = synth.call(text)
-        if not audio:
-            return {"ok": False, "error": "empty audio"}
-        b64 = base64.b64encode(audio).decode("ascii")
+    # 缓存命中不调用供应商；新合成记在当前登录用户下。
+    from services.credit_quota import CreditsExceeded
+    from services.tts_factory import get_tts
+    from services.external_usage import current_usage
+
+    tts = get_tts(
+        current_usage().user_id,
+        backend="cosyvoice",
+        scene="court",
+    )
+    if tts is None:
+        return {"ok": False, "error": "no api key"}
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        r = tts.synthesize(text, tmp_path, voice=voice, instruct=instruction)
+        if not r.success:
+            return {"ok": False, "error": (r.error or "synth failed")[:120]}
+        b64 = base64.b64encode(Path(tmp_path).read_bytes()).decode("ascii")
         result = {
             "ok": True,
             "audio_url": f"data:audio/mp3;base64,{b64}",
@@ -89,6 +88,13 @@ def synthesize(text: str, voice_key: str = "n") -> Dict[str, Any]:
                 _TTS_CACHE.clear()
             _TTS_CACHE[key] = result
         return result
+    except CreditsExceeded:
+        raise
     except Exception as e:  # pylint: disable=broad-except
         logger.warning("TTS 合成失败: %s", e)
         return {"ok": False, "error": str(e)[:120]}
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass

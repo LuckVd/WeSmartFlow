@@ -107,6 +107,111 @@ def list_documents(user_id: str = Depends(get_current_user)):
     return DocumentService().list_documents(user_id)
 
 
+def _extract_guide_json(text: str) -> dict:
+    """从 LLM 返回文本中健壮地抽取学习建议 JSON。
+
+    容错：markdown 代码块包裹、单引号 key/value、尾逗号、字段缺引号。
+    全部失败时返回 {}。
+    """
+    import json as _json
+    import re as _re
+
+    # 1) 剥 markdown 代码块
+    m_code = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, _re.DOTALL)
+    if m_code:
+        text = m_code.group(1)
+    # 2) 直接找最外层大括号
+    m = _re.search(r"\{.*\}", text, _re.DOTALL)
+    if not m:
+        return {}
+    raw = m.group(0)
+    # 3) 依次尝试：原样 / 单引号转双引号 / 去尾逗号
+    candidates = [raw]
+    candidates.append(raw.replace("'", '"'))
+    candidates.append(_re.sub(r",\s*([}\]])", r"\1", raw))
+    candidates.append(_re.sub(r",\s*([}\]])", r"\1", raw.replace("'", '"')))
+    for cand in candidates:
+        try:
+            obj = _json.loads(cand)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    return {}
+
+
+@router.get("/{doc_id}/study-guide")
+async def get_study_guide(doc_id: str, user_id: str = Depends(get_current_user)):
+    """返回已生成的学习建议（issue #1 系列：上传后先告诉用户怎么学）。"""
+    try:
+        doc = DocumentService()._assert_doc_owner(user_id, doc_id)
+    except DocumentNotFound:
+        raise HTTPException(status_code=404, detail="文档不存在") from None
+    guide_path = Path(doc.get_file_path()).parent / "study_guide.json"
+    if not guide_path.exists():
+        return {"generated": False}
+    import json as _json
+
+    return {"generated": True, "guide": _json.loads(guide_path.read_text("utf-8"))}
+
+
+@router.post("/{doc_id}/study-guide")
+async def generate_study_guide(doc_id: str, user_id: str = Depends(get_current_user)):
+    """生成学习建议：适合什么基础 / 先看哪几节 / 哪里难（一次性 LLM 调用）。"""
+    try:
+        doc = DocumentService()._assert_doc_owner(user_id, doc_id)
+    except DocumentNotFound:
+        raise HTTPException(status_code=404, detail="文档不存在") from None
+    guide_path = Path(doc.get_file_path()).parent / "study_guide.json"
+    if guide_path.exists():
+        import json as _json
+
+        return {"generated": True, "guide": _json.loads(guide_path.read_text("utf-8"))}
+
+    # 读文档内容前 6000 字（够 LLM 判断基础/顺序/难点）
+    try:
+        content = DocumentService().get_content(user_id, doc_id).get("content", "")
+    except Exception as e:  # pylint: disable=broad-except
+        raise HTTPException(status_code=400, detail=f"文档内容读取失败: {e}") from e
+    if not content or len(content.strip()) < 50:
+        raise HTTPException(status_code=400, detail="文档内容为空，无法生成学习建议")
+
+    from services.llm_factory import get_llm
+
+    # 学习规划是用户触发的操作：走用户额度（拦截 + 记账）
+    llm = get_llm(user_id, scene="chat")
+    prompt = (
+        "根据以下资料内容，输出一份简短的学习建议，"
+        "帮助用户决定怎么学这份材料。只能是 JSON：\n"
+        '{"basics": "适合什么基础的读者（50字内）", '
+        '"order": "建议的阅读/学习顺序（80字内）", '
+        '"difficulties": "可能的难点提示（80字内）", '
+        '"estimated": "预计学习时长（20字内）"}\n\n'
+        f"资料内容：\n{content[:6000]}"
+    )
+    try:
+        resp = llm.think(
+            messages=[
+                {"role": "system", "content": "你是学习规划助手，只输出 JSON。"},
+                {"role": "user", "content": prompt},
+            ]
+        )
+        text = getattr(resp, "content", "") or ""
+        guide = _extract_guide_json(text)
+    except Exception as e:  # pylint: disable=broad-except
+        raise HTTPException(status_code=502, detail=f"学习建议生成失败: {e}") from e
+
+    if not guide.get("basics"):
+        raise HTTPException(
+            status_code=502, detail="学习建议生成失败：模型未返回有效内容"
+        )
+
+    import json as _json
+
+    guide_path.write_text(_json.dumps(guide, ensure_ascii=False, indent=2), "utf-8")
+    return {"generated": True, "guide": guide}
+
+
 @router.get("/{doc_id}", response_model=DocumentSchema)
 def get_document(doc_id: str, user_id: str = Depends(get_current_user)):
     try:

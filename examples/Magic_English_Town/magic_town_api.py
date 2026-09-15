@@ -26,11 +26,14 @@ from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
 from agent_contract import normalize_festival_response, normalize_town_response  # noqa: E402
 from services.content_guard import get_content_guard  # noqa: E402
-from services.llm_factory import get_system_llm  # noqa: E402
+from services.external_usage import current_usage, demo_usage
+from services.credit_quota import CreditsExceeded
+from fastapi import Depends
+from services.llm_factory import get_llm  # noqa: E402
 
 logger = logging.getLogger("magic-town-agent")
 
-router = APIRouter(prefix="/api/demo/magic-town", tags=["magic-town"])
+router = APIRouter(prefix="/api/demo/magic-town", tags=["magic-town"], dependencies=[Depends(demo_usage("magic-town"))])
 
 _rate_windows: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = threading.Lock()
@@ -222,7 +225,7 @@ async def _invoke(tool: dict[str, Any], system_prompt: str, body: AgentRequest) 
                 "the final answer and return only the requested JSON object."
             )
         try:
-            llm = get_system_llm(timeout=_timeout_seconds())
+            llm = get_llm(current_usage().user_id, timeout=_timeout_seconds(), scene="magic-town")
             response = await llm.async_think(
                 [
                     {"role": "system", "content": structured_prompt + retry_note},
@@ -238,6 +241,8 @@ async def _invoke(tool: dict[str, Any], system_prompt: str, body: AgentRequest) 
                     "extra_body": {"thinking": {"type": "disabled"}},
                 },
             )
+        except CreditsExceeded:
+            raise
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Unable to create or call the WeSmartFlow LLM")
             raise HTTPException(status_code=503, detail="The Town Agent is temporarily unavailable.") from exc

@@ -72,6 +72,9 @@ class ConceptSchema(_Base):
     status: str = "pending"
     tags: list[str] = Field(default_factory=list)
     merged_into_id: Optional[str] = None
+    access_count: int = (
+        0  # 概念级检索强度：被进入子图时 +1，驱动图扩展 ln(1+access_count)
+    )
     embedding_model: str = ""
     vector_id: str = ""
     source_hash: str = ""
@@ -90,6 +93,7 @@ class ConceptBrief(_Base):
     summary: str = ""
     subject: str = ""
     difficulty: int = 3
+    access_count: int = 0  # 概念级检索强度，供图扩展打分读取
 
 
 class ConceptResolveItem(_Base):

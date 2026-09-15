@@ -1,7 +1,6 @@
 """
 系统设置路由
 GET  /api/settings               → 返回所有配置项（敏感字段脱敏）
-GET  /api/settings/quota         → 查询用户剩余免费次数
 POST /api/settings               → 批量保存配置项
 POST /api/settings/test          → 测试当前 LLM 配置是否可用
 POST /api/settings/test-tavily   → 测试 Tavily API Key 是否可用
@@ -13,9 +12,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_all_settings, set_settings_batch
+from database import get_all_settings, set_settings_batch, get_setting
 from dependencies import get_current_user
-from services.quota import check_and_consume, get_usage
 from utils.log_safe import safe_log
 import logging
 
@@ -44,31 +42,26 @@ class SettingsSaveRequest(BaseModel):
     img_model: str | None = None
 
 
-@router.get("/quota")
-def get_quota(user_id: str = Depends(get_current_user)):
-    """查询当前用户各类别的剩余免费次数。
+@router.get("/features")
+def get_features(user_id: str = Depends(get_current_user)):
+    """查询各功能当前是否可用（issue #62/#103）。
 
     返回示例:
-    {
-        "llm":    {"used": 5, "limit": 400, "remaining": 395, "is_platform": true},
-        "search": {"used": 2, "limit": 50,  "remaining": 48,  "is_platform": true},
-        "image":  {"used": 0, "limit": -1,  "remaining": -1,  "is_platform": false}
-    }
-    其中 limit=-1 / remaining=-1 表示用户使用自己的 Key，不限次数。
+    {"llm": true, "search": false, "image": true, "tts": true}
+
+    判定规则：用户自配 key 或环境变量配置了平台 key 即视为可用；
+    未配置的功能前端应禁用入口并标注原因，而不是点击后报错。
     """
-    usage = get_usage(user_id)
-    result = {}
-    for cat, info in usage.items():
-        limit = info["limit"]
-        used = info["used"]
-        remaining = max(limit - used, 0) if limit >= 0 else -1
-        result[cat] = {
-            "used": used,
-            "limit": limit,
-            "remaining": remaining,
-            "is_platform": info["is_platform"],
-        }
-    return result
+    import os
+
+    def _has(user_key_name: str, env_key_name: str) -> bool:
+        return bool(get_setting(user_id, user_key_name) or os.getenv(env_key_name, ""))
+
+    return {
+        "llm": _has("llm_api_key", "LLM_API_KEY"),
+        "search": _has("tavily_api_key", "TAVILY_API_KEY"),
+        "image": _has("img_api_key", "IMG_API_KEY"),
+    }
 
 
 @router.get("")
@@ -96,7 +89,7 @@ def test_llm(user_id: str = Depends(get_current_user)):
     try:
         from services.llm_factory import get_llm
 
-        llm = get_llm(user_id)
+        llm = get_llm(user_id, scene="system")
         resp = llm.think(
             [{"role": "user", "content": "reply with the single word: ok"}],
             config={"max_tokens": 10},
@@ -119,7 +112,8 @@ def test_llm(user_id: str = Depends(get_current_user)):
 def test_image_gen(user_id: str = Depends(get_current_user)):
     """测试图像生成 API 是否可用（真正生成一张图片并返回 base64 供前端展示）。
 
-    复用 `build_image_gen_tool` 工厂，确保测试链路与实际生成链路完全一致。
+    走 services/image_factory 工厂，确保测试链路与实际生成链路完全一致
+    （额度拦截 + 记账同步生效）。
     """
     try:
         import base64
@@ -127,10 +121,11 @@ def test_image_gen(user_id: str = Depends(get_current_user)):
         import tempfile
         from pathlib import Path
 
+        from agent_core.tool.imagegen.base import ImageGenError
         from database import get_setting
-        from agents.tools.image_gen_factory import build_image_gen_tool
+        from services.image_factory import get_image_gen
 
-        # 前置校验：在调工具前给出更友好的错误
+        # 前置校验：在调工厂前给出更友好的错误
         base_url = get_setting(user_id, "img_base_url") or os.getenv("IMG_BASE_URL", "")
         api_key = get_setting(user_id, "img_api_key") or os.getenv("IMG_API_KEY", "")
         if not base_url:
@@ -138,33 +133,24 @@ def test_image_gen(user_id: str = Depends(get_current_user)):
         if not api_key:
             return {"ok": False, "error": "未配置图像生成 API Key"}
 
-        # 额度检查
-        check_and_consume(user_id, "image")
-
-        # 构建工具并生成测试图片到临时目录
-        tool = build_image_gen_tool(user_id, before_call_hook=None)
+        # 工厂产出已带额度检查 hook 的客户端
+        client = get_image_gen(user_id, scene="media")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            result = tool(
-                prompt="A beautiful sunset over a calm ocean",
-                output_dir=tmp_dir,
-                size="512*512",
-                timeout=120,
-            )
+            try:
+                image_path = client.generate(
+                    prompt="A beautiful sunset over a calm ocean",
+                    output_dir=tmp_dir,
+                    size="512*512",
+                    timeout=120,
+                )
+            except ImageGenError as e:
+                return {"ok": False, "error": str(e)}
 
-            # 工具失败时返回的是 "Error: ..." 字符串
-            if isinstance(result, str) and result.startswith("Error:"):
-                return {"ok": False, "error": result[len("Error:") :].strip()}
+            path = Path(image_path)
+            if not path.exists():
+                return {"ok": False, "error": f"图片文件不存在: {path}"}
 
-            # 成功返回格式："图片生成成功，路径：<path>"
-            prefix = "图片生成成功，路径："
-            if not (isinstance(result, str) and prefix in result):
-                return {"ok": False, "error": f"图像工具返回异常: {result}"}
-
-            image_path = Path(result.split(prefix, 1)[1].strip())
-            if not image_path.exists():
-                return {"ok": False, "error": f"图片文件不存在: {image_path}"}
-
-            image_b64 = base64.b64encode(image_path.read_bytes()).decode("utf-8")
+            image_b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
 
         return {
             "ok": True,
@@ -181,31 +167,24 @@ def test_image_gen(user_id: str = Depends(get_current_user)):
 
 @router.post("/test-tavily")
 def test_tavily(user_id: str = Depends(get_current_user)):
-    """测试 Tavily API Key 是否可用（发送一条最小搜索请求）。"""
+    """测试 Tavily API Key 是否可用（发送一条最小搜索请求）。
+
+    走 services/search_factory 工厂，测试链路与实际搜索链路一致
+    （额度拦截 + 记账同步生效）。
+    """
     try:
-        # 额度检查
-        check_and_consume(user_id, "search")
+        from agent_core.tool.search.base import SearchError
+        from services.search_factory import get_search_client
 
-        from database import get_setting
-        import os
-
-        api_key = get_setting(user_id, "tavily_api_key") or os.getenv(
-            "TAVILY_API_KEY", ""
-        )
-        if not api_key:
-            return {"ok": False, "error": "未配置 Tavily API Key"}
-        from tavily import TavilyClient
-
-        client = TavilyClient(api_key=api_key)
-        result = client.search("test", max_results=1)
+        # 工厂产出已带额度检查 hook 的客户端
+        client = get_search_client(user_id, scene="search")
+        try:
+            result = client.search("test", max_results=1)
+        except SearchError as e:
+            return {"ok": False, "error": str(e)}
         return {
             "ok": True,
-            "reply": f"连接成功，返回 {len(result.get('results', []))} 条结果",
-        }
-    except ImportError:
-        return {
-            "ok": False,
-            "error": "tavily-python 未安装，请运行 pip install tavily-python",
+            "reply": f"连接成功，返回 {len(result.results)} 条结果",
         }
     except Exception as e:  # pylint: disable=broad-except
         logger.exception(

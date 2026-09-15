@@ -460,6 +460,34 @@
           </button>
         </div>
         <div class="modal-body" style="overflow-y: auto; flex: 1">
+          <!-- 学习建议（issue #1 系列：先告诉用户怎么学） -->
+          <div v-if="studyGuide" class="study-guide">
+            <div class="sg-title">📖 这份资料怎么学</div>
+            <div class="sg-row"><b>适合基础</b>{{ studyGuide.basics }}</div>
+            <div class="sg-row"><b>学习顺序</b>{{ studyGuide.order }}</div>
+            <div class="sg-row">
+              <b>难点提示</b>{{ studyGuide.difficulties }}
+            </div>
+            <div v-if="studyGuide.estimated" class="sg-row">
+              <b>预计时长</b>{{ studyGuide.estimated }}
+            </div>
+          </div>
+          <div v-else-if="sgLoading" class="study-guide sg-loading">
+            正在生成学习建议...
+          </div>
+          <div
+            v-else-if="sgLoadable && !sgFailed"
+            class="study-guide sg-generate"
+            @click="generateStudyGuide"
+          >
+            📖 生成学习建议（这份资料该怎么学？）
+          </div>
+
+          <!-- 解析失败原因（issue #88：刷新后仍可见为什么失败） -->
+          <div v-if="selectedDoc?.status === 'failed'" class="doc-error-reason">
+            ⚠ 解析失败：{{ selectedDoc.error_msg || "未知原因" }}
+          </div>
+
           <!-- 加载中 -->
           <div v-if="loadingContent" class="loading-content">
             <div class="loading-spinner" />
@@ -859,6 +887,40 @@ const showUpload = ref(false);
 const showNodePanel = ref(false);
 const showContentModal = ref(false);
 const showAddNodeModal = ref(false);
+const studyGuide = ref(null);
+const sgLoading = ref(false);
+const sgFailed = ref(false);
+const sgLoadable = computed(() =>
+  ["processed", "ready"].includes(selectedDoc.value?.status),
+);
+async function loadStudyGuide(docId) {
+  studyGuide.value = null;
+  sgFailed.value = false;
+  if (!sgLoadable.value) return;
+  try {
+    const r = await api.get(`/api/documents/${docId}/study-guide`);
+    if (r.data?.generated) studyGuide.value = r.data.guide;
+  } catch {
+    sgFailed.value = true;
+  }
+}
+async function generateStudyGuide() {
+  if (!selectedDoc.value) return;
+  sgLoading.value = true;
+  sgFailed.value = false;
+  try {
+    const r = await api.post(
+      `/api/documents/${selectedDoc.value.id}/study-guide`,
+    );
+    if (r.data?.generated) studyGuide.value = r.data.guide;
+  } catch (e) {
+    sgFailed.value = true;
+    console.warn("学习建议生成失败:", e?.response?.data?.detail || e.message);
+  } finally {
+    sgLoading.value = false;
+  }
+}
+
 const selectedDoc = ref(null);
 const isDragging = ref(false);
 const pendingFiles = ref([]);
@@ -935,6 +997,7 @@ function adaptDoc(raw) {
     typeLabel: FILE_TYPE_LABEL[fileType] || fileType.toUpperCase(),
     size_bytes: raw.file_size || 0,
     status: raw.status === "ready" ? "processed" : raw.status,
+    error_msg: raw.error_msg || null,
     extracted_node_ids: raw.node_ids || [],
     uploaded_at: raw.created_at,
   };
@@ -955,6 +1018,7 @@ onMounted(loadDocs);
 const previewNodes = ref([]);
 async function viewNodes(doc) {
   selectedDoc.value = doc;
+  if (typeof loadStudyGuide === "function") loadStudyGuide(doc.id);
   showNodePanel.value = true;
   if (doc.extracted_node_ids?.length) {
     try {
@@ -985,6 +1049,7 @@ let pdfDoc = null;
 
 async function viewContent(doc) {
   selectedDoc.value = doc;
+  if (typeof loadStudyGuide === "function") loadStudyGuide(doc.id);
   showContentModal.value = true;
   loadingContent.value = true;
   documentContent.value = null;
@@ -1167,6 +1232,7 @@ const totalExtractedNodes = computed(() => {
 
 function selectDoc(doc) {
   selectedDoc.value = doc;
+  if (typeof loadStudyGuide === "function") loadStudyGuide(doc.id);
   showNodePanel.value = false;
 }
 
@@ -1202,10 +1268,22 @@ function removeFile(index) {
 async function uploadFiles() {
   if (!pendingFiles.value.length) return;
   uploading.value = true;
+  const duplicateNames = [];
   try {
     for (const file of pendingFiles.value) {
       const doc = await documentApi.upload(file);
-      docs.value.unshift(adaptDoc(doc));
+      // issue #29：内容 hash 命中时后端返回旧文档——检测 created_at 识别重复并提示
+      const isDuplicate =
+        doc.created_at &&
+        Date.now() - new Date(doc.created_at).getTime() > 60000;
+      if (isDuplicate) duplicateNames.push(doc.title || file.name);
+      else docs.value.unshift(adaptDoc(doc));
+    }
+    if (duplicateNames.length) {
+      alert(
+        `检测到重复文档：${duplicateNames.join("、")}\n内容相同的文档此前已上传过，已直接复用（不会重复解析）。`,
+      );
+      await loadDocs();
     }
   } catch (e) {
     console.warn("上传失败:", e.message);
@@ -1635,6 +1713,54 @@ async function addNodeToDocument() {
   justify-content: space-between;
   padding: 18px 20px 14px;
   border-bottom: 1px solid var(--border);
+}
+
+.study-guide {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.sg-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.sg-row {
+  display: flex;
+  gap: 10px;
+  margin: 4px 0;
+  line-height: 1.5;
+}
+.sg-row b {
+  flex-shrink: 0;
+  color: var(--text-dim, #888);
+  font-weight: 600;
+}
+.sg-generate {
+  cursor: pointer;
+  color: #3b82f6;
+  text-align: center;
+  transition: background 0.15s;
+}
+.sg-generate:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+.sg-loading {
+  color: var(--text-dim, #888);
+  text-align: center;
+}
+.doc-error-reason {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 .modal-header h3 {
   font-size: 15px;

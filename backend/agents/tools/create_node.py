@@ -86,8 +86,8 @@ class BaseCreateNodeTool(BaseTool):
         "required": ["title", "description"],
     }
 
-    def __init__(self, user_id: str, on_result_hook=None):
-        super().__init__(on_result_hook=on_result_hook)
+    def __init__(self, user_id: str):
+        super().__init__()
         self._user_id = user_id
         self._repo = NodeRepository()
 
@@ -218,8 +218,8 @@ class BaseCreateNodeTool(BaseTool):
 class SessionCreateNodeTool(BaseCreateNodeTool):
     """来源为对话会话，用于对话中动态提取并创建知识节点。"""
 
-    def __init__(self, user_id: str, session_id: str, on_result_hook=None):
-        super().__init__(user_id, on_result_hook=on_result_hook)
+    def __init__(self, user_id: str, session_id: str):
+        super().__init__(user_id)
         self._session_id = session_id
 
     def _get_origins(self, description: str) -> list[NodeOrigin]:
@@ -242,9 +242,8 @@ class DocumentCreateNodeTool(BaseCreateNodeTool):
         document_id: str,
         location: str = "",
         excerpt: str = "",
-        on_result_hook=None,
     ):
-        super().__init__(user_id, on_result_hook=on_result_hook)
+        super().__init__(user_id)
         self._document_id = document_id
         self._location = location
         self._excerpt = excerpt

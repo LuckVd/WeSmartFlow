@@ -1,71 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""图像生成工具工厂。
+"""图像生成工具工厂（薄适配层）。
 
-统一收集 `OpenAIImageGenTool` 等图像生成工具的构建逻辑：
-- 从用户设置 / 环境变量读取 api_key / base_url / model
-- 容错（设置读取失败时回退到环境变量默认值）
-- 统一日志
+历史版本在此处直接读配置并构造 ``QwenImageGenTool``；现在配置读取、
+后端选择、额度拦截与记账全部收敛到 :func:`services.image_factory.get_image_gen`
+（与 LLM 的 ``get_llm`` 同构），本函数只负责把工厂产出的客户端
+包装成 Agent 工具。
 
-供 services / agents 等多处复用，避免重复实现。
+业务代码应直接调本函数或 ``services.image_factory.get_image_gen``，
+不得绕过工厂自行构造图像生成后端客户端。
 """
 
 from __future__ import annotations
 
 import logging
-import os
-from typing import Callable, Optional
-
-from agent_core.tool.openai_image_gen import OpenAIImageGenTool
-from agent_core.tool.qwen_image_gen import QwenImageGenTool
 
 logger = logging.getLogger(__name__)
 
-# 默认值（与原各处实现保持一致）
-_DEFAULT_API_KEY = "any"
-_DEFAULT_BASE_URL = "http://localhost:8080/v1"
 
-
-def build_image_gen_tool(
-    user_id,
-    before_call_hook: Optional[Callable] = None,
-) -> OpenAIImageGenTool:
-    """构建图像生成工具实例（OpenAI 兼容接口）。
-
-    优先从用户设置（database.get_setting）读取，失败或未设置时回退到环境变量，
-    最后回退到内置默认值。
+def build_image_gen_tool(user_id: str):
+    """构建图像生成工具实例（内部走 services/image_factory）。
 
     Args:
-        user_id: 当前用户 ID，用于读取个性化设置。
-        before_call_hook: 工具执行前的钩子（如额度检查），传 None 表示不限制。
+        user_id: 当前用户 ID，用于读取个性化设置与额度归属。
 
     Returns:
-        已配置好的 OpenAIImageGenTool 实例。
+        已挂治理 hook 的 :class:`agent_core.tool.image_gen.ImageGenTool`。
     """
-    try:
-        from database import get_setting
+    from agent_core.tool.image_gen import ImageGenTool
+    from services.image_factory import get_image_gen
 
-        api_key = get_setting(user_id, "img_api_key") or os.getenv(
-            "IMG_API_KEY", _DEFAULT_API_KEY
-        )
-        base_url = get_setting(user_id, "img_base_url") or os.getenv(
-            "IMG_BASE_URL", _DEFAULT_BASE_URL
-        )
-        model = get_setting(user_id, "img_model") or os.getenv("IMG_MODEL") or None
-    except Exception as e:  # pylint: disable=broad-except
-        logger.warning(
-            "图片生成配置读取失败（将使用默认值，图片功能可能不可用）: %s", e
-        )
-        api_key = os.getenv("IMG_API_KEY", _DEFAULT_API_KEY)
-        base_url = os.getenv("IMG_BASE_URL", _DEFAULT_BASE_URL)
-        model = os.getenv("IMG_MODEL") or None
-
-    return QwenImageGenTool(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        before_call_hook=before_call_hook,
-    )
+    client = get_image_gen(user_id, scene="media")
+    # 工具名带后端标识（qwen_image_generate / openai_image_generate），
+    # 兼容历史 prompt 中对工具名的引用
+    return ImageGenTool(client, name=f"{client.backend}_image_generate")
 
 
 __all__ = ["build_image_gen_tool"]

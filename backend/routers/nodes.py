@@ -78,11 +78,14 @@ def get_node_evidence(node_id: str, user_id: str = Depends(get_current_user)):
             dict(r)
             for r in conn.execute(
                 """
-                SELECT id, session_id, quiz_type, question, options, correct_answer,
-                       explanation, user_answer, is_correct, score, answered_at, created_at
-                  FROM quizzes
-                 WHERE user_id=? AND node_id=?
-                 ORDER BY COALESCE(answered_at, created_at) DESC
+                SELECT q.id, q.session_id, q.user_answer, q.is_correct, q.score,
+                       q.answered_at, q.created_at,
+                       b.quiz_type, b.question, b.options, b.correct_answer,
+                       b.explanation, b.difficulty
+                  FROM quizzes q
+                  JOIN question_bank b ON b.id = q.question_id
+                 WHERE q.user_id=? AND q.node_id=?
+                 ORDER BY COALESCE(q.answered_at, q.created_at) DESC
                  LIMIT 5
                 """,
                 (user_id, node_id),

@@ -16,11 +16,11 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
 import requests as http_requests
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel
 
 from database import get_db, ensure_user_settings
-from dependencies import create_access_token
+from dependencies import create_access_token, get_current_user
 from utils.log_safe import safe_log
 from config import (
     SMTP_HOST,
@@ -160,6 +160,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     user_id: str
     user_name: str
+    github_reward: dict | None = None
 
 
 class WechatMpLoginRequest(BaseModel):
@@ -167,6 +168,7 @@ class WechatMpLoginRequest(BaseModel):
 
 
 class GitHubCallbackRequest(BaseModel):
+    state: str
     code: str  # GitHub OAuth 回调的 code
 
 
@@ -300,6 +302,9 @@ def verify_code(body: VerifyCodeRequest):
         logger.info("邮箱 %s 自动注册为用户 %s", safe_log(email), safe_log(user_id))
 
     # 签发 token
+    from services.credit_wallet import balance
+
+    balance(user_id)
     token = create_access_token(user_id=user_id)
 
     return LoginResponse(
@@ -319,16 +324,16 @@ def github_authorize():
     """
     返回 GitHub OAuth 授权 URL，前端跳转到此 URL 让用户授权。
     """
-    if not GITHUB_CLIENT_ID:
-        raise HTTPException(503, detail="GitHub 登录未配置")
+    from services.github_reward import authorize
 
-    # redirect_uri 使用前端回调页面地址
-    authorize_url = (
-        f"https://github.com/login/oauth/authorize"
-        f"?client_id={GITHUB_CLIENT_ID}"
-        f"&scope=user:email"
-    )
-    return {"authorize_url": authorize_url}
+    return authorize()
+
+
+@router.get("/github/reward/authorize")
+def github_reward_authorize(user_id: str = Depends(get_current_user)):
+    from services.github_reward import authorize
+
+    return authorize(user_id, "reward")
 
 
 @router.post("/github/callback", response_model=LoginResponse)
@@ -338,6 +343,10 @@ def github_callback(body: GitHubCallbackRequest):
     """
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
         raise HTTPException(503, detail="GitHub 登录未配置")
+
+    from services.github_reward import consume_state, verify_and_grant, bind_account
+
+    oauth_state = consume_state(body.state)
 
     # 1. 用 code 换取 access_token
     try:
@@ -385,6 +394,17 @@ def github_callback(body: GitHubCallbackRequest):
         raise HTTPException(400, detail="GitHub 登录失败：未获取到用户标识")
 
     # 3. 如果邮箱为空，尝试从 /user/emails 获取
+    if oauth_state["purpose"] == "reward":
+        user_id = oauth_state["user_id"]
+        user_name = bind_account(user_id, github_id, github_username, github_avatar)
+        reward = verify_and_grant(user_id, github_id, access_token)
+        return LoginResponse(
+            access_token=create_access_token(user_id),
+            user_id=user_id,
+            user_name=user_name,
+            github_reward=reward,
+        )
+
     if not github_email:
         try:
             emails_resp = http_requests.get(
@@ -471,12 +491,17 @@ def github_callback(body: GitHubCallbackRequest):
             )
 
     # 5. 签发 JWT
+    from services.credit_wallet import balance
+
+    balance(user_id)
     token = create_access_token(user_id=user_id)
 
+    reward = verify_and_grant(user_id, github_id, access_token)
     return LoginResponse(
         access_token=token,
         user_id=user_id,
         user_name=user_name,
+        github_reward=reward,
     )
 
 
@@ -548,6 +573,9 @@ def wechat_mp_login(body: WechatMpLoginRequest):
         logger.info("微信用户 openid=%s 自动注册为 %s", openid, user_id)
 
     # 3. 签发 JWT
+    from services.credit_wallet import balance
+
+    balance(user_id)
     token = create_access_token(user_id=user_id)
 
     return LoginResponse(

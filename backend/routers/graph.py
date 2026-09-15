@@ -271,7 +271,7 @@ def _normalize_view_config(
 
 async def _llm_simplify(user_id: str, nodes: list[dict[str, Any]]) -> dict[str, Any]:
     """分批调用 LLM 生成简化视图，避免单次输出过长导致模型返回空内容/截断 JSON。"""
-    llm = get_llm(user_id)
+    llm = get_llm(user_id, scene="kg")
     hidden: list[str] = []
     reasons: dict[str, str] = {}
     batch_size = 15

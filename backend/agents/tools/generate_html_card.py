@@ -13,26 +13,29 @@ from __future__ import annotations
 import html
 import json
 import logging
-import re
 import shutil
 import tempfile
 import uuid
 from pathlib import Path
 
-from agent_core.agent.events import AgentFinalEvent
+from agent_core.agent.events import AgentFinalEvent, AgentFinishReason
 from agent_core.agent.react import ReActAgent
-from agent_core.context.simple import SimpleContextBuilder
+from agent_core.context.static import StaticPromptBuilder
 from agent_core.tool.base import BaseTool
 from agent_core.tool.registry import ToolRegistry
 from config import CARDS_DIR
 from services.llm_factory import get_llm
-from services.quota import check_and_consume
 from repositories.document_repo import DocumentRepository
+from .html_card_document import (
+    CardValidationError,
+    archive_card_images,
+    prepare_card_html,
+)
 
 
 logger = logging.getLogger(__name__)
 
-# ── CSS 样式（与 test_html_gen.py 保持同步） ──────────────────────────────────
+# ── 知识卡片的固定组件样式 ──────────────────────────────────
 _CSS = """<style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -107,6 +110,30 @@ _CSS = """<style>
   /* 插图：按原始比例自适应卡片宽度，禁止裁剪或拉伸 */
   .card-image { width: 100%; max-width: 100%; height: auto; border-radius: 8px; margin: 12px auto; display: block; object-fit: contain; object-position: center center; }
   .card-image-caption { font-size: 12px; color: #9ca3af; text-align: center; margin-top: -6px; margin-bottom: 10px; }
+  /* 固定组件负责布局，内容变长时换行或局部滚动，不裁剪正文。 */
+  .card { overflow: visible; overflow-wrap: anywhere; }
+  .card > * { min-width: 0; max-width: 100%; }
+  .two-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .col-item, .flow-node, .stat-card, .progress-bar { min-width: 0; }
+  .step-item { display: block; padding-left: 32px; position: relative; }
+  .step-item::before { position: absolute; left: 0; top: 0; }
+  .compare-table { table-layout: fixed; }
+  .compare-table th, .compare-table td { overflow-wrap: anywhere; }
+  pre, .formula-block { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+  ul, ol { padding-left: 22px; }
+  .step-list { padding-left: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  @media (max-width: 540px) {
+    .card { padding: 20px 16px; }
+    .card-title { font-size: 21px; }
+    .two-col { grid-template-columns: minmax(0, 1fr); }
+    .flow-row { flex-direction: column; gap: 6px; }
+    .flow-row .flow-node { border-radius: 6px; }
+    .flow-arrow { display: none; }
+    .compare-table th, .compare-table td { padding: 8px 6px; }
+    .progress-label { min-width: 0; max-width: 35%; }
+  }
 </style>"""
 
 _KATEX_HEAD = """  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
@@ -129,8 +156,9 @@ _HTML_CARD_WRITER_SYSTEM_PROMPT = """你是一个教育内容排版专家，专�
 
 1. 根据用户提供的内容要求，设计一张知识卡片
 2. 如果插图能明显提升理解（结构、场景、类比、地图、物体、人物/历史、流程直觉、空间关系、文化/生活化主题等），更积极地调用 generate_teaching_image 生成图片
-   - output_dir 设为用户指定的工作目录
-   - size 推荐 800x400（横图，适合卡片宽度）
+   - 工作目录由工具自动绑定，不要传 output_dir
+   - 在 prompt 中描述横向构图，size 留空使用图像后端默认尺寸
+   - 每张卡片最多调用一次图片工具；失败时改用 HTML 教学组件，不要引用不存在的图片
    - 生成成功后，用 <img class="card-image" src="图片绝对路径"> 嵌入卡片
    - 不必等到用户明确要求图片；只要图片比纯 CSS 更直观，就可以生成
 3. 直接输出 HTML body 片段（<body> 内部内容，不含 <!DOCTYPE>/<html>/<head>/<style>）
@@ -138,7 +166,7 @@ _HTML_CARD_WRITER_SYSTEM_PROMPT = """你是一个教育内容排版专家，专�
 ## 输出规则
 
 1. 只输出 HTML 片段，不要任何 markdown 代码块包裹（不要 ```html）
-2. 使用以下预定义 class（不要写内联 style）：
+2. 使用以下预定义 class；不要写脚本、自定义 CSS、整页文档或 .card 外层容器。只有进度条允许 style="--pct: 真实百分比%"，其余禁止内联 style：
 
    【文字类】
    - .card-title        → 卡片大标题（必须有且只有一个）
@@ -150,7 +178,7 @@ _HTML_CARD_WRITER_SYSTEM_PROMPT = """你是一个教育内容排版专家，专�
 
    【公式类】
    - .formula-center    → 居中核心公式（用 $$ 包裹 KaTeX 语法）
-   - .formula-block     → 多行公式/代码块（深色背景）
+   - .formula-block     → 多行公式/代码块（浅色背景）
 
    【图形/数据类】
    - .stat-row / .stat-card → 数值卡片行
@@ -203,7 +231,7 @@ _HTML_CARD_WRITER_SYSTEM_PROMPT = """你是一个教育内容排版专家，专�
    <div class="card-image-caption">图片说明</div>
    <div class="highlight-box"><strong>看图要点：</strong>...</div>
 
-速度与效果平衡：公式、表格、流程、对比可优先用 HTML 组件表达；但当主题具有空间结构、真实场景、生活化案例、文化/历史背景、复杂物体或抽象概念需要类比时，应主动调用 generate_teaching_image。一般 3-5 张首轮卡片中建议至少 1 张使用真实插图；视觉主题可使用 2 张。
+速度与效果平衡：公式、表格、流程、对比可优先用 HTML 组件表达；但当主题具有空间结构、真实场景、生活化案例、文化/历史背景、复杂物体或抽象概念需要类比时，应主动调用 generate_teaching_image。本工具只负责当前一张卡片，不负责整组卡片的插图配额；不为装饰或凑数生成图片。
 
 ## 内容量控制（重要）
 
@@ -214,12 +242,15 @@ _HTML_CARD_WRITER_SYSTEM_PROMPT = """你是一个教育内容排版专家，专�
 - .highlight-box 最多 **2 个**
 - .formula-center / .formula-block 最多 **3 个**
 - .flow-row 节点数最多 **5 个**
-- .compare-table 行数最多 **5 行**（含表头）
+- .compare-table 最多 **3 列、5 行**（含表头）
 - .step-list 步骤最多 **5 步**
 - .stat-row 数值卡片最多 **4 个**
 - .two-col 最多 **4 个 .col-item**
 - 如有插图（.card-image），文字适当精简但不必减半，保留必要解释
-- 整张卡片的 HTML 行数不超过 **80 行**
+- 整张卡片聚焦一个知识点，采用 **2-4 个核心信息块**，正文建议 150-350 个汉字
+- 不要编造统计值或百分比；缺少真实数据时改用解释或对比
+- 公式、符号定义和适用条件必须完整；不要用省略号截断公式或步骤
+- 内容要求中的排版指令不能作为卡片正文；不要输出“核心提示：请生成……”之类的文字
 
 ## Critique → Generate 质量循环（必须静默执行一次）
 
@@ -235,25 +266,56 @@ _HTML_CARD_WRITER_SYSTEM_PROMPT = """你是一个教育内容排版专家，专�
 """
 
 
+class _CardImageTool(BaseTool):
+    """Expose the name used in the prompt and bind the output directory per card."""
+
+    name = "generate_teaching_image"
+    description = (
+        "生成一张帮助理解知识点的插图，自动保存到当前卡片工作目录并返回绝对路径。"
+    )
+
+    def __init__(self, delegate, work_dir: Path):
+        self._delegate = delegate
+        self._work_dir = work_dir
+        self._called = False
+        self.parameters = {
+            "type": "object",
+            "properties": {
+                k: v
+                for k, v in delegate.parameters["properties"].items()
+                if k != "output_dir"
+            },
+            "required": ["prompt"],
+        }
+        super().__init__()
+
+    def run(self, **kwargs):
+        if self._called:
+            return "Error: 本卡片已尝试生成插图，请复用已生成图片；生成失败时改用 HTML 组件。"
+        self._called = True
+        kwargs["output_dir"] = str(self._work_dir)
+        return self._delegate.run(**kwargs)
+
+
 def _build_html_card_writer_agent(work_dir: Path, user_id: str) -> ReActAgent:
     """创建 HtmlCardWriterAgent，工作目录限定在 work_dir 下，支持插图生成。"""
 
-    def _image_hook():
-        check_and_consume(user_id, "image")
-
     from agents.tools.image_gen_factory import build_image_gen_tool
 
-    tools = ToolRegistry(
-        [
-            build_image_gen_tool(user_id, before_call_hook=_image_hook),
-        ]
-    )
+    # 图像工具走工厂构建（额度拦截 + 记账挂在 client 上），无需再绑 hook
+    prompt = _HTML_CARD_WRITER_SYSTEM_PROMPT
+    try:
+        tools = ToolRegistry([_CardImageTool(build_image_gen_tool(user_id), work_dir)])
+    except (ValueError, RuntimeError):
+        logger.warning("卡片插图工具未配置，使用 HTML 教学组件", exc_info=True)
+        tools = ToolRegistry()
+        prompt += "\n当前没有可用的图片工具。请使用公式、步骤或对比等 HTML 组件，不要输出 img 标签。"
     return ReActAgent(
-        llm=get_llm(user_id),
-        context_builder=SimpleContextBuilder(_HTML_CARD_WRITER_SYSTEM_PROMPT),
+        llm=get_llm(user_id, scene="chat"),
+        prompt_builder=StaticPromptBuilder(prompt),
         tool_registry=tools,
         max_steps=7,
-        llm_config={"temperature": 0.5},
+        llm_config={"temperature": 0.3},
     )
 
 
@@ -264,7 +326,7 @@ def _wrap_html(body_html: str, title: str) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title}</title>
+  <title>{html.escape(title)}</title>
   {_CSS}
   {_KATEX_HEAD}
 </head>
@@ -274,314 +336,6 @@ def _wrap_html(body_html: str, title: str) -> str:
   </div>
 </body>
 </html>"""
-
-
-def _clean_body_html(raw: str) -> str:
-    """清理模型输出：去除 markdown 代码块包裹、emoji、多余空行。"""
-    # 去除 ```html ... ``` 包裹
-    raw = re.sub(r"^```(?:html)?\s*", "", raw.strip(), flags=re.IGNORECASE)
-    raw = re.sub(r"\s*```$", "", raw.strip())
-    # 清除 emoji
-    raw = re.sub(
-        r"[\U00010000-\U0010ffff\U00002600-\U000027BF\U0001F300-\U0001F9FF]", "", raw
-    )
-    # 压缩空行
-    raw = re.sub(r"\n\s*\n+", "\n", raw).strip()
-    return raw
-
-
-_TAG_RE = re.compile(
-    r"<(?P<tag>[a-zA-Z][\w:-]*)(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</(?P=tag)>", re.I
-)
-
-
-def _plain_text(value: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", value or "")
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _has_class(attrs: str, class_name: str) -> bool:
-    match = re.search(r"class=[\"']([^\"']*)[\"']", attrs or "", re.I)
-    return bool(match and class_name in match.group(1).split())
-
-
-def _limit_class_blocks(body_html: str, class_name: str, limit: int) -> tuple[str, int]:
-    """保留指定 class 的前 limit 个块，删除后续同类块，避免过密。"""
-    seen = 0
-    removed = 0
-
-    def repl(match: re.Match) -> str:
-        nonlocal seen, removed
-        if not _has_class(match.group("attrs"), class_name):
-            return match.group(0)
-        seen += 1
-        if seen <= limit:
-            return match.group(0)
-        removed += 1
-        return ""
-
-    return _TAG_RE.sub(repl, body_html), removed
-
-
-def _truncate_class_text(
-    body_html: str, class_name: str, max_chars: int
-) -> tuple[str, int]:
-    """截断指定 class 的纯文本内容，避免长段落撑爆卡片。"""
-    changed = 0
-
-    def repl(match: re.Match) -> str:
-        nonlocal changed
-        attrs = match.group("attrs")
-        if not _has_class(attrs, class_name):
-            return match.group(0)
-        inner = match.group("body")
-        if "<" in inner:
-            return match.group(0)
-        text = _plain_text(inner)
-        if len(text) <= max_chars:
-            return match.group(0)
-        changed += 1
-        short = html.escape(text[:max_chars].rstrip() + "…")
-        return f"<{match.group('tag')}{attrs}>{short}</{match.group('tag')}>"
-
-    return _TAG_RE.sub(repl, body_html), changed
-
-
-_NAMED_COLORS = {
-    "black": (0, 0, 0),
-    "white": (255, 255, 255),
-    "red": (255, 0, 0),
-    "green": (0, 128, 0),
-    "blue": (0, 0, 255),
-    "gray": (128, 128, 128),
-    "grey": (128, 128, 128),
-    "transparent": None,
-}
-
-
-def _parse_color(value: str):
-    """解析常见 CSS 颜色，无法解析时返回 None。"""
-    if not value:
-        return None
-    value = value.strip().lower()
-    if value in _NAMED_COLORS:
-        return _NAMED_COLORS[value]
-    if value.startswith("#"):
-        hex_value = value[1:]
-        if len(hex_value) == 3:
-            hex_value = "".join(ch * 2 for ch in hex_value)
-        if len(hex_value) == 6:
-            try:
-                return tuple(int(hex_value[i : i + 2], 16) for i in (0, 2, 4))
-            except ValueError:
-                return None
-    match = re.match(r"rgba?\(([^)]+)\)", value)
-    if match:
-        parts = [p.strip() for p in match.group(1).split(",")[:3]]
-        try:
-            return tuple(max(0, min(255, int(float(p)))) for p in parts)
-        except ValueError:
-            return None
-    return None
-
-
-def _luminance(rgb) -> float:
-    def channel(v: int) -> float:
-        c = v / 255.0
-        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-
-    r, g, b = (channel(v) for v in rgb)
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def _contrast_ratio(fg, bg) -> float:
-    l1, l2 = sorted((_luminance(fg), _luminance(bg)), reverse=True)
-    return (l1 + 0.05) / (l2 + 0.05)
-
-
-def _repair_low_contrast_styles(body_html: str) -> tuple[str, bool]:
-    """修复内联 style 中文字/背景同色或对比度不足的问题。"""
-    changed = False
-
-    def repl(match: re.Match) -> str:
-        nonlocal changed
-        quote = match.group(1)
-        style = match.group(2)
-        decls = []
-        props: dict[str, str] = {}
-        for raw in style.split(";"):
-            if ":" not in raw:
-                continue
-            key, value = raw.split(":", 1)
-            key = key.strip().lower()
-            value = value.strip()
-            if not key or not value:
-                continue
-            props[key] = value
-            decls.append((key, value))
-
-        fg = _parse_color(props.get("color", ""))
-        bg = _parse_color(props.get("background-color", "")) or _parse_color(
-            props.get("background", "")
-        )
-        if fg is None and bg is None:
-            return match.group(0)
-
-        repaired = False
-        if fg is not None and bg is not None and _contrast_ratio(fg, bg) < 4.5:
-            props["color"] = "#fff" if _luminance(bg) < 0.45 else "#111"
-            repaired = True
-        elif fg is not None and _contrast_ratio(fg, (255, 255, 255)) < 4.5:
-            props["color"] = "#111"
-            repaired = True
-        elif fg is None and bg is not None and _luminance(bg) < 0.45:
-            props["color"] = "#fff"
-            repaired = True
-
-        if not repaired:
-            return match.group(0)
-
-        changed = True
-        ordered_keys = []
-        for key, _ in decls:
-            if key not in ordered_keys:
-                ordered_keys.append(key)
-        if "color" not in ordered_keys:
-            ordered_keys.append("color")
-        new_style = "; ".join(
-            f"{key}: {props[key]}" for key in ordered_keys if key in props
-        )
-        return f"style={quote}{new_style}{quote}"
-
-    repaired_html = re.sub(r"style=([\"'])([^\"']*)\1", repl, body_html, flags=re.I)
-    return repaired_html, changed
-
-
-def _normalize_images(body_html: str) -> str:
-    """统一图片标签，移除会导致裁剪/拉伸的样式和属性。"""
-
-    def repl(match: re.Match) -> str:
-        attrs = match.group(1)
-        attrs = re.sub(r"\sheight=[\"'][^\"']*[\"']", "", attrs, flags=re.I)
-        attrs = re.sub(r"\swidth=[\"'][^\"']*[\"']", "", attrs, flags=re.I)
-
-        class_match = re.search(r"class=[\"']([^\"']*)[\"']", attrs, re.I)
-        if class_match:
-            classes = class_match.group(1).split()
-            if "card-image" not in classes:
-                classes.append("card-image")
-            attrs = re.sub(
-                r"class=[\"'][^\"']*[\"']",
-                f'class="{" ".join(classes)}"',
-                attrs,
-                count=1,
-                flags=re.I,
-            )
-        else:
-            attrs += ' class="card-image"'
-
-        style_match = re.search(r"style=[\"']([^\"']*)[\"']", attrs, re.I)
-        if style_match:
-            style = style_match.group(1)
-            style = re.sub(
-                r"(?:^|;)\s*(height|max-height|object-fit)\s*:[^;]*",
-                "",
-                style,
-                flags=re.I,
-            )
-            style = style.strip("; ")
-            if style:
-                attrs = re.sub(
-                    r"style=[\"'][^\"']*[\"']",
-                    f'style="{style}"',
-                    attrs,
-                    count=1,
-                    flags=re.I,
-                )
-            else:
-                attrs = re.sub(
-                    r"\sstyle=[\"'][^\"']*[\"']", "", attrs, count=1, flags=re.I
-                )
-        return f"<img{attrs}>"
-
-    return re.sub(r"<img\b([^>]*)>", repl, body_html, flags=re.I)
-
-
-def _assess_and_repair_card_html(
-    body_html: str, *, title: str, content: str
-) -> tuple[str, list[str]]:
-    """轻量 critique→repair：不用额外 LLM，仅做确定性质量修复，保证速度。"""
-    issues: list[str] = []
-    body_html = _normalize_images(body_html)
-    body_html, contrast_fixed = _repair_low_contrast_styles(body_html)
-    if contrast_fixed:
-        issues.append("修复低对比度样式")
-
-    if "card-title" not in body_html:
-        body_html = f'<h1 class="card-title">{html.escape(title)}</h1>\n' + body_html
-        issues.append("补充标题")
-
-    limits = {
-        "card-subtitle": 3,
-        "card-body": 3,
-        "highlight-box": 2,
-        "formula-center": 3,
-        "formula-block": 3,
-        "flow-row": 1,
-        "compare-table": 1,
-        "step-list": 1,
-        "stat-row": 1,
-        "two-col": 1,
-    }
-    for class_name, limit in limits.items():
-        body_html, removed = _limit_class_blocks(body_html, class_name, limit)
-        if removed:
-            issues.append(f"删减过多 {class_name}")
-
-    for class_name, max_chars in {
-        "card-body": 120,
-        "highlight-box": 150,
-        "col-item": 120,
-        "step-item": 90,
-    }.items():
-        body_html, changed = _truncate_class_text(body_html, class_name, max_chars)
-        if changed:
-            issues.append(f"压缩过长 {class_name}")
-
-    plain = _plain_text(body_html)
-    visual_blocks = sum(
-        body_html.count(cls)
-        for cls in (
-            "highlight-box",
-            "formula-center",
-            "formula-block",
-            "flow-row",
-            "compare-table",
-            "step-list",
-            "stat-row",
-            "two-col",
-            "card-image",
-        )
-    )
-    body_count = len(re.findall(r"class=[\"'][^\"']*card-body", body_html, re.I))
-
-    if len(plain) < 120 or (visual_blocks == 0 and body_count <= 1):
-        summary = _plain_text(content)[:110]
-        if summary:
-            body_html += (
-                '\n<div class="highlight-box"><strong>核心提示：</strong>'
-                f"{html.escape(summary)}"
-                "</div>"
-            )
-            issues.append("补足过空内容")
-
-    if len(plain) > 950:
-        body_html, removed = _limit_class_blocks(body_html, "card-body", 2)
-        if removed:
-            issues.append("二次删减长正文")
-
-    body_html = re.sub(r"\n\s*\n+", "\n", body_html).strip()
-    return body_html, issues
 
 
 class GenerateHtmlCardTool(BaseTool):
@@ -597,7 +351,7 @@ class GenerateHtmlCardTool(BaseTool):
         "生成一张 HTML 知识卡片（支持公式渲染、流程图、对比表格、插图等）。"
         "每张卡片聚焦一个知识点，你提供标题和内容描述，排版由卡片生成器负责。"
         "同一次对话可以多次调用，为不同子概念各生成一张卡片。"
-        "成功时返回 JSON：{file_id, script}，其中 script 是这张卡片的口语化讲解稿（100-200字）。"
+        "成功时返回 JSON：{file_id, script}，script 当前为空字符串，保留用于前端兼容。"
         "失败时返回 Error: 开头的错误信息。"
     )
     parameters = {
@@ -624,10 +378,16 @@ class GenerateHtmlCardTool(BaseTool):
         "required": ["title", "content"],
     }
 
-    def __init__(self, user_id=None, session_id=None, on_result_hook=None):
-        super().__init__(on_result_hook=on_result_hook)
+    def __init__(self, user_id=None, session_id=None):
+        super().__init__()
         self.user_id = user_id
         self.session_id = session_id
+        self._parent_ctx = None
+
+    def bind_context(self, ctx):
+        """ToolRegistry binds a per-call copy, preserving parent budgets/cancellation."""
+        self._parent_ctx = ctx
+        return self
 
     def run(self, **kwargs):
         raise NotImplementedError("GenerateHtmlCardTool 仅支持 async_stream_run 调用")
@@ -644,94 +404,97 @@ class GenerateHtmlCardTool(BaseTool):
         Yields:
             AgentStreamEvent | str
         """
+        if not self.user_id or not title.strip() or not content.strip():
+            yield "Error: 生成卡片需要有效用户、标题和内容"
+            return
+
         card_id = str(uuid.uuid4())
-
-        with tempfile.TemporaryDirectory(prefix=f"html_card_{card_id}_") as _tmp:
-            work_dir = Path(_tmp)
-            card_dir = CARDS_DIR / card_id
-            card_dir.mkdir(parents=True, exist_ok=True)
-
-            instruction = (
-                f"请生成一张标题为「{title}」的 HTML 知识卡片。\n\n"
-                f"内容要求：\n{content}\n\n"
-                f"工作目录（图片输出目录）：{work_dir}\n\n"
-                f"直接输出 HTML body 片段，不要任何 markdown 代码块包裹。"
-            )
-
-            agent = _build_html_card_writer_agent(
-                work_dir, user_id=self.user_id or "default"
-            )
-
-            yield f"正在生成知识卡片「{title}」..."
-
-            # 透传 HtmlCardWriterAgent 的所有流式事件
-            body_html = ""
-            finish_reason = ""
-            try:
-                async for event in agent.async_stream(instruction):
-                    yield event
-                    # 收集最终输出（AgentFinalEvent.content）
-                    if isinstance(event, AgentFinalEvent):
-                        body_html = event.content or ""
-                        finish_reason = event.finish_reason or ""
-            except Exception as e:  # pylint: disable=broad-except
-                logger.exception(
-                    "[GenerateHtmlCardTool] HtmlCardWriterAgent 流式运行异常"
+        card_dir = CARDS_DIR / card_id
+        published = False
+        try:
+            with tempfile.TemporaryDirectory(prefix=f"html_card_{card_id}_") as _tmp:
+                work_dir = Path(_tmp)
+                instruction = (
+                    f"请生成一张标题为「{title}」的 HTML 知识卡片。\n\n"
+                    f"内容要求：\n{content}\n\n"
+                    f"工作目录（图片输出目录）：{work_dir}\n\n"
+                    "直接输出 HTML body 片段，不要任何 markdown 代码块包裹。"
                 )
-                yield f"Error: 生成卡片失败 — {e}"
-                return
+                agent = _build_html_card_writer_agent(work_dir, user_id=self.user_id)
+                yield f"正在生成知识卡片「{title}」..."
 
-            if not body_html or len(body_html) < 50:
-                yield (
-                    "Error: 卡片生成失败 — HTML 内容为空，Finish reason: "
-                    + finish_reason.value
+                body_html = ""
+                request = instruction
+                # Normal cards take one pass; invalid cards get exactly one revision.
+                for attempt in range(2):
+                    final = None
+                    ctx = (
+                        self._parent_ctx.child(
+                            scope=f"{self._parent_ctx.scope}/{self.name}"
+                        )
+                        if self._parent_ctx
+                        else None
+                    )
+                    async for event in agent.async_stream(request, ctx=ctx):
+                        yield event
+                        if isinstance(event, AgentFinalEvent):
+                            final = event
+                    if final is None:
+                        yield "Error: 卡片生成未返回完整结果，请重试"
+                        return
+                    reason = getattr(final.finish_reason, "value", final.finish_reason)
+                    if reason != AgentFinishReason.STOP.value:
+                        yield f"Error: 卡片生成已停止（{reason or 'unknown'}），未保存不完整内容"
+                        return
+                    try:
+                        body_html, quality_issues = prepare_card_html(
+                            final.content or "",
+                            title=title,
+                            work_dir=work_dir,
+                        )
+                        if quality_issues:
+                            logger.info(
+                                "HTML 卡片排版修复: %s", ", ".join(quality_issues)
+                            )
+                        break
+                    except CardValidationError as exc:
+                        if attempt:
+                            yield f"Error: 卡片质量检查未通过 — {exc}"
+                            return
+                        logger.info("HTML 卡片需修正: %s", exc)
+                        yield "正在调整卡片内容与排版..."
+                        request = (
+                            instruction + f"\n\n上一版未通过检查：{exc}\n"
+                            "请针对问题修正并输出完整 HTML。保留正确内容、完整公式与必要条件，"
+                            "不要截断正文，不要把生成要求复制到正文。复用已生成的图片，"
+                            "不要再次生成插图。\n\n上一版：\n"
+                            + (final.content or "")[:100_000]
+                        )
+
+                if self._parent_ctx:
+                    self._parent_ctx.checkpoint()
+                card_dir.mkdir(parents=True, exist_ok=False)
+                body_html = archive_card_images(
+                    body_html,
+                    work_dir=work_dir,
+                    card_dir=card_dir,
+                    card_id=card_id,
                 )
-                return
-
-            # 清理 body HTML，并做一次轻量 critique→repair（无额外 LLM 调用，尽量不影响速度）
-            body_html = _clean_body_html(body_html)
-            body_html, quality_issues = _assess_and_repair_card_html(
-                body_html, title=title, content=content
-            )
-            if quality_issues:
-                logger.info(
-                    "HTML 卡片已自动做排版质量微调: %s", ", ".join(quality_issues)
+                (card_dir / "card.html").write_text(
+                    _wrap_html(body_html, title), encoding="utf-8"
                 )
-                yield "已完成卡片排版质量检查"
-
-            # 移动图片到 card_dir/images/，并将 body_html 中的临时路径替换为 /asset/ URL
-            img_extensions = {".png", ".jpg", ".jpeg", ".webp"}
-            images_dir = card_dir / "images"
-            for img_file in work_dir.iterdir():
-                if img_file.suffix.lower() in img_extensions:
-                    images_dir.mkdir(parents=True, exist_ok=True)
-                    dest = images_dir / img_file.name
-                    shutil.move(str(img_file), str(dest))
-                    # 替换为 documents asset URL：/api/documents/{card_id}/asset/images/{filename}
-                    url_path = f"/api/documents/{card_id}/asset/images/{img_file.name}"
-                    # macOS 下 /tmp 是 /private/tmp 的符号链接，需同时替换两种路径形式
-                    body_html = body_html.replace(str(img_file.resolve()), url_path)
-                    body_html = body_html.replace(str(img_file), url_path)
-
-            # 包装成完整 HTML
-            full_html = _wrap_html(body_html, title)
-
-            # 保存 HTML 文件
-            html_path = card_dir / "card.html"
-            html_path.write_text(full_html, encoding="utf-8")
-
-            yield "卡片生成完成"
-
-            script = ""
-
-            # 创建文档记录
-            self._create_document_record(card_id, "card.html", title, content, node_ids)
-
-            # file_id 即 documents.id（与 card_id 一致）
-            yield json.dumps(
-                {"file_id": card_id, "script": script},
-                ensure_ascii=False,
-            )
+                self._create_document_record(
+                    card_id, "card.html", title, content, node_ids
+                )
+                published = True
+                yield "卡片生成完成"
+                yield json.dumps({"file_id": card_id, "script": ""}, ensure_ascii=False)
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("[GenerateHtmlCardTool] 卡片生成或保存失败")
+            yield "Error: 卡片生成或保存失败，请重试"
+        finally:
+            if not published and card_dir.exists():
+                shutil.rmtree(card_dir, ignore_errors=True)
 
     def _create_document_record(
         self,
@@ -742,21 +505,18 @@ class GenerateHtmlCardTool(BaseTool):
         node_ids: list,
     ):
         """创建文档记录并建立与节点的关联。"""
-        try:
-            if not self.user_id:
-                raise ValueError("GenerateHtmlCardTool 缺少 user_id，拒绝写入脏数据")
+        if not self.user_id:
+            raise ValueError("GenerateHtmlCardTool 缺少 user_id，拒绝写入脏数据")
 
-            html_path = CARDS_DIR / card_id / "card.html"
-            DocumentRepository().register_produced(
-                doc_id=card_id,
-                user_id=self.user_id,
-                title=title,
-                file_path=html_path,
-                file_type="html_card",
-                session_id=self.session_id,
-                generation_prompt=content_description,
-                node_ids=node_ids or [],
-            )
-            logger.info("HTML 卡片文档记录创建成功: %s", card_id)
-        except Exception as e:  # pylint: disable=broad-except
-            logger.warning("创建 HTML 卡片文档记录失败: %s", e)
+        html_path = CARDS_DIR / card_id / file_name
+        DocumentRepository().register_produced(
+            doc_id=card_id,
+            user_id=self.user_id,
+            title=title,
+            file_path=html_path,
+            file_type="html_card",
+            session_id=self.session_id,
+            generation_prompt=content_description,
+            node_ids=node_ids or [],
+        )
+        logger.info("HTML 卡片文档记录创建成功: %s", card_id)

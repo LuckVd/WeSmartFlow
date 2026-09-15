@@ -142,7 +142,7 @@ class DailyPlanService:
             recent_sessions_text=sessions_text,
         )
 
-        response = await get_llm(user_id).async_think(
+        response = await get_llm(user_id, scene="system").async_think(
             messages=[
                 {"role": "system", "content": "你是学习助理，只输出 JSON。"},
                 {"role": "user", "content": prompt},

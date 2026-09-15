@@ -49,11 +49,35 @@ def _is_official_openai_endpoint(base_url: Optional[str]) -> bool:
     return host == "api.openai.com" or host.endswith(".api.openai.com")
 
 
+def _supports_reasoning_effort(model_name: str, value: Any) -> bool:
+    """判断模型是否接受给定的 reasoning_effort 取值。
+
+    各家对该参数的支持差异很大，传错会直接 400：
+      - OpenAI o1/o3 系列：只接受 "low" / "medium" / "high"，不接受 "none"
+      - DeepSeek V4 / R 系列：接受 "none"，用于完全关闭推理过程
+      - 其他模型（gpt-4o、qwen 等）：不认识该参数
+
+    Args:
+        model_name: 模型名
+        value: 期望传入的 reasoning_effort 值
+
+    Returns:
+        True 表示可以安全传递，False 表示应剔除。
+    """
+    m = (model_name or "").lower()
+    if m.startswith(("o1", "o3")):
+        return value in ("low", "medium", "high")
+    if "deepseek-v4" in m or "deepseek-r" in m or "deepseek-reasoner" in m:
+        return True
+    return False
+
+
 def _normalize_params(model_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
     """过滤并规范化传给 OpenAI API 的额外参数。
 
     - 移除值为 None 的键
     - 部分模型（o1/o3 系列）不支持 temperature / top_p，自动剔除
+    - reasoning_effort 仅在模型确实支持该取值时保留，避免 400
     """
     # o1/o3 系列不支持 temperature、top_p、presence_penalty、frequency_penalty
     _o_series = model_name.startswith(("o1", "o3"))
@@ -62,6 +86,11 @@ def _normalize_params(model_name: str, config: Dict[str, Any]) -> Dict[str, Any]
         if _o_series
         else set()
     )
+
+    if "reasoning_effort" in config and not _supports_reasoning_effort(
+        model_name, config["reasoning_effort"]
+    ):
+        _unsupported.add("reasoning_effort")
 
     return {k: v for k, v in config.items() if v is not None and k not in _unsupported}
 
@@ -90,6 +119,55 @@ def _parse_tool_calls(raw_tool_calls: Any) -> List["ToolCallRequest"]:
         except Exception:  # pylint: disable=broad-except
             continue
     return result
+
+
+def _extract_usage(raw: Any) -> Dict[str, Any]:
+    """从 SDK 的 usage 对象提取计费所需字段。
+
+    除基础三项外，还保留：
+      - reasoning_tokens：推理模型的思考开销，常占 completion 的九成以上，
+        单列以便评估 reasoning_effort 的优化收益
+      - prompt_cache_hit/miss_tokens、cached_tokens：命中提示缓存的输入 token
+        单价通常低一个数量级，不区分会显著高估成本
+
+    各家字段命名不一（DeepSeek 平铺、OpenAI 嵌在 *_details 里），
+    这里一并抽出，交由 services.pricing.normalize_usage 归一化。
+    """
+    if not raw:
+        return {}
+
+    usage: Dict[str, Any] = {
+        "prompt_tokens": getattr(raw, "prompt_tokens", 0),
+        "completion_tokens": getattr(raw, "completion_tokens", 0),
+        "total_tokens": getattr(raw, "total_tokens", 0),
+    }
+
+    # DeepSeek 风格：平铺在 usage 上
+    for key in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+        val = getattr(raw, key, None)
+        if val is not None:
+            usage[key] = val
+
+    # OpenAI 风格：嵌在 details 子对象里
+    pd = getattr(raw, "prompt_tokens_details", None)
+    if pd is not None:
+        cached = getattr(pd, "cached_tokens", None)
+        if cached is not None:
+            usage["cached_tokens"] = cached
+
+    cd = getattr(raw, "completion_tokens_details", None)
+    if cd is not None:
+        reasoning = getattr(cd, "reasoning_tokens", None)
+        if reasoning is not None:
+            usage["reasoning_tokens"] = reasoning
+
+    # 少数实现直接平铺 reasoning_tokens
+    if "reasoning_tokens" not in usage:
+        val = getattr(raw, "reasoning_tokens", None)
+        if val is not None:
+            usage["reasoning_tokens"] = val
+
+    return usage
 
 
 class OpenAILLM(BaseLLM):
@@ -224,22 +302,15 @@ class OpenAILLM(BaseLLM):
 
     @staticmethod
     def _to_llm_response(completion: Any, model_name: str, attempt: int) -> LLMResponse:
-        """将 OpenAI CompletionResponse 转为 LLMResponse。"""
+        """将 OpenAI CompletionResponse 转为 LLMResponse（纯函数，无副作用）。"""
         choice = completion.choices[0]
         message = choice.message
         tool_calls = _parse_tool_calls(getattr(message, "tool_calls", None))
-        usage = {}
-        if completion.usage:
-            usage = {
-                "prompt_tokens": completion.usage.prompt_tokens,
-                "completion_tokens": completion.usage.completion_tokens,
-                "total_tokens": completion.usage.total_tokens,
-            }
         return LLMResponse(
             content=message.content or "",
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason or "stop",
-            usage=usage,
+            usage=_extract_usage(completion.usage),
             metadata={"model": model_name, "attempts": attempt},
         )
 
@@ -401,11 +472,7 @@ class OpenAILLM(BaseLLM):
             async for chunk in stream:
                 # usage 只在最后一个 chunk 里
                 if hasattr(chunk, "usage") and chunk.usage:
-                    usage = {
-                        "prompt_tokens": chunk.usage.prompt_tokens,
-                        "completion_tokens": chunk.usage.completion_tokens,
-                        "total_tokens": chunk.usage.total_tokens,
-                    }
+                    usage = _extract_usage(chunk.usage)
                 if not chunk.choices:
                     continue
                 choice = chunk.choices[0]

@@ -27,7 +27,8 @@ class AnySearchSource(BaseSource):
 
     API_URL = "https://api.anysearch.com/v1/search"
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, user_id: str = ""):
+        self._user_id = user_id
         self._api_key = api_key or os.getenv("ANYSEARCH_API_KEY", "")
 
     def is_available(self) -> bool:
@@ -40,6 +41,16 @@ class AnySearchSource(BaseSource):
             logger.warning("[AnySearch] 未配置 API Key，跳过")
             return []
 
+        from services.credit_quota import assert_available
+        from services.usage_meter import record_usage
+        from services.pricing import calc_unit_credits
+
+        if not self._user_id:
+            raise RuntimeError("AnySearch 调用缺少 user_id")
+        calc_unit_credits("search", 1, provider="anysearch")
+        is_system = self._user_id == "__system__"
+        if not is_system:
+            assert_available(self._user_id, "search", platform_key=True)
         try:
             import httpx
 
@@ -66,6 +77,15 @@ class AnySearchSource(BaseSource):
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                record_usage(
+                    self._user_id,
+                    category="search",
+                    scene="search",
+                    provider="anysearch",
+                    units=1,
+                    counts_quota=not is_system,
+                    is_system=is_system,
+                )
 
         except Exception as e:
             logger.error("[AnySearch] 搜索异常: %s", e)

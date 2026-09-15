@@ -81,6 +81,25 @@
       </div>
 
       <div class="gt-right">
+        <!-- 只看薄弱点（issue #30） -->
+        <button
+          class="mode-btn weak-toggle"
+          :class="{ active: weakOnly }"
+          :title="'只显示掌握度低于 ' + WEAK_MASTERY_THRESHOLD + '% 的节点'"
+          @click="weakOnly = !weakOnly"
+        >
+          ⚠ 薄弱点<span v-if="weakCount" class="weak-badge">{{
+            weakCount
+          }}</span>
+        </button>
+        <!-- 导出图谱（issue #98） -->
+        <button
+          class="mode-btn"
+          title="导出知识图谱为 JSON（节点、关系、掌握度、标签）"
+          @click="exportGraphJson"
+        >
+          ↓ 导出
+        </button>
         <!-- 列表视图排序 -->
         <select v-if="viewMode === 'list'" v-model="sortBy" class="sort-select">
           <option value="recent">最近学习</option>
@@ -1583,6 +1602,9 @@ const edgeColors = {
 };
 
 const dynamicFilters = ref([]);
+// 只看薄弱点：掌握度 < 60 的节点（issue #30）
+const weakOnly = ref(false);
+const WEAK_MASTERY_THRESHOLD = 60;
 
 // ── Computed ────────────────────────────────────────────────────
 const baseFilteredNodes = computed(() => {
@@ -1615,13 +1637,54 @@ const filteredNodes = computed(() => {
   let list = baseFilteredNodes.value;
   const q = searchQuery.value.trim().toLowerCase();
   if (q) {
-    return list.filter((n) => nodeMatchesQuery(n, q));
+    list = list.filter((n) => nodeMatchesQuery(n, q));
   }
   if (graphDisplayMode.value === "simplified" && simplifiedConfig.value) {
     list = list.filter((n) => simplifiedVisibleIds.value.has(n.id));
   }
+  if (weakOnly.value) {
+    list = list.filter((n) => (n.mastery ?? 100) < WEAK_MASTERY_THRESHOLD);
+  }
   return list;
 });
+// 薄弱点数量徽标
+const weakCount = computed(
+  () =>
+    baseFilteredNodes.value.filter(
+      (n) => (n.mastery ?? 100) < WEAK_MASTERY_THRESHOLD,
+    ).length,
+);
+
+// 导出图谱 JSON（issue #98）：节点（名称/掌握度/学科/标签/简介）+ 关系
+function exportGraphJson() {
+  const data = {
+    exported_at: new Date().toISOString(),
+    node_count: nodes.value.length,
+    edge_count: edges.value.length,
+    nodes: nodes.value.map((n) => ({
+      id: n.id,
+      name: n.label ?? n.title ?? n.name,
+      subject: n.subject ?? null,
+      mastery: n.mastery ?? null,
+      tags: n.tags ?? [],
+      summary: n.desc ?? n.description ?? null,
+    })),
+    edges: edges.value.map((e) => ({
+      source: e.source,
+      target: e.target,
+      relation: e.type ?? e.relation ?? null,
+    })),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `wesmartflow-graph-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 // visibleNodes 是 filteredNodes 的别名，供模板直接使用
 const visibleNodes = filteredNodes;
@@ -1647,6 +1710,8 @@ const sortedNodes = computed(() => {
   let list = baseFilteredNodes.value;
   const q = searchQuery.value.trim().toLowerCase();
   if (q) list = list.filter((n) => nodeMatchesQuery(n, q));
+  if (weakOnly.value)
+    list = list.filter((n) => (n.mastery ?? 100) < WEAK_MASTERY_THRESHOLD);
   list = [...list];
   if (sortBy.value === "mastery-desc")
     list.sort((a, b) => b.mastery - a.mastery);
@@ -2118,6 +2183,23 @@ onMounted(async () => {
   color: var(--text-muted);
   font-size: 11px;
   cursor: pointer;
+}
+
+.weak-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.weak-badge {
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  text-align: center;
 }
 .mode-btn.active {
   background: var(--bg-card);

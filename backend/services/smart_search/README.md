@@ -59,27 +59,19 @@ python test_smart_search.py
 
 测试会跑 3 个 query，输出每一步详情：路由决策 → 各源返回数 → 筛选过程 → 最终 Markdown。
 
-## 集成到 TutorAgent（替代原有 TavilySearch）
+## 集成到 Agent（替代原有 TavilySearch）
 
-在 `services/tutor_service.py` 的 `_build_tools()` 方法中：
+搜索工具统一经 `agents/tool_catalog.py` 解析（`smart_search` / `tavily`），
+其中 Tavily 客户端由 `services/search_factory.get_search_client(user_id)` 产出
+（额度拦截 + 记账挂在客户端上），直接注入：
 
 ```python
-# 原来：
-from agent_core.tool.web import TavilySearch, ArxivSearch, WebFetch
-tools.extend([
-    TavilySearch(api_key=tavily_key, before_call_hook=_search_hook),
-    ArxivSearch(),
-    WebFetch(),
-])
-
-# 改成：
+from services.search_factory import get_search_client
 from services.smart_search import SmartSearchTool
-tools.append(
-    SmartSearchTool(
-        tavily_key=tavily_key,
-        anysearch_key=os.getenv("ANYSEARCH_API_KEY", ""),
-        before_call_hook=_search_hook,
-    )
+
+tool = SmartSearchTool(
+    tavily_client=get_search_client(user_id, scene="search"),
+    anysearch_key=os.getenv("ANYSEARCH_API_KEY", ""),
 )
 ```
 

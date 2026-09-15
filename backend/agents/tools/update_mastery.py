@@ -32,8 +32,8 @@ class UpdateMasteryTool(BaseTool):
         "required": ["node_id", "delta"],
     }
 
-    def __init__(self, user_id: str, on_result_hook=None):
-        super().__init__(on_result_hook=on_result_hook)
+    def __init__(self, user_id: str):
+        super().__init__()
         self._user_id = user_id
 
     def run(

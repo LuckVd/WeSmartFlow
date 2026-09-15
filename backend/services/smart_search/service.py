@@ -51,27 +51,37 @@ class SmartSearchService:
 
     def __init__(
         self,
+        tavily_client=None,
         tavily_key: Optional[str] = None,
         anysearch_key: Optional[str] = None,
         llm_func: Optional[Callable[[str], Awaitable[str]]] = None,
         top_k: int = 8,
+        user_id: str = "",
     ):
         """
         Args:
-            tavily_key: Tavily API Key（可从 env 读）
+            tavily_client: 工厂产出的 BaseSearchClient（已挂治理 hook，
+                           见 services/search_factory）。
+            tavily_key:    未注入 client 时的回退 Key（可从 env 读）。
             anysearch_key: AnySearch API Key（可从 env 读）
-            llm_func: 异步 LLM 调用函数 (prompt: str) -> str，用于复杂路由
-                      为 None 时只用规则路由
-            top_k: 最终返回 top-k 条
+            llm_func:      异步 LLM 调用函数 (prompt: str) -> str，用于复杂路由
+                           为 None 时只用规则路由
+            top_k:         最终返回 top-k 条
         """
+        self._user_id = user_id
         self._top_k = top_k
         self._llm_func = llm_func
 
         # 初始化所有源 adapter
         self._sources: dict[str, BaseSource] = {}
-        self._init_sources(tavily_key, anysearch_key)
+        self._init_sources(tavily_client, tavily_key, anysearch_key)
 
-    def _init_sources(self, tavily_key: Optional[str], anysearch_key: Optional[str]):
+    def _init_sources(
+        self,
+        tavily_client,
+        tavily_key: Optional[str],
+        anysearch_key: Optional[str],
+    ):
         """注册所有可用的搜索源（文本 + 图片 + 视频）。"""
         _tavily_key = tavily_key or os.getenv("TAVILY_API_KEY", "")
         _anysearch_key = anysearch_key or os.getenv("ANYSEARCH_API_KEY", "")
@@ -79,8 +89,10 @@ class SmartSearchService:
 
         candidates = [
             # ── 文本源 ──────────────────────────────────────────────
-            TavilySource(api_key=_tavily_key),
-            AnySearchSource(api_key=_anysearch_key),
+            TavilySource(
+                api_key=_tavily_key, client=tavily_client, user_id=self._user_id
+            ),
+            AnySearchSource(api_key=_anysearch_key, user_id=self._user_id),
             ArxivSource(),
             WebFetchSource(),
             # ── 图片源（无需 Key）────────────────────────────────────

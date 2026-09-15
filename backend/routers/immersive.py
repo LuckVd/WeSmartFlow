@@ -32,7 +32,7 @@ from services.immersive import (
 )
 from config import COURSES_DIR
 from dependencies import get_current_user
-from services.quota import QuotaExceededError
+from services.credit_quota import CreditsExceeded
 from services.content_guard import get_content_guard
 from utils.validators import SessionIdField, SessionIdPath, sanitize_uuid
 from utils.log_safe import safe_log
@@ -87,14 +87,14 @@ async def generate_immersive(
                     logger.info("客户端断开，停止生成")
                     break
                 yield event
-        except QuotaExceededError as e:
+        except CreditsExceeded as e:
             err = json.dumps(
                 {
                     "type": "error",
                     "message": str(e),
-                    "code": "quota_exceeded",
-                    "category": e.category,
-                    "limit": e.limit,
+                    "code": "credits_exceeded",
+                    "quota": e.quota,
+                    "used": e.used,
                 },
                 ensure_ascii=False,
             )
@@ -142,14 +142,14 @@ async def resume_immersive(
                     logger.info("客户端断开，停止恢复生成")
                     break
                 yield event
-        except QuotaExceededError as e:
+        except CreditsExceeded as e:
             err = json.dumps(
                 {
                     "type": "error",
                     "message": str(e),
-                    "code": "quota_exceeded",
-                    "category": e.category,
-                    "limit": e.limit,
+                    "code": "credits_exceeded",
+                    "quota": e.quota,
+                    "used": e.used,
                 },
                 ensure_ascii=False,
             )

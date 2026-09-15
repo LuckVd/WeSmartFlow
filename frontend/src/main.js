@@ -4,6 +4,7 @@ import App from "./App.vue";
 import "./style.css";
 
 import Login from "./views/LoginView.vue";
+const Landing = () => import("./views/LandingView.vue");
 import GitHubCallback from "./views/GitHubCallback.vue";
 import Weclaw from "./views/WeclawView.vue";
 import AdminLogin from "./views/AdminLoginView.vue";
@@ -44,7 +45,7 @@ const routes = [
     component: AdminKg,
     meta: { public: true, admin: true },
   },
-  { path: "/", redirect: "/chat" },
+  { path: "/", component: Landing, meta: { public: true, standalone: true } },
   { path: "/dashboard", component: Dashboard },
   { path: "/graph", component: Graph },
   // /knowledge 重定向到 /graph（列表视图），保持旧链接可用，保留 query 参数
@@ -79,7 +80,7 @@ const router = createRouter({
   if (code && !window.location.hash.includes("/auth/github/callback")) {
     // 清除 URL 中的 query 参数，跳转到 hash 路由
     window.location.replace(
-      `${window.location.pathname}#/auth/github/callback?code=${encodeURIComponent(code)}`,
+      `${window.location.pathname}#/auth/github/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(urlParams.get("state") || "")}`,
     );
   }
 })();

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from agent_core.llm.base import BaseLLM
-from agent_core.tool.qwen_tts import synthesize_batch
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +82,20 @@ def generate_speaker_notes(llm: BaseLLM, tex_path: Path, num_pages: int) -> List
 
 
 def run_tts_for_chapter(
-    chapter_dir: Path, speaker_notes: List[str]
+    chapter_dir: Path, speaker_notes: List[str], user_id: str = ""
 ) -> List[Dict[str, Any]]:
-    """对单个章节的讲解稿批量合成语音（qwen3-tts 优先，无 key 回退 macOS say）。"""
+    """对单个章节的讲解稿批量合成语音。
+
+    TTS 客户端走工厂（qwen3-tts 优先，单条失败回退 macOS say，
+    都不可用则不生成）；额度拦截与记账挂在客户端上。
+    """
     if not speaker_notes:
+        return []
+    from services.tts_factory import get_tts
+
+    tts = get_tts(user_id, scene="immersive")
+    if tts is None:
+        logger.warning("无可用 TTS 通道，跳过语音生成（%d 条）", len(speaker_notes))
         return []
     audio_dir = chapter_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +103,5 @@ def run_tts_for_chapter(
         {"text": note, "filename": f"frame_{i + 1:03d}.wav"}
         for i, note in enumerate(speaker_notes)
     ]
-    # 三级优先级：qwen3-tts-instruct-flash → macOS say → 不生成
-    result = synthesize_batch(items=items, output_dir=str(audio_dir))
+    result = tts.synthesize_batch(items=items, output_dir=str(audio_dir))
     return result.get("results", [])

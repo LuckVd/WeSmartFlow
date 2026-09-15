@@ -52,12 +52,15 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 # admin token 单独的过期时间（更短）
 ADMIN_TOKEN_EXPIRE_HOURS = int(os.getenv("ADMIN_TOKEN_EXPIRE_HOURS", "12"))
 
-# 免费额度配置（每用户总量，使用平台公共 Key 时生效）
-# 注意：额度按实际 API 调用次数计数（一次对话可能触发多次 LLM 调用）
-# 10¥ ≈ $1.37 预算，按 6:3:1 分配
-FREE_LLM_TOTAL = int(os.getenv("FREE_LLM_TOTAL", "100"))  # LLM 调用总次数
-FREE_SEARCH_TOTAL = int(os.getenv("FREE_SEARCH_TOTAL", "30"))  # 搜索总次数
-FREE_IMAGE_TOTAL = int(os.getenv("FREE_IMAGE_TOTAL", "15"))  # 图片生成总次数
+# credits 用量体系（1 credit = 1 元 / 1,000,000，见 services/pricing.py）
+# 赠送规则与跨月余额见 services/credit_wallet.py。
+# 开关关闭时仍记账和扣余额，但不阻止余额不足的调用。
+CREDITS_ENFORCEMENT_ENABLED = os.getenv(
+    "CREDITS_ENFORCEMENT_ENABLED", "true"
+).lower() in {"1", "true", "yes"}
+# 单次运行允许超出剩余额度的预借比例（0.2 = 最多超 20%），
+# 用于在「credits 调用后才知道」的约束下换取实现简单。
+CREDITS_BORROW_RATIO = float(os.getenv("CREDITS_BORROW_RATIO", "0.2"))
 
 # SMTP 邮件配置（用于邮箱验证码登录）
 SMTP_HOST = os.getenv("SMTP_HOST", "")  # SMTP 服务器地址，如 smtp.qq.com

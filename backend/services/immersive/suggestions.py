@@ -148,7 +148,7 @@ emoji 要求：选择与主题最相关的 emoji，让标签更生动。"""
 
 请生成 8-12 个推荐主题，严格按 JSON 数组格式输出。"""
 
-    llm = get_llm(user_id)
+    llm = get_llm(user_id, scene="immersive")
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},

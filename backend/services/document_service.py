@@ -100,6 +100,49 @@ class DocumentService:
         return self._assert_doc_owner(user_id, doc_id)
 
     # ── 上传 ─────────────────────────────────────────────
+    def _find_by_hash(self, user_id: str, content_hash: str):
+        """按内容 hash 查找同用户已上传的文档（issue #29 去重）。
+
+        注意：必须在 with get_db() 块内 fetch——_execute 返回的 cursor
+        在连接关闭后失效，fetchone() 拿不到结果。
+        """
+        try:
+            from database import get_db
+
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT doc_id FROM document_hash "
+                    "WHERE user_id=? AND content_hash=? ORDER BY created_at DESC",
+                    (user_id, content_hash),
+                ).fetchall()
+            # 倒序找第一个仍存在的文档（历史记录可能指向已删除文档）
+            for r in rows:
+                found = self.doc_repo.get_by_id(r[0])
+                if found and found.user_id == user_id:
+                    return found
+        except Exception:
+            pass
+        return None
+
+    def _record_hash(self, user_id: str, content_hash: str, doc_id: str) -> None:
+        """记录内容 hash（表不存在时自动建，不阻塞上传）。"""
+        try:
+            from database import get_db
+
+            with get_db() as conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS document_hash "
+                    "(user_id TEXT, content_hash TEXT, doc_id TEXT, created_at TEXT)",
+                    (),
+                )
+                conn.execute(
+                    "INSERT INTO document_hash (user_id, content_hash, doc_id, created_at) "
+                    "VALUES (?,?,?,datetime('now'))",
+                    (user_id, content_hash, doc_id),
+                )
+        except Exception:
+            pass
+
     async def upload(
         self,
         user_id: str,
@@ -118,11 +161,20 @@ class DocumentService:
         if len(content) > max_size_bytes:
             raise InvalidUpload(f"文件大小超过限制: {MAX_UPLOAD_SIZE_MB}MB")
 
+        # issue #29：内容 hash 去重——同用户上传相同内容时复用已有文档
+        import hashlib as _hashlib
+
+        content_hash = _hashlib.sha256(content).hexdigest()
+        existing = self._find_by_hash(user_id, content_hash)
+        if existing:
+            return existing
+
         doc_id = new_id()
         file_name = f"{doc_id}.{file_ext}"
         save_dir = UPLOADS_DIR / doc_id
         save_dir.mkdir(parents=True, exist_ok=True)
         (save_dir / file_name).write_bytes(content)
+        self._record_hash(user_id, content_hash, doc_id)
 
         # storage_key: 相对于 DATA_DIR 的路径
         storage_key = f"documents/uploads/{doc_id}/{file_name}"
@@ -180,6 +232,16 @@ class DocumentService:
         return file_path, doc.file_name
 
     # ── 删除 ─────────────────────────────────────────────
+    def _purge_hash_records(self, doc_id: str) -> None:
+        """删除文档时清理 hash 记录，避免脏数据让后续去重误判。"""
+        try:
+            from database import get_db
+
+            with get_db() as conn:
+                conn.execute("DELETE FROM document_hash WHERE doc_id=?", (doc_id,))
+        except Exception:
+            pass
+
     def delete(self, user_id: str, doc_id: str) -> None:
         doc = self._assert_doc_owner(user_id, doc_id)
         # 只允许删除用户自己上传的文档，其他来源的文档不允许删除
@@ -188,6 +250,8 @@ class DocumentService:
         file_path = Path(doc.get_file_path())
         if file_path.exists():
             file_path.unlink(missing_ok=True)
+        # 同步清理 hash 记录（issue #29：避免脏数据让后续去重误判）
+        self._purge_hash_records(doc_id)
         # 删除文档专属目录（仅当目录为空或只属于该文档时）
         if file_path.parent.exists() and file_path.parent != UPLOADS_DIR:
             shutil.rmtree(file_path.parent, ignore_errors=True)

@@ -15,6 +15,8 @@ RetrieveService：Graph RAG 两段式检索（concept + facet）
 from __future__ import annotations
 
 import logging
+import math
+import random
 from typing import Optional
 
 from ..config import (
@@ -23,8 +25,11 @@ from ..config import (
     KG_ANCHOR_MIN_SCORE,
     KG_ANCHOR_TOPK,
     KG_ANCHOR_WEAK_SCORE,
+    KG_EXPAND_MAX_HOPS,
+    KG_EXPAND_SAMPLING,
+    KG_EXPAND_TEMPERATURE,
+    KG_EXPAND_TOP_P,
     KG_NEIGHBOR_FANOUT,
-    KG_REL_WEIGHT_FLOOR,
 )
 from ..embedder import get_embedder
 from ..models import (
@@ -34,7 +39,11 @@ from ..models import (
     RetrieveResponse,
     SubgraphConcept,
 )
-from ..relation_semantics import score_relations, softmax_normalize
+from ..relation_semantics import (
+    score_relations,
+    score_relations_from_entry,
+    softmax_normalize,
+)
 from ..repositories import (
     ConceptEdgeRepository,
     ConceptRepository,
@@ -93,11 +102,11 @@ class RetrieveService:
 
         # ---- Stage 2: 图扩展 ----
         neighbor_budget = max(0, req.max_subgraph_size - len(entry_ids))
-        if entry_ids and req.graph_expand and rel_scores and neighbor_budget > 0:
+        if entry_ids and req.graph_expand and q_emb and neighbor_budget > 0:
             subgraph_nodes = self._expand_subgraph(
                 entry_briefs=entry_briefs,
-                rel_scores=rel_scores,
-                hops=max(1, req.expand_hops),
+                q_emb=q_emb,
+                hops=max(1, min(req.expand_hops, KG_EXPAND_MAX_HOPS)),
                 neighbor_budget=neighbor_budget,
                 traversed_edge_ids=traversed_edge_ids,
             )
@@ -119,6 +128,11 @@ class RetrieveService:
         # ---- 反馈强化:被走过的 edge 累加 support_count(失败不影响响应) ----
         if traversed_edge_ids:
             self._increment_edge_support_async(traversed_edge_ids)
+
+        # ---- 反馈强化:被进入子图的出口概念累加 access_count(概念级检索强度) ----
+        accessed_concept_ids = [n.concept.id for n in subgraph_nodes if not n.is_entry]
+        if accessed_concept_ids:
+            self._increment_concept_access_async(accessed_concept_ids)
 
         return RetrieveResponse(
             concepts=entry_briefs,
@@ -214,10 +228,48 @@ class RetrieveService:
     # Stage 2: 图扩展
     # ============================================================
 
+    def _sample_edges(self, cands: list, k: int) -> list:
+        """softmax(得分/温度) → top-p 核采样 → ×k → 逐边独立伯努利试验。
+
+        cands : [(src_id, edge, nbr_id, nbr, score), ...]
+        k     : 本跳 frontier 中产生候选边的入口数
+        返回被采样的子集（同一 nbr_id 可能出现多次，调用方自行去重取最优）。
+        score 在元组最后一项（c[-1]），nbr 对象随元组透传，调用方直接复用。
+
+        ×k 的作用：Σp=1 是"互斥选择题"形式（谁来走这条边），而"每条边值不值得走"
+        本该是独立判断。乘 k 后，每跳期望新增节点数 ≈ k（每个入口约 1 个）；
+        不乘时，frontier 越大、每个入口反而越探不动。
+        """
+        if not cands:
+            return []
+        scores = [c[-1] for c in cands]
+        mx = max(scores)
+        temp = max(KG_EXPAND_TEMPERATURE, 1e-6)
+        weights = [math.exp((s - mx) / temp) for s in scores]
+        total = sum(weights)
+        if total <= 0:
+            return []
+        probs = [(c, w / total) for c, w in zip(cands, weights)]
+
+        top_p = KG_EXPAND_TOP_P
+        if top_p < 1.0:
+            probs.sort(key=lambda cp: -cp[1])
+            kept: list = []
+            acc = 0.0
+            for cand, p in probs:
+                kept.append((cand, p))
+                acc += p
+                if acc >= top_p:
+                    break
+            kept_total = sum(p for _, p in kept)
+            probs = [(c, p / kept_total) for c, p in kept] if kept_total > 0 else []
+
+        return [cand for cand, p in probs if random.random() < min(p * k, 1.0)]
+
     def _expand_subgraph(
         self,
         entry_briefs: list[ConceptBrief],
-        rel_scores: dict[str, float],
+        q_emb: list[float],
         hops: int,
         neighbor_budget: int,
         traversed_edge_ids: Optional[list[str]] = None,
@@ -228,62 +280,123 @@ class RetrieveService:
                 concept=c, is_entry=True, score=_ENTRY_BASE_SCORE
             )
 
-        if neighbor_budget <= 0:
+        if neighbor_budget <= 0 or not q_emb:
             return list(nodes.values())
 
-        active_rels = [r for r, s in rel_scores.items() if s >= KG_REL_WEIGHT_FLOOR]
-        if not active_rels:
-            return list(nodes.values())
+        # id → 概念名，多跳时随邻居入队扩展
+        name_by_id: dict[str, str] = {
+            c.id: (c.canonical_name or c.slug) for c in entry_briefs
+        }
 
         neighbor_pool: dict[str, SubgraphConcept] = {}
-        # 候选邻居 → 它是经由哪条 edge 第一次进入 pool 的(用于 support_count 反馈)
         neighbor_via_edge: dict[str, str] = {}
         frontier: list[str] = [c.id for c in entry_briefs]
 
         for hop in range(hops):
-            decay = 0.6**hop
-            next_frontier: list[str] = []
-
+            # ── 阶段 A：取本跳全部边 ──
+            hop_edges = []
             for src_id in frontier:
-                edges = self.edge_repo.neighbors(
+                for e in self.edge_repo.neighbors(
                     concept_id=src_id,
-                    relation_types=active_rels,
+                    relation_types=None,
                     direction="both",
                     limit=KG_NEIGHBOR_FANOUT,
-                )
-                for e in edges:
-                    nbr_id = e.dst_id if e.src_id == src_id else e.src_id
-                    if nbr_id == src_id or nbr_id in nodes:
-                        continue
+                ):
+                    hop_edges.append((src_id, e))
 
-                    rel_w = rel_scores.get(e.relation_type, 0.0)
-                    candidate_score = decay * float(e.weight) * float(rel_w)
+            if not hop_edges:
+                break
 
-                    existing = neighbor_pool.get(nbr_id)
-                    if existing and existing.score >= candidate_score:
-                        continue
+            hop_relations = tuple(
+                sorted({e.relation_type for _, e in hop_edges if e.relation_type})
+            )
+            if not hop_relations:
+                break
 
-                    nbr = self.concept_repo.follow_merge(nbr_id)
-                    if not nbr or nbr.status != "approved":
-                        continue
-                    neighbor_pool[nbr_id] = SubgraphConcept(
-                        concept=_to_brief(nbr),
-                        is_entry=False,
-                        via_relation=e.relation_type,
-                        via_concept_id=src_id,
-                        score=candidate_score,
+            # ── 阶段 B：z + ln(1+access_count) 复合得分 ──
+            z_cache: dict[str, dict[str, float]] = {}
+            # nbr_id → ConceptSchema（带 access_count），follow_merge 带缓存避免重复查
+            nbr_concept_cache: dict[str, Optional[object]] = {}
+            cands: list = []
+
+            for src_id, e in hop_edges:
+                nbr_id = e.dst_id if e.src_id == src_id else e.src_id
+                if nbr_id == src_id or nbr_id in nodes:
+                    continue
+
+                # 出口概念：follow_merge 解析到生效概念（带 access_count）
+                if nbr_id not in nbr_concept_cache:
+                    nbr_concept_cache[nbr_id] = self.concept_repo.follow_merge(nbr_id)
+                nbr = nbr_concept_cache[nbr_id]
+                if not nbr or nbr.status != "approved":
+                    continue
+
+                if src_id not in z_cache:
+                    entry_name = name_by_id.get(src_id, src_id)
+                    z = score_relations_from_entry(
+                        q_emb, entry_name, relations=hop_relations
                     )
-                    neighbor_via_edge[nbr_id] = e.id
-                    next_frontier.append(nbr_id)
+                    z_cache[src_id] = z if z else {}
+
+                z_rel = z_cache[src_id].get(e.relation_type, 0.0)
+                # ln(1 + access_count)：出口节点的概念级检索强度（被进入子图次数）。
+                # access_count=0 时 ln(1)=0（中性起点）；被检索越多，该节点越倾向被展开。
+                score = z_rel + math.log(1.0 + float(getattr(nbr, "access_count", 0)))
+                cands.append((src_id, e, nbr_id, nbr, score))
+
+            if not cands:
+                break
+
+            # ── 阶段 C：选边（概率采样 or 确定性 top-N）──
+            k = len({c[0] for c in cands})
+
+            if KG_EXPAND_SAMPLING:
+                # _sample_edges 透传完整 5 元组，用最后一项 score 计算采样概率
+                picked = self._sample_edges(cands, k=k)
+            else:
+                # 确定性：去重后按得分取 top-N
+                best: dict[str, tuple] = {}
+                for c in cands:
+                    if c[2] not in best or c[4] > best[c[2]][4]:
+                        best[c[2]] = c
+                picked = sorted(best.values(), key=lambda c: -c[4])[:neighbor_budget]
+
+            if not picked:
+                break
+
+            # ── 阶段 D：去重取最优路径，加入子图 ──
+            # 概念对象已在阶段 B follow_merge 拿到，这里直接复用，不再重复查询
+            best_by_nbr: dict[str, tuple] = {}
+            for c in picked:
+                nbr_id = c[2]
+                if nbr_id not in best_by_nbr or c[-1] > best_by_nbr[nbr_id][-1]:
+                    best_by_nbr[nbr_id] = c
+
+            next_frontier: list[str] = []
+            for nbr_id, cand in best_by_nbr.items():
+                src_id, e, _nbr_id, nbr, score = cand
+                if nbr_id in nodes or nbr_id in neighbor_pool:
+                    continue
+
+                nbr_brief = _to_brief(nbr)
+                neighbor_pool[nbr_id] = SubgraphConcept(
+                    concept=nbr_brief,
+                    is_entry=False,
+                    via_relation=e.relation_type,
+                    via_concept_id=src_id,
+                    score=score,
+                )
+                neighbor_via_edge[nbr_id] = e.id
+                next_frontier.append(nbr_id)
+                name_by_id[nbr_id] = nbr_brief.canonical_name or nbr_brief.slug
 
             if not next_frontier:
                 break
-            frontier = next_frontier
+            frontier = list(dict.fromkeys(next_frontier))
 
         top_neighbors = sorted(neighbor_pool.values(), key=lambda n: -n.score)[
             :neighbor_budget
         ]
-        # 只把真正进入子图的那些邻居所对应的 edge 记入反馈队列
         if traversed_edge_ids is not None:
             for n in top_neighbors:
                 eid = neighbor_via_edge.get(n.concept.id)
@@ -341,6 +454,26 @@ class RetrieveService:
         except Exception:  # pylint: disable=broad-except
             logger.exception("retrieve: 启动 support_count 累加线程失败,跳过")
 
+    def _increment_concept_access_async(self, concept_ids: list[str]) -> None:
+        """开后台线程批量累加出口概念的 access_count（概念级检索强度）。
+
+        与 edge.support_count 同样异步、失败仅打 warning、不阻塞读路径。
+        用一次批量 UPDATE，比逐条快得多。
+        """
+        import threading
+
+        def _worker(ids: list[str]) -> None:
+            try:
+                self.concept_repo.increment_access(ids, by=1)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("retrieve: concept access_count 累加失败 err=%s", exc)
+
+        try:
+            t = threading.Thread(target=_worker, args=(list(concept_ids),), daemon=True)
+            t.start()
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("retrieve: 启动 access_count 累加线程失败,跳过")
+
 
 # ============================================================
 # 工具函数
@@ -355,4 +488,5 @@ def _to_brief(c) -> ConceptBrief:
         summary=c.summary,
         subject=c.subject,
         difficulty=c.difficulty,
+        access_count=getattr(c, "access_count", 0),
     )

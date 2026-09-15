@@ -105,6 +105,16 @@
             </div>
           </div>
 
+          <div v-if="imRestoreError" class="im-resume-banner" role="alert">
+            <div class="im-resume-info">
+              <div class="im-resume-title">课程加载失败</div>
+              <div class="im-resume-desc">{{ imRestoreError }}</div>
+            </div>
+            <button class="im-resume-btn-primary" @click="restoreImmersive">
+              重新加载
+            </button>
+          </div>
+
           <!-- 续传提示横幅：恢复历史会话且未完成时由用户决定是否继续 -->
           <div v-if="imResumePrompt && !imGenerating" class="im-resume-banner">
             <div class="im-resume-info">
@@ -1163,7 +1173,7 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
-import { useRoute, onBeforeRouteLeave } from "vue-router";
+import { useRoute, useRouter, onBeforeRouteLeave } from "vue-router";
 import { sessionApi, BASE_URL, llmApi } from "@/api";
 import {
   authHeaders,
@@ -1188,6 +1198,7 @@ pdfjsLib.GlobalWorkerOptions.cMapUrl =
 pdfjsLib.GlobalWorkerOptions.cMapPacked = true;
 
 const route = useRoute();
+const router = useRouter();
 
 // ── 阶段状态 ────────────────────────────────────────────────────
 const phase = ref("idle");
@@ -1212,6 +1223,7 @@ const imOutline = ref(null);
 const imChapters = ref([]);
 // 返回未完成会话时，是否展示“继续生成”提示（交给用户决定）
 const imResumePrompt = ref(false);
+const imRestoreError = ref("");
 // 重新进入课程时，若已“完成”的章节缺失 PDF，可手动触发修复；用户可关闭提示
 const imRepairDismissed = ref(false);
 const imCurrentChapterIndex = ref(0);
@@ -2127,11 +2139,21 @@ function applyWorkspacePayload(payload = {}) {
   }
 }
 
+function rememberImmersiveSession(sessionId) {
+  if (!sessionId) return;
+  currentSessionId.value = sessionId;
+  if (!sessionStartTime) sessionStartTime = Date.now();
+  if (route.query.session_id === sessionId) return;
+  // 将新建入口替换成可恢复的课程地址，刷新后只加载该会话。
+  const query = { ...route.query, session_id: sessionId };
+  delete query.resume;
+  router.replace({ path: route.path, query }).catch((error) => {
+    imAddLog(`课程地址更新失败：${error.message}`, "error");
+  });
+}
+
 function handleWorkspaceUpdate(data) {
-  if (data.session_id) {
-    currentSessionId.value = data.session_id;
-    if (!sessionStartTime) sessionStartTime = Date.now();
-  }
+  rememberImmersiveSession(data.session_id);
   if (data.workspace) applyWorkspacePayload(data.workspace);
   if (data.next_actions) workspaceNextActions.value = data.next_actions;
   if (data.block) upsertCanvasBlock(data.block);
@@ -2252,6 +2274,7 @@ async function imRepairMissingPdf() {
 }
 
 function imHandleSSE(data) {
+  rememberImmersiveSession(data.session_id);
   const agentType = data.agent_type || "unknown";
   const eventType = data.event_type || "unknown";
   const step = data.step || 0;
@@ -2266,6 +2289,7 @@ function imHandleSSE(data) {
       imProgress.value = data.pct || 0;
       imStatusMessage.value = data.message || "";
       if (data.stage) imCurrentStage.value = data.stage;
+      if (data.stage === "done") imCompleted.value = true;
       imAddLog(data.message);
       break;
     case "outline":
@@ -3196,6 +3220,9 @@ function resetToIdle() {
   imCompleted.value = false;
   imProgress.value = 0;
   imCurrentStage.value = "";
+  imRestoreError.value = "";
+  imResumePrompt.value = false;
+  router.replace({ path: route.path, query: {} });
   imStatusMessage.value = "";
   imOutline.value = null;
   imChapters.value = [];
@@ -3220,11 +3247,15 @@ function resetToIdle() {
 }
 
 // ── 恢复历史会话 ─────────────────────────────────────────────────
-onMounted(async () => {
+async function restoreImmersive() {
+  imRestoreError.value = "";
+  imResumePrompt.value = false;
   const sessionId = route.query.session_id;
   const topic = route.query.topic;
   const shouldResume = route.query.resume === "1" || route.query.resume === 1;
   if (sessionId) {
+    phase.value = "immersive";
+    currentTopic.value = String(topic || "历史课程");
     try {
       const detail = await sessionApi.getById(sessionId);
       currentSessionId.value = detail.id;
@@ -3233,7 +3264,8 @@ onMounted(async () => {
         detail.topic || detail.title?.replace("[AI课程] ", "") || "历史课程";
       phase.value = "immersive";
       imCompleted.value =
-        detail.status === "completed" || detail.stage === "completed";
+        detail.status === "completed" ||
+        ["ready", "completed"].includes(detail.stage);
       imGenerating.value = false;
       applyWorkspacePayload(detail);
       if (canvasBlocks.value.length > 0) {
@@ -3357,10 +3389,9 @@ onMounted(async () => {
       }
     } catch (e) {
       console.warn("恢复会话失败:", e.message);
-      if (topic) {
-        topicInput.value = String(topic);
-        nextTick(() => startImmersive());
-      }
+      imRestoreError.value = "暂时无法加载已有课程，请重试。";
+      imAddLog(`课程恢复失败：${e.message}`, "error");
+      return;
     }
     // 如果路由要求续传，且会话尚未完成 → 不再自动跳转，
     // 展示一个提示横幅，由用户手动点击“继续生成”。
@@ -3381,7 +3412,8 @@ onMounted(async () => {
     }
     nextTick(() => startImmersive());
   }
-});
+}
+onMounted(restoreImmersive);
 
 function onWindowResize() {
   const ch = imChapters.value[imCurrentChapterIndex.value];

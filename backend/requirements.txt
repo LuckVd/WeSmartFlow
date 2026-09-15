@@ -12,7 +12,6 @@ courlan==1.3.2
 cryptography==46.0.7
 dateparser==1.4.0
 distro==1.9.0
-dotenv==0.9.9
 fastapi==0.135.3
 feedparser==6.0.12
 h11==0.16.0
@@ -56,4 +55,17 @@ urllib3==2.6.3
 uvicorn==0.44.0
 PyYAML==6.0.2
 sqlite-vec==0.1.9
-dashscope
+dashscope==1.27.1
+
+# --- 卡片渲染（channels/render.py，微信通道图片消息依赖）---
+# 安装后还需下载浏览器内核：playwright install chromium
+playwright==1.61.0
+
+# --- 可选依赖（缺失时相关功能自动跳过，不影响启动）---
+# MCP 协议工具接入 —— agent_core/tool/mcp.py
+#   当前在 agent_core/tool/__init__.py 中处于停用状态，启用前需先安装
+# mcp==1.27.2
+#
+# DuckDuckGo 搜索源 —— services/smart_search/sources/duckduckgo_source.py
+#   未安装时该源 is_available() 返回 False，检索自动降级到其他源
+# duckduckgo-search==8.1.1

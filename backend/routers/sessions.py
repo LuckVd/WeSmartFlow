@@ -21,13 +21,16 @@ from agent_core.agent.events import (
     AgentToolRunEvent,
     AgentToolResultEvent,
     AgentFinalEvent,
-    FileCreatedEvent,
-    NodeCreatedEvent,
-    MasteryUpdatedEvent,
+    DomainEvent,
     extract_event_text,
 )
+from agents.events import (
+    KIND_FILE_CREATED,
+    KIND_MASTERY_UPDATED,
+    KIND_NODE_CREATED,
+)
 from dependencies import get_current_user
-from services.quota import QuotaExceededError
+from services.credit_quota import CreditsExceeded
 from services.content_guard import get_content_guard
 from utils.validators import SessionIdPath
 
@@ -181,14 +184,17 @@ async def chat_stream(
                         "step": event.step,
                     }
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                elif isinstance(event, MasteryUpdatedEvent):
-                    mastery_changes[event.node_id] = (
-                        mastery_changes.get(event.node_id, 0.0) + event.delta
-                    )
+                elif (
+                    isinstance(event, DomainEvent)
+                    and event.kind == KIND_MASTERY_UPDATED
+                ):
+                    node_id = event.payload.get("node_id", "")
+                    delta = event.payload.get("delta", 0.0)
+                    mastery_changes[node_id] = mastery_changes.get(node_id, 0.0) + delta
                     data = {
                         "type": "mastery_updated",
-                        "node_id": event.node_id,
-                        "delta": event.delta,
+                        "node_id": node_id,
+                        "delta": delta,
                     }
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 elif isinstance(event, AgentFinalEvent):
@@ -230,31 +236,31 @@ async def chat_stream(
                         "step": event.step,
                     }
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                elif isinstance(event, FileCreatedEvent):
+                elif isinstance(event, DomainEvent) and event.kind == KIND_FILE_CREATED:
                     data = {
                         "type": "file_created",
-                        "file_id": event.file_id,
-                        "title": event.title,
-                        "file_type": event.file_type,
+                        "file_id": event.payload.get("file_id", ""),
+                        "title": event.payload.get("title", ""),
+                        "file_type": event.payload.get("file_type", ""),
                     }
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                elif isinstance(event, NodeCreatedEvent):
+                elif isinstance(event, DomainEvent) and event.kind == KIND_NODE_CREATED:
                     data = {
                         "type": "node_created",
-                        "node_id": event.node_id,
-                        "title": event.title,
+                        "node_id": event.payload.get("node_id", ""),
+                        "title": event.payload.get("title", ""),
                     }
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             pass  # 客户端断开，静默退出
-        except QuotaExceededError as e:
+        except CreditsExceeded as e:
             err = json.dumps(
                 {
                     "type": "error",
                     "message": str(e),
-                    "code": "quota_exceeded",
-                    "category": e.category,
-                    "limit": e.limit,
+                    "code": "credits_exceeded",
+                    "quota": e.quota,
+                    "used": e.used,
                 },
                 ensure_ascii=False,
             )

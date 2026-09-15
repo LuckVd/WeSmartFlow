@@ -68,6 +68,7 @@ class DocumentRepository(BaseRepository):
                 file_type=r["file_type"],
                 file_size=r["file_size"],
                 status=r["status"],
+                error_msg=r.get("error_msg"),
                 total_pages=r["total_pages"],
                 node_ids=_loads(r["node_ids"], []),
                 node_count=len(_loads(r["node_ids"], [])),

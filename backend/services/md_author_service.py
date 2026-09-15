@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 from agent_core.agent.events import AgentFinishReason
 from agent_core.agent.react import ReActAgent
-from agent_core.context.simple import SimpleContextBuilder
+from agent_core.context.static import StaticPromptBuilder
 from agent_core.tool.registry import ToolRegistry
 
 from agents.tools import (
@@ -247,7 +247,7 @@ class MdAuthorService:
 
     def __init__(self) -> None:
         # 工具实例可以共享 (无 user 状态)
-        self._smart_search = SmartSearchTool()
+        self._smart_search = SmartSearchTool(user_id="__system__")
         self._kg_resolve = KGResolveForAuthoringTool()
         self._kg_search = KGSearchForAuthoringTool()
         self._md_load_concept = MdLoadConceptTool()
@@ -289,7 +289,7 @@ class MdAuthorService:
         registry = ToolRegistry([self._md_load_facet, self._md_write_facet])
         agent = ReActAgent(
             llm=get_system_llm(timeout=90),
-            context_builder=SimpleContextBuilder(_FACET_AUTHOR_SYSTEM_PROMPT),
+            prompt_builder=StaticPromptBuilder(_FACET_AUTHOR_SYSTEM_PROMPT),
             tool_registry=registry,
             max_steps=max_steps,
         )
@@ -339,7 +339,7 @@ class MdAuthorService:
         )
         agent = ReActAgent(
             llm=get_system_llm(timeout=120),
-            context_builder=SimpleContextBuilder(_CONCEPT_AUTHOR_SYSTEM_PROMPT),
+            prompt_builder=StaticPromptBuilder(_CONCEPT_AUTHOR_SYSTEM_PROMPT),
             tool_registry=registry,
             max_steps=max_steps,
         )

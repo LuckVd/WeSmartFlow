@@ -1,5 +1,5 @@
 <template>
-  <!-- 登录页 / Admin 审核台：全屏展示，不显示侧边栏 -->
+  <!-- 首页 / 登录页 / Admin 审核台：全屏展示 -->
   <router-view v-if="isStandalonePage" />
 
   <!-- 主布局：侧边栏 + 内容区 -->
@@ -39,6 +39,21 @@
 
       <!-- Nav -->
       <nav class="sidebar-nav">
+        <!-- 收藏（issue #68） -->
+        <div v-if="favoriteItems.length" class="nav-group">
+          <div class="nav-group-label">★ 收藏</div>
+          <router-link
+            v-for="item in favoriteItems"
+            :key="item.path"
+            :to="item.path"
+            class="nav-item"
+            :title="sidebarCollapsed ? item.label : ''"
+          >
+            <span class="nav-icon" v-html="item.icon" />
+            <span class="nav-label">{{ item.label }}</span>
+          </router-link>
+        </div>
+
         <!-- 学习 -->
         <div class="nav-group">
           <div class="nav-group-label">学习</div>
@@ -57,6 +72,14 @@
               :class="item.badgeType || 'brand'"
               >{{ item.badge }}</span
             >
+            <button
+              class="nav-fav"
+              :class="{ active: isFavorite(item.path) }"
+              title="收藏到顶部"
+              @click.prevent.stop="toggleFavorite(item.path)"
+            >
+              {{ isFavorite(item.path) ? "★" : "☆" }}
+            </button>
           </router-link>
         </div>
 
@@ -73,6 +96,14 @@
             <span class="nav-icon" v-html="item.icon" />
             <span class="nav-label">{{ item.label }}</span>
             <span v-if="item.badge" class="nav-badge">{{ item.badge }}</span>
+            <button
+              class="nav-fav"
+              :class="{ active: isFavorite(item.path) }"
+              title="收藏到顶部"
+              @click.prevent.stop="toggleFavorite(item.path)"
+            >
+              {{ isFavorite(item.path) ? "★" : "☆" }}
+            </button>
           </router-link>
         </div>
 
@@ -88,6 +119,14 @@
           >
             <span class="nav-icon" v-html="item.icon" />
             <span class="nav-label">{{ item.label }}</span>
+            <button
+              class="nav-fav"
+              :class="{ active: isFavorite(item.path) }"
+              title="收藏到顶部"
+              @click.prevent.stop="toggleFavorite(item.path)"
+            >
+              {{ isFavorite(item.path) ? "★" : "☆" }}
+            </button>
           </router-link>
         </div>
       </nav>
@@ -242,10 +281,13 @@ onBeforeUnmount(() => {
   else compactViewport.removeListener(syncSidebarToViewport);
 });
 
-// 是否在登录页 / Admin 审核台 → 走全屏布局
+// 公开首页 / 登录页 / Admin 审核台 → 走全屏布局
 const isLoginPage = computed(() => route.path === "/login");
 const isStandalonePage = computed(
-  () => route.path === "/login" || route.path.startsWith("/admin"),
+  () =>
+    route.meta.standalone ||
+    route.path === "/login" ||
+    route.path.startsWith("/admin"),
 );
 
 // ── 用户信息（使用全局共享的 userProfile） ──────────────────────
@@ -270,7 +312,7 @@ async function fetchUserInfo() {
 watch(
   () => [isLoginPage.value, isAuthenticated.value, route.path],
   ([onLogin, authed, path]) => {
-    if (path && path.startsWith("/admin")) return;
+    if (route.meta.standalone || (path && path.startsWith("/admin"))) return;
     if (!onLogin && authed) {
       fetchUserInfo();
     }
@@ -283,6 +325,30 @@ function handleLogout() {
   clearAuth();
   router.replace("/login");
 }
+
+// 侧边栏收藏（issue #68）：localStorage 持久化，收藏的入口置顶分组
+const allNavPaths = () => [...learnNav, ...contentNav, ...personalNav];
+const favorites = ref(
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem("wsf-nav-favorites") || "[]");
+    } catch {
+      return [];
+    }
+  })(),
+);
+function isFavorite(path) {
+  return favorites.value.includes(path);
+}
+function toggleFavorite(path) {
+  const i = favorites.value.indexOf(path);
+  if (i >= 0) favorites.value.splice(i, 1);
+  else favorites.value.push(path);
+  localStorage.setItem("wsf-nav-favorites", JSON.stringify(favorites.value));
+}
+const favoriteItems = computed(() =>
+  allNavPaths().filter((i) => favorites.value.includes(i.path)),
+);
 
 // 核心：知识图谱相关
 // 学习：主动学习行为
@@ -398,6 +464,26 @@ const personalNav = [
 .sidebar-collapsed .nav-item {
   justify-content: center;
   padding: 8px;
+}
+
+.nav-fav {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.nav-item:hover .nav-fav,
+.nav-fav.active {
+  opacity: 1;
+}
+.nav-fav.active {
+  color: #f5a623;
 }
 .sidebar-collapsed .nav-icon {
   opacity: 0.8;

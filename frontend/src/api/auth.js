@@ -55,15 +55,22 @@ export const authApi = {
    * 获取 GitHub 授权 URL
    * @returns {Promise<{authorize_url: string}>}
    */
-  async getGitHubAuthorizeUrl() {
-    const res = await fetch(`${BASE_URL}/api/auth/github/authorize`);
+  async getGitHubAuthorizeUrl(reward = false) {
+    const path = reward ? "github/reward/authorize" : "github/authorize";
+    const token = localStorage.getItem("wesmartflow-token");
+    const res = await fetch(`${BASE_URL}/api/auth/${path}`, {
+      headers: reward && token ? { Authorization: `Bearer ${token}` } : {},
+    });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       throw new Error(err.detail || "获取 GitHub 授权地址失败");
     }
 
-    return res.json();
+    const data = await res.json();
+    sessionStorage.setItem("github-oauth-state", data.state);
+    sessionStorage.setItem("github-oauth-purpose", reward ? "reward" : "login");
+    return data;
   },
 
   /**
@@ -71,11 +78,15 @@ export const authApi = {
    * @param {string} code - GitHub 回调的 code
    * @returns {Promise<{access_token: string, token_type: string, user_id: string, user_name: string}>}
    */
-  async githubCallback(code) {
+  async githubCallback(code, state) {
+    if (!state || state !== sessionStorage.getItem("github-oauth-state")) {
+      throw new Error("GitHub 授权校验失败，请重新发起登录或奖励验证");
+    }
+    sessionStorage.removeItem("github-oauth-state");
     const res = await fetch(`${BASE_URL}/api/auth/github/callback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, state }),
     });
 
     if (!res.ok) {

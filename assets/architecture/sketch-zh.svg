@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1192" viewBox="0 0 1200 1192" role="img" aria-labelledby="title desc" xml:lang="zh">
+  <title id="title">WeSmartFlow 系统架构</title>
+  <desc id="desc">网页、独立探索主题与微信入口接入教育业务服务。业务通过 Agent 注册表使用 agent_core，并读写个人学习记忆和公共知识图谱。业务负责持久化，模型与工具通过适配器接入外部能力。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L7 4 L1 7" fill="none" stroke="#8A9780" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="0.7" fill="#9D9C88" opacity="0.5"/></pattern>
+  </defs>
+  <rect width="1200" height="1192" rx="24" fill="#FFFBF1"/>
+  <g font-family="'Chalkboard SE', 'Kaiti SC', KaiTi, cursive">
+<rect x="20" y="20" width="1160" height="1152" fill="url(#dots)"/>
+<text x="48" y="54" font-size="22" font-weight="700" fill="#3D413C" >WeSmartFlow</text>
+<text x="1152" y="54" font-size="14" font-weight="600" fill="#757669" text-anchor="end" letter-spacing="2">SYSTEM ARCHITECTURE</text>
+<text x="48" y="108" font-size="36" font-weight="700" fill="#3D413C" >同一套 Agent，连接每一种学习体验</text>
+<text x="48" y="140" font-size="19" font-weight="400" fill="#757669" >多端接入 · 教育业务编排 · 通用 Agent 内核 · 学习记忆</text>
+<text x="48" y="186" font-size="16" font-weight="600" fill="#427C67" >01  学习入口</text>
+<path d="M60 209 Q224.0 206 388 209 Q401 209 399 222 L401 315 Q400 329 388 327 Q224.0 330 60 328 Q47 328 49 315 L47 221 Q48 208 60 209 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="70" y="245" font-size="23" font-weight="600" fill="#3D413C" >Web 学习工作台</text>
+<text x="70" y="276" font-size="18" font-weight="400" fill="#757669" >辅导 / 课程 / 图谱 / 测验</text>
+<text x="70" y="306" font-size="15" font-weight="400" fill="#427C67" >frontend/ · Vue 3 + Vite</text>
+<path d="M436 209 Q600.0 206 764 209 Q777 209 775 222 L777 315 Q776 329 764 327 Q600.0 330 436 328 Q423 328 425 315 L423 221 Q424 208 436 209 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="446" y="245" font-size="23" font-weight="600" fill="#3D413C" >独立探索主题</text>
+<text x="446" y="276" font-size="18" font-weight="400" fill="#757669" >独立构建，同源发布，按需接 API</text>
+<text x="446" y="306" font-size="15" font-weight="400" fill="#427C67" >examples/ · explore-catalog.json</text>
+<path d="M812 209 Q976.0 206 1140 209 Q1153 209 1151 222 L1153 315 Q1152 329 1140 327 Q976.0 330 812 328 Q799 328 801 315 L799 221 Q800 208 812 209 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="822" y="245" font-size="23" font-weight="600" fill="#3D413C" >微信学习入口</text>
+<text x="822" y="276" font-size="18" font-weight="400" fill="#757669" >原生小程序 + WeClaw 消息通道</text>
+<text x="822" y="306" font-size="15" font-weight="400" fill="#427C67" >miniprogram/ · backend/channels/</text>
+<path d="M224 328 V348 H530 V370" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M600 328 V370" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" stroke-dasharray="6 5"/>
+<path d="M976 328 V348 H670 V370" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M60 373 Q600.0 370 1140 373 Q1153 373 1151 386 L1153 415 Q1152 429 1140 427 Q600.0 430 60 428 Q47 428 49 415 L47 385 Q48 372 60 373 Z" fill="#EEF2DC" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="72" y="407" font-size="22" font-weight="600" fill="#3D413C" >FastAPI + Channels</text>
+<text x="1128" y="407" font-size="19" font-weight="400" fill="#757669" text-anchor="end">REST / SSE · 身份认证 · 积分钱包 · 消息桥接</text>
+<path d="M416 428 V458" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M60 461 Q416.0 458 772 461 Q785 461 783 474 L785 657 Q784 671 772 669 Q416.0 672 60 670 Q47 670 49 657 L47 473 Q48 460 60 461 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="72" y="498" font-size="23" font-weight="600" fill="#3D413C" >02  教育业务编排</text>
+<text x="760" y="498" font-size="16" font-weight="400" fill="#757669" text-anchor="end">backend/services/</text>
+<path d="M84 523 Q184.0 520 284 523 Q297 523 295 536 L297 603 Q296 617 284 615 Q184.0 618 84 616 Q71 616 73 603 L71 535 Q72 522 84 523 Z" fill="#FFFBF1" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="88" y="550" font-size="20" font-weight="600" fill="#3D413C" >个性化辅导</text>
+<text x="88" y="576" font-size="16" font-weight="400" fill="#757669" >TutorService</text>
+<text x="88" y="599" font-size="15" font-weight="400" fill="#757669" >会话 / 流式反馈</text>
+<path d="M316 523 Q416.0 520 516 523 Q529 523 527 536 L529 603 Q528 617 516 615 Q416.0 618 316 616 Q303 616 305 603 L303 535 Q304 522 316 523 Z" fill="#FFFBF1" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="320" y="550" font-size="20" font-weight="600" fill="#3D413C" >沉浸式课程</text>
+<text x="320" y="576" font-size="16" font-weight="400" fill="#757669" >ImmersiveService</text>
+<text x="320" y="599" font-size="15" font-weight="400" fill="#757669" >规划 / 研究 / 撰写 / 出题</text>
+<path d="M548 523 Q648.0 520 748 523 Q761 523 759 536 L761 603 Q760 617 748 615 Q648.0 618 548 616 Q535 616 537 603 L535 535 Q536 522 548 523 Z" fill="#FFFBF1" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="552" y="550" font-size="20" font-weight="600" fill="#3D413C" >教学内容与工具</text>
+<text x="552" y="576" font-size="16" font-weight="400" fill="#757669" >卡片 / EduViz / 测验</text>
+<text x="552" y="599" font-size="15" font-weight="400" fill="#757669" >文档 / 搜索 / 音视频</text>
+<text x="72" y="646" font-size="18" font-weight="600" fill="#427C67" >Agent registry</text>
+<text x="250" y="646" font-size="17" font-weight="400" fill="#757669" >声明 Agent · 注入工具、提示词与上下文</text>
+<path d="M836 461 Q988.0 458 1140 461 Q1153 461 1151 474 L1153 887 Q1152 901 1140 899 Q988.0 902 836 900 Q823 900 825 887 L823 473 Q824 460 836 461 Z" fill="#EEF2DC" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="846" y="498" font-size="23" font-weight="600" fill="#3D413C" >学习记忆与知识</text>
+<path d="M856 521 Q988.0 518 1120 521 Q1133 521 1131 534 L1133 637 Q1132 651 1120 649 Q988.0 652 856 650 Q843 650 845 637 L843 533 Q844 520 856 521 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="862" y="551" font-size="20" font-weight="600" fill="#3D413C" >个人学习记忆</text>
+<text x="862" y="582" font-size="17" font-weight="400" fill="#757669" >用户画像 · 掌握度 · 复习计划</text>
+<text x="862" y="610" font-size="17" font-weight="400" fill="#757669" >按用户保存学习状态</text>
+<text x="862" y="634" font-size="15" font-weight="400" fill="#427C67" >services/ · repositories/</text>
+<path d="M856 671 Q988.0 668 1120 671 Q1133 671 1131 684 L1133 819 Q1132 833 1120 831 Q988.0 834 856 832 Q843 832 845 819 L843 683 Q844 670 856 671 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="862" y="701" font-size="20" font-weight="600" fill="#3D413C" >公共知识图谱</text>
+<text x="862" y="730" font-size="17" font-weight="400" fill="#757669" >Graph RAG · Concept / Facet</text>
+<text x="862" y="758" font-size="17" font-weight="400" fill="#757669" >观察 → 提议 → 人工审核</text>
+<text x="862" y="785" font-size="17" font-weight="400" fill="#757669" >通过 kg_facade 访问</text>
+<text x="862" y="812" font-size="15" font-weight="400" fill="#427C67" >backend/kg/</text>
+<text x="846" y="863" font-size="17" font-weight="400" fill="#757669" >由业务层检索、写入与注入上下文</text>
+<text x="846" y="886" font-size="16" font-weight="400" fill="#757669" >个人状态与公共知识分开管理</text>
+<path d="M786 566 H822" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<path d="M416 670 V712" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M60 715 Q416.0 712 772 715 Q785 715 783 728 L785 961 Q784 975 772 973 Q416.0 976 60 974 Q47 974 49 961 L47 727 Q48 714 60 715 Z" fill="#E9EFDD" stroke="#E9EFDD" stroke-width="1.5"/>
+<text x="72" y="754" font-size="26" font-weight="700" fill="#35483C" >03  agent_core</text>
+<text x="760" y="754" font-size="17" font-weight="500" fill="#667C62" text-anchor="end">通用推理与运行时</text>
+<path d="M84 781 Q136.0 778 188 781 Q201 781 199 794 L201 883 Q200 897 188 895 Q136.0 898 84 896 Q71 896 73 883 L71 793 Q72 780 84 781 Z" fill="#FAFBEF" stroke="#FAFBEF" stroke-width="1.5"/>
+<text x="84" y="813" font-size="21" font-weight="600" fill="#35483C" >Agent</text>
+<text x="84" y="844" font-size="14" font-weight="400" fill="#667C62" >ReAct</text>
+<text x="84" y="871" font-size="14" font-weight="400" fill="#667C62" >DAG 工作流</text>
+<path d="M224 781 Q276.0 778 328 781 Q341 781 339 794 L341 883 Q340 897 328 895 Q276.0 898 224 896 Q211 896 213 883 L211 793 Q212 780 224 781 Z" fill="#FAFBEF" stroke="#FAFBEF" stroke-width="1.5"/>
+<text x="224" y="813" font-size="21" font-weight="600" fill="#35483C" >Context</text>
+<text x="224" y="844" font-size="14" font-weight="400" fill="#667C62" >Assemble</text>
+<text x="224" y="871" font-size="14" font-weight="400" fill="#667C62" >统一消息装配</text>
+<path d="M364 781 Q416.0 778 468 781 Q481 781 479 794 L481 883 Q480 897 468 895 Q416.0 898 364 896 Q351 896 353 883 L351 793 Q352 780 364 781 Z" fill="#FAFBEF" stroke="#FAFBEF" stroke-width="1.5"/>
+<text x="364" y="813" font-size="21" font-weight="600" fill="#35483C" >History</text>
+<text x="364" y="844" font-size="14" font-weight="400" fill="#667C62" >SessionMemory</text>
+<text x="364" y="871" font-size="14" font-weight="400" fill="#667C62" >会话与摘要</text>
+<path d="M504 781 Q556.0 778 608 781 Q621 781 619 794 L621 883 Q620 897 608 895 Q556.0 898 504 896 Q491 896 493 883 L491 793 Q492 780 504 781 Z" fill="#FAFBEF" stroke="#FAFBEF" stroke-width="1.5"/>
+<text x="504" y="813" font-size="21" font-weight="600" fill="#35483C" >Tools</text>
+<text x="504" y="844" font-size="14" font-weight="400" fill="#667C62" >Registry / MCP</text>
+<text x="504" y="871" font-size="14" font-weight="400" fill="#667C62" >技能与子 Agent</text>
+<path d="M644 781 Q696.0 778 748 781 Q761 781 759 794 L761 883 Q760 897 748 895 Q696.0 898 644 896 Q631 896 633 883 L631 793 Q632 780 644 781 Z" fill="#FAFBEF" stroke="#FAFBEF" stroke-width="1.5"/>
+<text x="644" y="813" font-size="21" font-weight="600" fill="#35483C" >LLM</text>
+<text x="644" y="844" font-size="14" font-weight="400" fill="#667C62" >OpenAI API</text>
+<text x="644" y="871" font-size="14" font-weight="400" fill="#667C62" >兼容协议适配</text>
+<text x="72" y="937" font-size="18" font-weight="600" fill="#35483C" >RunContext</text>
+<text x="230" y="937" font-size="18" font-weight="400" fill="#667C62" >预算 · 取消 · 追踪 · 事件</text>
+<path d="M48 584 H26 V1076 H46" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M600 974 V998 H880 V1022" fill="none" stroke="#8A9780" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M60 1025 Q316.0 1022 572 1025 Q585 1025 583 1038 L585 1123 Q584 1137 572 1135 Q316.0 1138 60 1136 Q47 1136 49 1123 L47 1037 Q48 1024 60 1025 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="72" y="1058" font-size="22" font-weight="600" fill="#3D413C" >业务持久化</text>
+<text x="72" y="1088" font-size="19" font-weight="400" fill="#757669" >SQLite (WAL) · sqlite-vec · Files</text>
+<text x="72" y="1116" font-size="17" font-weight="400" fill="#757669" >会话 / 画像 / 积分 / 知识 / 课程资产</text>
+<path d="M620 1025 Q880.0 1022 1140 1025 Q1153 1025 1151 1038 L1153 1123 Q1152 1137 1140 1135 Q880.0 1138 620 1136 Q607 1136 609 1123 L607 1037 Q608 1024 620 1025 Z" fill="#FFFEF8" stroke="#9D9C88" stroke-width="1.5"/>
+<text x="632" y="1058" font-size="22" font-weight="600" fill="#3D413C" >模型与工具接入</text>
+<text x="632" y="1088" font-size="19" font-weight="400" fill="#757669" >LLM · Search · Image · TTS · MCP</text>
+<text x="632" y="1116" font-size="17" font-weight="400" fill="#757669" >通过适配器与工厂接入，可按场景替换</text>
+<text x="48" y="1172" font-size="15" font-weight="400" fill="#757669" >箭头表示主要调用与数据关系；虚线表示探索主题可选的 API 接入。</text>
+  </g>
+</svg>

@@ -100,6 +100,14 @@ class ValidateVizCodeTool(BaseTool):
         "required": ["file_path"],
     }
 
+    @staticmethod
+    def environment_error() -> str | None:
+        if not _find_node():
+            return "缺少 Node.js，无法校验 JavaScript"
+        if not _ESLINT_CONFIG.exists() or not _ESLINT_BIN.exists():
+            return "缺少 ESLint 或校验配置，请先安装 frontend 依赖"
+        return None
+
     def run(self, file_path: str = "", **kwargs) -> str:
         path = Path(file_path)
         if not path.exists():
@@ -180,10 +188,10 @@ class ValidateVizCodeTool(BaseTool):
 
     # -------------------- 语法检查（node --check） --------------------
     def _check_syntax(self, code: str) -> str | None:
-        """用 node --check 检查 JS 语法。如果找不到 node 则跳过。"""
+        """用 node --check 检查 JS 语法，检查不可用时阻止放行。"""
         node = _find_node()
         if not node:
-            return None
+            return "缺少 Node.js，无法执行语法检查"
 
         # 把代码包成 async function 来匹配运行时（顶层 await 才合法）
         wrapped = f"(async function() {{\n{code}\n}})()"
@@ -248,13 +256,13 @@ class ValidateVizCodeTool(BaseTool):
           - no-redeclare / no-const-assign / no-dupe-args / no-dupe-keys 等
 
         返回错误描述列表（已经把行号回退到用户原文视角）。
-        失败（找不到 node/eslint、超时、解析异常）一律静默跳过，避免阻塞 Agent。
+        检查不可用时返回明确错误，不能把未检查的代码当成通过。
         """
         if not _ESLINT_CONFIG.exists() or not _ESLINT_BIN.exists():
-            return []
+            return ["缺少 ESLint 或校验配置"]
         node = _find_node()
         if not node:
-            return []
+            return ["缺少 Node.js"]
 
         # 包成 async IIFE：与运行时行为一致，且让顶层 await 合法
         wrapped = f"(async function() {{\n{code}\n}})()\n"
@@ -283,17 +291,23 @@ class ValidateVizCodeTool(BaseTool):
                 env=env,
             )
             stdout = proc.stdout.strip()
-            if not stdout:
-                return []
+            if proc.returncode not in (0, 1) or not stdout:
+                return ["ESLint 未完成检查：" + proc.stderr[:300]]
             try:
                 results = json.loads(stdout)
             except json.JSONDecodeError:
-                return []
-            if not results:
-                return []
+                return ["ESLint 返回无效 JSON"]
+            if (
+                not isinstance(results, list)
+                or len(results) != 1
+                or "messages" not in results[0]
+            ):
+                return ["ESLint 未返回文件检查结果"]
 
             issues: list[str] = []
             for msg in results[0].get("messages", []):
+                if "ignored" in msg.get("message", "").lower():
+                    issues.append("ESLint 跳过了文件检查")
                 # 只把 error（severity=2）当成阻塞，warning 忽略
                 if msg.get("severity") != 2:
                     continue
@@ -306,9 +320,9 @@ class ValidateVizCodeTool(BaseTool):
                 issues.append(f"{rule} @ line {user_line}:{col} — {text}")
             return issues
         except subprocess.TimeoutExpired:
-            return ["eslint 超时（>15s），跳过语义检查"]
-        except Exception:  # pylint: disable=broad-except
-            return []
+            return ["ESLint 超时（>15s），未通过语义检查"]
+        except Exception as exc:  # pylint: disable=broad-except
+            return [f"ESLint 检查异常：{exc}"]
         finally:
             try:
                 tmp_path.unlink(missing_ok=True)

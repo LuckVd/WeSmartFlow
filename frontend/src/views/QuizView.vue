@@ -199,6 +199,39 @@
 
       <div class="config-divider" />
 
+      <!-- 出题模式：思考强度直接决定耗时，故显式暴露并给出预期等待 -->
+      <div class="config-section config-section--sm">
+        <div class="config-label">
+          出题模式
+          <!-- 三条提示叠放在同一网格单元内，只显示当前模式那条。
+               这样槽位宽度恒等于最长提示的宽度，切换模式时标签行宽度不变，
+               不会把整个 section 撑开导致后续按钮位移。 -->
+          <span class="mode-hint">
+            <span
+              v-for="m in effortModes"
+              :key="m.value"
+              class="mode-hint__item"
+              :class="{ 'is-active': effortMode === m.value }"
+              >{{ m.hint }}</span
+            >
+          </span>
+        </div>
+        <div class="type-btns">
+          <button
+            v-for="m in effortModes"
+            :key="m.value"
+            class="type-btn"
+            :class="{ active: effortMode === m.value }"
+            :title="m.hint"
+            @click="effortMode = m.value"
+          >
+            {{ m.label }}
+          </button>
+        </div>
+      </div>
+
+      <div class="config-divider" />
+
       <!-- 操作 -->
       <div class="config-section config-section--action">
         <button
@@ -311,9 +344,7 @@
 
         <!-- 题目正文 -->
         <div class="q-body">
-          <p class="q-text">
-            {{ currentQuiz.question }}
-          </p>
+          <div class="q-text" v-html="renderMd(currentQuiz.question)"></div>
         </div>
 
         <!-- 选项 -->
@@ -330,7 +361,7 @@
             @click="selectOption(i)"
           >
             <span class="option-letter">{{ String.fromCharCode(65 + i) }}</span>
-            <span class="option-text">{{ opt }}</span>
+            <span class="option-text" v-html="renderMd(stripLabel(opt))"></span>
             <div v-if="answered && submitResult" class="option-indicator">
               <svg
                 v-if="isCorrectOption(i)"
@@ -479,13 +510,19 @@
             <!-- 主观题：参考答案 -->
             <div v-if="isSubjective" class="aa-ref">
               <span class="aa-label">参考答案：</span>
-              <span class="aa-ref-text">{{
-                submitResult.correct_answer || currentQuiz.correct_answer
-              }}</span>
+              <span
+                class="aa-ref-text"
+                v-html="
+                  renderMd(
+                    submitResult.correct_answer || currentQuiz.correct_answer,
+                  )
+                "
+              ></span>
             </div>
-            <p class="aa-text">
-              {{ currentQuiz.explanation }}
-            </p>
+            <div
+              class="aa-text"
+              v-html="renderMd(currentQuiz.explanation)"
+            ></div>
             <div
               v-if="submitResult.mastery_delta !== undefined"
               class="aa-meta"
@@ -608,6 +645,10 @@
       <div class="sk-options">
         <div v-for="i in 4" :key="i" class="sk-option" />
       </div>
+      <div class="sk-status">
+        <span>{{ currentModeHint }}</span>
+        <span class="sk-elapsed">已等待 {{ elapsedSec }}s</span>
+      </div>
     </div>
   </div>
 </template>
@@ -617,6 +658,19 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { useRoute } from "vue-router";
 import { nodeApi } from "@/api/nodes.js";
 import { quizApi } from "@/api/quizzes.js";
+import { renderMd } from "@/composables/useMarkdown.js";
+
+/**
+ * 剥掉选项自带的 "A. " / "A、" / "A)" 前缀。
+ *
+ * 选项来源不统一：题库导入的形如 "A. 数组有序"，LLM 有时只给纯内容。
+ * 左侧已有字母徽标，重复显示会变成 "A A. xxx"。
+ * 仅在确实是 A~D 开头且紧跟分隔符时才剥，避免误伤 "A 是常量" 这类正文。
+ */
+function stripLabel(opt) {
+  const s = String(opt ?? "").trim();
+  return s.replace(/^[A-Da-d]\s*[.、）)：:]\s*/, "");
+}
 
 const route = useRoute();
 
@@ -704,10 +758,14 @@ function onClickOutside(e) {
     dropdownOpen.value = false;
   }
 }
-onMounted(() => document.addEventListener("mousedown", onClickOutside));
+onMounted(() => {
+  document.addEventListener("mousedown", onClickOutside);
+  loadEffortModes();
+});
 onUnmounted(() => {
   document.removeEventListener("mousedown", onClickOutside);
   clearInterval(timer);
+  clearInterval(elapsedTimer);
 });
 
 function masteryColor(level) {
@@ -725,6 +783,37 @@ const quizTypes = [
   { val: "open_ended", label: "简答题" },
 ];
 const quizType = ref("multiple_choice");
+
+// ── 出题模式（思考强度）──────────────────────────────────────
+// 出题走推理模型时，思考强度对耗时影响极大（实测 2 秒 ~ 5 分钟），
+// 因此让用户显式选择，并在生成中展示预期等待时间。
+// 选项与默认值均由后端提供，避免前后端取值漂移。
+const effortModes = ref([
+  { value: "fast", label: "快速", hint: "约 3 秒 · 题目偏基础" },
+  { value: "balanced", label: "均衡", hint: "约 20 秒 · 推荐" },
+  { value: "quality", label: "深度", hint: "1~2 分钟 · 题目更有深度" },
+]);
+const effortMode = ref("balanced");
+
+const currentModeHint = computed(
+  () => effortModes.value.find((m) => m.value === effortMode.value)?.hint || "",
+);
+
+// 生成中已等待的秒数，用于「已等待 8s」这类实时反馈
+const elapsedSec = ref(0);
+let elapsedTimer = null;
+
+async function loadEffortModes() {
+  try {
+    const res = await quizApi.effortModes();
+    if (Array.isArray(res?.modes) && res.modes.length) {
+      effortModes.value = res.modes;
+    }
+    if (res?.default) effortMode.value = res.default;
+  } catch {
+    // 拉取失败不影响出题：沿用内置默认选项
+  }
+}
 
 const isSubjective = computed(
   () =>
@@ -815,13 +904,24 @@ async function startQuiz() {
   showHint.value = false;
   clearInterval(timer);
 
+  // 出题可能耗时数十秒，用计时器给出「已等待 Ns」的实时反馈
+  elapsedSec.value = 0;
+  clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(() => elapsedSec.value++, 1000);
+
   try {
-    const quiz = await quizApi.generate(selectedNodeId.value, quizType.value);
+    const quiz = await quizApi.generate(
+      selectedNodeId.value,
+      quizType.value,
+      null,
+      effortMode.value,
+    );
     currentQuiz.value = quiz;
     startTimer();
   } catch (e) {
     genError.value = e.message || "出题失败，请重试";
   } finally {
+    clearInterval(elapsedTimer);
     generating.value = false;
   }
 }
@@ -1305,6 +1405,42 @@ async function submitSubjective() {
   cursor: pointer;
   transition: var(--transition);
 }
+
+/* 出题模式：当前所选模式的耗时提示，紧随标签展示。
+   三条提示同时渲染并重叠在同一网格单元中，槽位宽度由最长的那条决定，
+   因此切换模式时宽度恒定，不会引起后续按钮位移。 */
+.mode-hint {
+  display: inline-grid;
+  margin-left: 6px;
+  vertical-align: baseline;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.mode-hint__item {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+  visibility: hidden;
+}
+.mode-hint__item.is-active {
+  visibility: visible;
+}
+
+/* 生成中骨架的状态行：预期耗时 + 实际已等待 */
+.sk-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.sk-elapsed {
+  font-variant-numeric: tabular-nums;
+}
 .type-btn.active {
   background: var(--brand-dim);
   color: var(--brand-light);
@@ -1394,6 +1530,38 @@ async function submitSubjective() {
   font-weight: 500;
   color: var(--text-primary);
   line-height: 1.75;
+}
+
+/* ── Markdown / KaTeX 渲染内容的排版收敛 ──
+   题干、选项、参考答案、解析改用 v-html + renderMd 后会产出 <p> 等块级元素，
+   需要消除默认外边距，否则原有紧凑布局会被撑开。 */
+.q-text :deep(p),
+.aa-text :deep(p) {
+  margin: 0 0 4px;
+}
+.q-text :deep(p:last-child),
+.aa-text :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.option-text :deep(p),
+.aa-ref-text :deep(p) {
+  margin: 0;
+  display: inline;
+}
+/* 块级公式：留出上下呼吸，长公式横向可滚动而不撑破卡片 */
+.q-text :deep(.katex-display),
+.aa-text :deep(.katex-display) {
+  margin: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* 选项内不应出现块级公式（会破坏单行布局），强制降级为行内 */
+.option-text :deep(.katex-display) {
+  display: inline;
+  margin: 0;
+}
+.option-text :deep(.katex-display > .katex) {
+  display: inline-block;
 }
 
 /* Options */

@@ -1009,7 +1009,7 @@
     // 物理像素 = CSS 像素 × dpr，避免 Retina 屏模糊
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(cssH * dpr);
-    canvas.style.cssText = `width:${w}px;height:${cssH}px;border-radius:8px;display:block;max-width:100%;`;
+    canvas.style.cssText = `width:${w}px;height:auto;border-radius:8px;display:block;max-width:100%;margin-inline:auto;`;
     // 把 dpr 挂在 canvas 上，方便 axis2d 等读取
     canvas._dpr = dpr;
     const ctx = canvas.getContext("2d");

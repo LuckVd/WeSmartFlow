@@ -17,12 +17,17 @@ _LIVE_DIR = Path(__file__).resolve().parent
 if str(_LIVE_DIR) not in sys.path:
     sys.path.insert(0, str(_LIVE_DIR))
 
-from fastapi import APIRouter, Response  # noqa: E402
+from fastapi import APIRouter, Response, Depends, HTTPException  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 import server  # noqa: E402  # 复用 CFG / call_llm / call_tts* / JOBS / run_generate / ROOT
 
-router = APIRouter(prefix="/api/demo/live-science", tags=["live-science"])
+from services.external_usage import demo_usage, current_usage, UsageThread
+from services.credit_quota import CreditsExceeded, assert_available
+
+router = APIRouter(prefix="/api/demo/live-science", tags=["live-science"], dependencies=[Depends(demo_usage("live-science"))])
+JOB_OWNERS = {}
+
 
 
 class LLMRequest(BaseModel):
@@ -91,6 +96,8 @@ def llm(req: LLMRequest):
     try:
         text = server.call_llm(req.messages)
         return {"ok": True, "text": text}
+    except CreditsExceeded:
+        raise
     except Exception as e:  # 代理失败统一回 ok:false，前端降级
         return {"ok": False, "error": str(e)}
 
@@ -108,6 +115,8 @@ def tts(req: TTSRequest):
         else:
             return {"ok": False, "error": "TTS 未配置（.env 缺少 DASHSCOPE_API_KEY 或 TTS_BASE_URL）"}
         return Response(content=audio, media_type=ctype)
+    except CreditsExceeded:
+        raise
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -121,14 +130,20 @@ def generate(req: GenerateRequest):
             return {"ok": False, "error": "missing topic"}
         if not (server.CFG["LLM_API_KEY"] and server.CFG["LLM_BASE_URL"]):
             return {"ok": False, "error": "LLM 未配置，无法生成"}
+        assert_available(current_usage().user_id, platform_key=True)
         job_id = uuid.uuid4().hex[:8]
+        JOB_OWNERS[job_id] = current_usage().user_id
         server.JOBS[job_id] = {"stage": "queued", "message": "排队中……"}
-        threading.Thread(target=server.run_generate, args=(job_id, topic, audience), daemon=True).start()
+        UsageThread(target=server.run_generate, args=(job_id, topic, audience), daemon=True).start()
         return {"ok": True, "job": job_id}
+    except CreditsExceeded:
+        raise
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 @router.get("/generate/status")
 def generate_status(job: str = ""):
+    if JOB_OWNERS.get(job) != current_usage().user_id:
+        raise HTTPException(404, "任务不存在")
     return server.JOBS.get(job) or {"stage": "unknown", "message": "任务不存在"}

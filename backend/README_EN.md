@@ -6,115 +6,129 @@ FastAPI-based backend service powering Agent tutoring, knowledge graph managemen
 
 ## Module Structure
 
-```
+```text
 backend/
-├── agent_core/          # General-purpose Agent core library (standalone module, see its README)
-├── agents/              # Education-domain Agents & tools
-│   ├── chat_agent.py    #   TutorAgent (ReActAgent subclass)
-│   ├── tools/           #   Education-domain tools
-│   │   ├── create_node.py       # Create knowledge graph node
-│   │   ├── update_node.py       # Update node information
-│   │   ├── get_node.py          # Get node details
-│   │   ├── search_nodes.py      # Search knowledge nodes
-│   │   ├── update_mastery.py    # Update mastery level
-│   │   ├── generate_card.py     # Generate knowledge card (LaTeX → PDF)
-│   │   ├── generate_html_card.py# Generate HTML interactive knowledge card
-│   │   ├── generate_viz.py      # Generate EduViz interactive visualization
-│   │   ├── validate_viz_code.py # Visualization code validation (ESLint)
-│   │   ├── viz_registry.py      # Visualization pattern registry
-│   │   └── create_quiz.py       # Generate quiz questions
-│   └── prompts/         #   Education prompts & skills
-│       ├── tutor.md     #     Tutor Agent system prompt
-│       └── skills/      #     Education skill packs
-├── services/            # Business service layer
-│   ├── tutor_service.py       # AI tutoring service (SSE streaming)
-│   ├── quiz_service.py        # Quiz generation & grading
-│   ├── document_service.py    # Document upload & management
-│   ├── extract_service.py     # Document knowledge extraction
-│   ├── memory_service.py      # User profile memory
-│   ├── daily_plan_service.py  # Daily study plan
-│   ├── daily_brief_service.py # Daily news brief
-│   ├── node_service.py        # Knowledge node service
-│   ├── asset_service.py       # Static asset management
-│   ├── user_service.py        # User service
-│   ├── quota.py               # Free quota management
-│   ├── llm_factory.py         # LLM instance factory
-│   └── immersive/             # Immersive learning (multi-Agent pipeline)
-│       ├── service.py         #   Main service orchestration
-│       ├── agents.py          #   Sub-Agent definitions
-│       ├── persistence.py     #   Persistence
-│       ├── node_extractor.py  #   Knowledge node extraction
-│       ├── profile_updater.py #   User profile update
-│       ├── suggestions.py     #   Learning suggestion generation
-│       ├── exercises.py       #   Exercise generation
-│       ├── completion.py      #   Completion calculation
-│       ├── tts.py             #   Text-to-speech
-│       ├── sse.py             #   SSE event push
-│       └── utils.py           #   Utility functions
-├── routers/             # FastAPI route layer
-│   ├── auth.py          #   Authentication (email / GitHub OAuth / WeChat Mini Program)
-│   ├── sessions.py      #   Learning sessions (SSE streaming)
-│   ├── immersive.py     #   Immersive learning
-│   ├── documents.py     #   Document management
-│   ├── nodes.py         #   Knowledge graph nodes
-│   ├── quiz.py          #   Quizzes
-│   ├── cards.py         #   Knowledge cards (HTML / PDF)
-│   ├── viz.py           #   Interactive visualizations
-│   ├── llm.py           #   LLM configuration management
-│   ├── brief.py         #   Daily brief
-│   ├── settings.py      #   System settings
-│   ├── users.py         #   User info
-│   └── usage.py         #   Usage statistics
-├── repositories/        # Data access layer
-│   ├── base.py          #   BaseRepository (short-connection pattern)
-│   ├── session_repo.py  #   Session data
-│   ├── node_repo.py     #   Knowledge node data
-│   ├── quiz_repo.py     #   Quiz data
-│   ├── document_repo.py #   Document data
-│   ├── user_repo.py     #   User data
-│   ├── daily_plan_repo.py  # Study plan data
-│   └── daily_brief_repo.py # Brief data
-├── models/              # Pydantic data models
-│   ├── session.py       #   Session model
-│   ├── node.py          #   Knowledge node model
-│   ├── quiz.py          #   Quiz model
-│   ├── document.py      #   Document model
-│   └── user.py          #   User model
-├── database.py          # SQLite initialization & connection management
-├── config.py            # Configuration management (environment variables)
-├── dependencies.py      # FastAPI dependency injection
-├── main.py              # Application entry point
-└── requirements.txt     # Python dependencies
+├── agent_core/             # General-purpose Agent framework
+├── agents/                 # Educational Agents, tool registration and prompts
+├── agents/tools/           # Cards, visualizations, quizzes and graph tools
+├── services/               # Business services, model factories and credit accounting
+├── services/immersive/     # Immersive course workflows
+├── channels/               # WeClaw messaging and card screenshots
+├── kg/                     # Public knowledge graph and Graph RAG
+├── routers/                # FastAPI routes
+├── repositories/           # Data access
+├── models/                 # Request and business data models
+├── tests/                  # Regression and browser tests
+├── config.py               # Root .env, data and resource paths
+├── database.py             # SQLite initialization and connections
+├── main.py                 # Service entry point
+└── requirements.txt        # Python dependencies
 ```
 
 ## Prerequisites
 
-| Dependency | Version | Description | Required |
-|------------|---------|-------------|:--------:|
-| Python | ≥ 3.10 | Runtime | ✅ |
-| XeLaTeX + latexmk | TeX Live 2023+ | Compile Beamer slides (immersive mode) | Optional |
-| SimplePlus Beamer Theme | master | Beamer slide theme | Optional |
-| macOS `say` + Tingting | macOS 13+ | TTS voice (auto-degrades on non-macOS) | Optional |
+| Dependency | Purpose |
+| --- | --- |
+| Python 3.10+ | Backend and Agent runtime |
+| Node.js 24+ | Frontend build and ESLint; `environment.yml` currently installs Node.js 25 |
+| Frontend development dependencies | The backend visualization validator calls ESLint and reads its configuration |
+| Playwright + Chromium | EduViz browser checks and WeClaw card screenshots |
+| XeLaTeX, latexmk, SimplePlus Beamer | Optional PDF courseware generation |
 
 ## Installation & Launch
 
+**Run the following setup commands from the repository root.** The complete Conda setup is in the [main README](../README_EN.md#-quick-start). For an existing Python environment:
+
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Install LaTeX (optional, only for immersive courseware)
-brew install --cask mactex-no-gui
-
-# Download Beamer theme (optional)
-git clone https://github.com/pm25/SimplePlus-BeamerTheme.git SimplePlus-BeamerTheme
-
-# Configure environment variables (.env lives in repo root, NOT in backend/)
+python -m pip install -r backend/requirements.txt
+npm --prefix frontend install --include=dev
+python -m playwright install chromium
+# First setup only: create the root .env and fill in model and sign-in settings
 cp backend/.env.example .env
-# Edit .env to fill in API keys and other settings
+```
 
-# Start service (default port 8080)
+Start the backend in that same Python environment:
+
+```bash
+cd backend
 python main.py
 ```
+
+The default port is `8080`; `GET /health` checks service availability. Configuration is loaded from the repository-root `.env`. Optional LaTeX installation commands are in the [main README](../README_EN.md#enable-immersive-pdf-courseware-optional).
+
+## Content generation tools
+
+### HTML cards
+
+`GenerateHtmlCardTool` streams the writer Agent's events, then validates and normalizes the HTML using shared components and CSS. It preserves teaching content and formulas, validates local illustration paths, and archives referenced images. Invalid content gets one revision; incomplete or failed output is not registered as a document. Illustrations are optional and have at most one generation attempt per card.
+
+### EduViz
+
+```text
+Design → validate the design structure → generate code
+       → static checks → Chromium checks → correctness review
+       → register document and return viz_id
+```
+
+A structurally valid design proceeds directly to coding. There is no separate design score. Code gets up to three attempts; repair feedback targets concrete problems. A malformed review gets one format retry without regenerating the JavaScript.
+
+| Check | What it does | Effect |
+| --- | --- | --- |
+| Static | Node.js syntax, ESLint scope analysis, SDK/library rules | Errors block the candidate |
+| Browser | Executes the real SDK, samples controls, captures exceptions and checks rendering | Runtime errors, missing output and 900px overflow block the candidate |
+| Advisory browser checks | 600px reflow, long content, design/control differences, short probes without observed changes | Recorded as `warnings` |
+| Code review | A model inspects concrete functional and teaching errors | `blocking_issues` request repairs; `suggestions` allow publication |
+
+The frontend renders at approximately 900px and scales the iframe as a whole. It does not require the visualization to reflow at 600px. A `light/600px` warning alone therefore does not prevent generation.
+
+**Validation limits:** static rules partly use regular expressions; browser interactions sample SDK setters and compare output rather than testing every mouse/keyboard path. Animation, delayed updates and hidden elements can affect detection. Screenshots are retained for inspection, not automatically reviewed by a vision model. Passing checks does not guarantee correct teaching content or good visual design.
+
+### Streaming and result contracts
+
+Both tools use `async_stream_run`, yielding progress strings and child Agent events. Within tutoring, call them through `ToolRegistry` so tool-result hooks and the shared parent budget remain active. Synchronous `run()` is not supported. Browser checks run asynchronously and terminate their worker on cancellation or timeout.
+
+| Tool | Final successful value | Main artifact |
+| --- | --- | --- |
+| `generate_html_card` | JSON string `{"file_id":"…","script":""}` | `data/documents/cards/{id}/card.html` |
+| `generate_interactive_viz` | `viz_id` string, also the document ID | `data/documents/viz/{id}/viz.js` |
+
+An `Error:` string denotes failure. Progress strings and intermediate `AgentFinalEvent` values are not the tool's final artifact result. The visualization directory also contains `meta.json` (design and quality reports) and `preview.png` (the browser check screenshot).
+
+### Files to extend
+
+| File | Responsibility |
+| --- | --- |
+| [generate_html_card.py](agents/tools/generate_html_card.py) | Card writer and streaming orchestration |
+| [html_card_document.py](agents/tools/html_card_document.py) | HTML normalization, validation and asset archiving |
+| [generate_viz.py](agents/tools/generate_viz.py) | Design, code, review and streaming orchestration |
+| [viz_quality.py](agents/tools/viz_quality.py) | Design and review data contracts |
+| [validate_viz_code.py](agents/tools/validate_viz_code.py) | Static JavaScript validation |
+| [viz_runtime.py](agents/tools/viz_runtime.py) / [viz_runtime_worker.py](agents/tools/viz_runtime_worker.py) | Browser process lifecycle and checks |
+| [SDK](../frontend/src/components/EduViz/eduviz-sdk.js) / [CORE.md](agents/prompts/skills/eduviz_sdk/CORE.md) | Runtime APIs and model-facing documentation |
+
+## Validation
+
+From the repository root, with the backend Python environment active:
+
+```bash
+python -m pip install pytest
+python -m pytest backend/tests/test_html_card.py backend/tests/test_viz_quality.py backend/tests/test_viz_streaming.py -q
+RUN_VIZ_BROWSER_TESTS=1 python -m pytest backend/tests/test_viz_runtime.py -q
+```
+
+These use fixed fixtures and mocked model responses, not paid model calls or production database writes. Browser tests require Chromium. They check known regressions, not the success rate of a live model.
+
+## Troubleshooting
+
+| Symptom | Check or action |
+| --- | --- |
+| Chromium cannot start / executable missing | Run `python -m playwright install chromium` in the backend environment and under its runtime account; Linux may also need browser system dependencies |
+| ESLint or configuration missing | Install `frontend` dependencies with `--include=dev`; retain the SDK, `eslint_assets` configuration and `frontend/node_modules` in the backend deployment |
+| `light/600px` overflow | Inspect `warnings`; this is advisory. For a blocking 900px overflow, fix the offending layout |
+| Review rejects a candidate | Read `blocking_issues` and the triggering values; optional improvements belong in `suggestions` |
+| SDK library or math fails to load | Check access to the SDK's jsDelivr resources; browser dependency failures are separate from code errors |
+| Blank visualization or broken controls | Inspect the frontend error, browser diagnostics and, for saved artifacts, `meta.json` and `preview.png` |
+| Old behavior after an update | Restart the backend; rebuild/redeploy the frontend if its SDK or sandbox files changed |
 
 ## Environment Variables
 
@@ -130,9 +144,7 @@ python main.py
 | `IMG_API_KEY` | Image generation API | No | `sk-xxx` |
 | `IMG_BASE_URL` | Image generation endpoint | No | `https://api.openai.com/v1` |
 | `IMG_MODEL` | Image generation model | No | `gpt-image-1` |
-| `FREE_LLM_TOTAL` | Free LLM call quota | No | `100` |
-| `FREE_SEARCH_TOTAL` | Free search quota | No | `30` |
-| `FREE_IMAGE_TOTAL` | Free image generation quota | No | `15` |
+| `CREDITS_ENFORCEMENT_ENABLED` | Whether wallet balance enforcement is on | No | `true` |
 | `GITHUB_CLIENT_ID` | GitHub OAuth client ID | No | — |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth client secret | No | — |
 | `SMTP_HOST` | SMTP mail server | No | `smtp.qq.com` |
@@ -144,7 +156,7 @@ python main.py
 
 ## Database
 
-Uses SQLite (WAL mode). Database files are auto-created in the `backend/data/` directory.
+Uses SQLite (WAL mode). The default database is `<repository>/data/wesmartflow.db`, initialized at startup. Setting `ROOT_DIR` changes the database path to `ROOT_DIR/data/wesmartflow.db`; documents live in `data/documents/` and logs in `data/logs/`.
 
 ### Connection Management
 
@@ -159,12 +171,15 @@ Uses a **unified short-connection pattern**: all database operations acquire a s
 | `POST /api/auth/github` | GitHub OAuth login |
 | `POST /api/auth/wechat` | WeChat Mini Program login |
 | `GET/POST /api/sessions/...` | Learning session management |
-| `POST /api/sessions/{id}/stream` | SSE streaming conversation |
+| `POST /api/sessions/{session_id}/chat/stream` | SSE streaming conversation |
 | `POST /api/immersive/generate` | Immersive course generation |
 | `GET/POST /api/documents/...` | Document management |
 | `GET/POST /api/nodes/...` | Knowledge graph nodes |
 | `GET/POST /api/quiz/...` | Quiz generation & grading |
-| `GET /api/cards/...` | Knowledge cards (HTML / PDF) |
+| `POST /api/cards/generate-html` | HTML card generation with SSE progress and results |
+| `GET /api/documents/{doc_id}/raw` | Main card, visualization or document file |
+| `GET /api/documents/{doc_id}/asset/{asset_path}` | Companion assets such as images |
+| `POST /api/viz/generate` | Consumes the visualization tool stream and returns JSON `{ok, viz_id, error}` |
 | `GET /api/viz/...` | Interactive visualizations |
 | `GET /api/brief/...` | Daily brief |
 | `GET/PUT /api/settings/...` | System settings |
@@ -182,3 +197,25 @@ Uses a **unified short-connection pattern**: all database operations acquire a s
 - **Document Parsing**: pdfplumber / pdfminer
 - **Streaming**: SSE (Server-Sent Events)
 - **Authentication**: GitHub OAuth · Email Verification · WeChat Mini Program · JWT
+
+
+### Promotional credit wallet
+
+One million credits equals CNY 1 of API usage allowance. Every account receives CNY 5 once
+on registration. Starting the following calendar month (Asia/Shanghai), up to CNY 1 is added
+monthly, only until the balance reaches CNY 5. Balances carry over; missed months are settled
+transactionally on the next login, balance lookup or paid call, with the same cap.
+
+Verified GitHub Stars on Tencent/WeSmartFlow earn an additional CNY 5 once per application
+account and immutable GitHub ID. This bonus can exceed the monthly top-up cap. Unstarring
+and starring again does not earn another reward. Settings includes a verification button;
+GitHub OAuth tokens are used for verification and are not stored. OAuth callbacks now require
+state validation, including when converting query parameters to hash routes.
+
+Run `conda run -n agent python backend/migrate_credit_wallet.py` for an existing database.
+Startup also initializes wallets idempotently. Existing accounts receive CNY 5 once, without
+charging historical usage. Legacy monthly quota overrides and FREE_CREDITS_PER_PERIOD
+no longer apply. Usage reporting stays separate from the persistent balance. Concurrent
+in-flight calls may create a negative balance; future grants offset that balance first.
+
+Tests: `backend/tests/test_credit_wallet.py` and `backend/tests/test_usage_governance.py`.

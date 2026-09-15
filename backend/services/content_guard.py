@@ -436,7 +436,7 @@ class ContentGuard:
 
     def _get_moderation_llm(self):
         """获取用于内容审核的 LLM 实例（轻量模型，不消耗用户额度）"""
-        from agent_core.llm.openai_llm import OpenAILLM
+        from services.llm_factory import create_openai_llm, SYSTEM_USER_ID
 
         # 优先使用专门配置的审核模型，否则使用系统默认模型
         api_key = os.getenv("LLM_API_KEY", "")
@@ -446,12 +446,15 @@ class ContentGuard:
         if not api_key:
             return None
 
-        return OpenAILLM(
-            model_name=model,
+        return create_openai_llm(
+            SYSTEM_USER_ID,
+            model=model,
             api_key=api_key,
             base_url=base_url or None,
             # 不注入额度 hook，审核调用不消耗用户额度
-            before_call=None,
+            with_quota=False,
+            is_system=True,
+            scene="moderation",
         )
 
     async def _check_llm_input(self, text: str) -> GuardResult:

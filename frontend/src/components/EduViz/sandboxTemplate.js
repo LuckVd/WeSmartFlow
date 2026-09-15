@@ -64,24 +64,37 @@ export const SANDBOX_HTML =
       }
     });
 
-    // 全局错误捕获：静默处理，不在页面上显示红色错误块
+    // 同步错误、异步错误和 SDK 回调异常统一交给宿主显示。
+    var failed = false;
+    function reportError(reason) {
+      failed = true;
+      var message = reason && reason.message ? reason.message : String(reason);
+      window.parent.postMessage({ type: 'error', message: message }, '*');
+    }
+    var originalError = console.error.bind(console);
+    console.error = function() {
+      originalError.apply(console, arguments);
+      if (String(arguments[0]).indexOf('[EduViz]') === 0) {
+        reportError(Array.from(arguments).map(function(value) {
+          return value && value.message ? value.message : String(value);
+        }).join(' '));
+      }
+    };
     window.onerror = function(msg, url, line, col, err) {
-      console.warn('[EduViz]', msg, err);
-      return true; // 阻止默认错误显示
+      reportError(err || msg);
+      return true;
     };
     window.onunhandledrejection = function(event) {
-      console.warn('[EduViz] Unhandled rejection:', event.reason);
+      reportError(event.reason);
       event.preventDefault();
     };
 
-    // 用户代码在构建时内联，直接执行，支持 await EduViz.loadLib(...)
-    (async function() {
-      __USER_CODE__
-    })().catch(function(err) {
-      console.warn('[EduViz] 代码执行异常:', err.message, err.stack || '');
-      // 不再在页面上显示红色错误块，仅通知父页面（父页面也不会显示）
-      // window.parent.postMessage({ type: 'error', message: err.message }, '*');
-    });
+    var AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+    Promise.resolve().then(function() {
+      return new AsyncFunction(__USER_CODE_JSON__)();
+    }).then(function() {
+      if (!failed) window.parent.postMessage({ type: 'ready' }, '*');
+    }).catch(reportError);
 
     // 尺寸上报：内容渲染完成后通知父页面实际宽高
     (function() {

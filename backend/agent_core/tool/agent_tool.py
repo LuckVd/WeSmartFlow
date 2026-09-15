@@ -17,7 +17,7 @@
     )
 
     # 注册到父 Agent
-    orchestrator = PlanAndSolveAgent(
+    orchestrator = ReActAgent(
         llm=llm,
         tool_registry=ToolRegistry([researcher_tool, writer_tool]),
     )
@@ -33,6 +33,7 @@ from .base import BaseTool
 
 if TYPE_CHECKING:
     from ..agent.base import BaseAgent
+    from ..runtime.run_context import RunContext
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,9 @@ class AgentTool(BaseTool):
 
     核心行为：
     - 父 Agent 通过 Function Calling 传入 ``input`` 参数
-    - AgentTool 调用子 Agent 的 ``run()`` 方法
-    - 将子 Agent 的 ``AgentResult.output`` 作为工具结果返回
+    - AgentTool 调用子 Agent，并把子 Agent 的输出作为工具结果返回
+    - 子 Agent 运行在**派生上下文**（``ctx.child()``）中：预算共享、
+      取消信号传导、事件出口共用，但对话记忆隔离
 
     参数说明：
     - ``input``: 传递给子 Agent 的问题或指令（必填）
@@ -67,10 +69,11 @@ class AgentTool(BaseTool):
             name:        工具名称，供父 Agent 在 Function Calling 中识别。
             description: 工具描述，告知父 Agent 何时调用、输入什么。
             run_kwargs:  每次调用子 Agent 时透传的额外关键字参数
-                         （如 channel、media 等 context_builder 需要的参数）。
+                         （如 channel、media 等 prompt_builder 需要的参数）。
         """
         self._agent = agent
         self._run_kwargs = run_kwargs or {}
+        self._parent_ctx: Optional["RunContext"] = None
 
         super().__init__(
             name=name,
@@ -100,6 +103,24 @@ class AgentTool(BaseTool):
         """获取被包装的子 Agent 实例。"""
         return self._agent
 
+    def bind_context(self, ctx: Optional["RunContext"]) -> "AgentTool":
+        """绑定父级运行上下文，供子 Agent 派生使用。
+
+        由 ``ToolRegistry`` 在执行前调用。绑定后子 Agent 会自动继承预算、
+        取消信号与事件出口。
+
+        Returns:
+            自身，便于链式调用。
+        """
+        self._parent_ctx = ctx
+        return self
+
+    def _child_context(self) -> Optional["RunContext"]:
+        """派生子 Agent 的运行上下文。"""
+        if self._parent_ctx is None:
+            return None
+        return self._parent_ctx.child(scope=f"{self._parent_ctx.scope}/{self.name}")
+
     # ------------------------------------------------------------------
     # 同步执行
     # ------------------------------------------------------------------
@@ -123,7 +144,9 @@ class AgentTool(BaseTool):
         )
 
         try:
-            result = self._agent.run(user_input, **self._run_kwargs)
+            result = self._agent.run(
+                user_input, self._child_context(), **self._run_kwargs
+            )
         except Exception as e:  # pylint: disable=broad-except
             logger.exception("[AgentTool] 子 Agent '%s' 运行异常", self.name)
             return f"Error: 子 Agent '{self.name}' 执行失败: {e}"
@@ -160,7 +183,9 @@ class AgentTool(BaseTool):
         )
 
         try:
-            result = await self._agent.async_run(user_input, **self._run_kwargs)
+            result = await self._agent.async_run(
+                user_input, self._child_context(), **self._run_kwargs
+            )
         except Exception as e:  # pylint: disable=broad-except
             logger.exception("[AgentTool] 子 Agent '%s' 异步运行异常", self.name)
             return f"Error: 子 Agent '{self.name}' 执行失败: {e}"
@@ -201,7 +226,9 @@ class AgentTool(BaseTool):
         )
 
         try:
-            async for event in self._agent.async_stream(user_input, **self._run_kwargs):
+            async for event in self._agent.async_stream(
+                user_input, self._child_context(), **self._run_kwargs
+            ):
                 yield event
         except Exception as e:  # pylint: disable=broad-except
             logger.exception("[AgentTool] 子 Agent '%s' 流式运行异常", self.name)

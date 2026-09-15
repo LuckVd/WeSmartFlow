@@ -38,7 +38,7 @@ from routers.examples import router as examples_router
 from routers.backup import router as backup_router
 from routers.graph import router as graph_router
 
-from services.quota import QuotaExceededError
+from services.credit_quota import CreditsExceeded
 
 # --------------------------------------------------------------------------
 # 日志配置：控制台 + 按天轮转文件
@@ -145,14 +145,15 @@ app.include_router(graph_router)
 # --------------------------------------------------------------------------
 
 
-@app.exception_handler(QuotaExceededError)
-async def quota_exceeded_handler(request: Request, exc: QuotaExceededError):
+@app.exception_handler(CreditsExceeded)
+async def credits_exceeded_handler(request: Request, exc: CreditsExceeded):
     return JSONResponse(
         status_code=429,
         content={
             "detail": str(exc),
-            "category": exc.category,
-            "limit": exc.limit,
+            "code": "credits_exceeded",
+            "quota": exc.quota,
+            "used": exc.used,
         },
     )
 
