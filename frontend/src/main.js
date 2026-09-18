@@ -11,6 +11,7 @@ import AdminLogin from "./views/AdminLoginView.vue";
 import AdminConsole from "./views/AdminConsoleView.vue";
 const Dashboard = () => import("./views/DashboardView.vue");
 const Graph = () => import("./views/GraphView.vue");
+const Brain = () => import("./views/BrainView.vue");
 const Chat = () => import("./views/ChatView.vue");
 const Immersive = () => import("./views/ImmersiveView.vue");
 const Quiz = () => import("./views/QuizView.vue");
@@ -47,7 +48,8 @@ const routes = [
   },
   { path: "/", component: Landing, meta: { public: true, standalone: true } },
   { path: "/dashboard", component: Dashboard },
-  { path: "/graph", component: Graph },
+  { path: "/graph", component: Brain },
+  { path: "/graph-classic", component: Graph },
   // /knowledge 重定向到 /graph（列表视图），保持旧链接可用，保留 query 参数
   {
     path: "/knowledge",

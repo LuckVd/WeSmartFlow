@@ -18,6 +18,10 @@ export const settingsApi = {
   // 查询当期 credits 额度用量
   getQuota: () => api.get("/api/usage/credits/quota"),
 
+  // 兑换积分卡
+  redeemCreditCard: (code) =>
+    api.post("/api/usage/credits/cards/redeem", { code }),
+
   // 功能可用性（issue #62/#103：llm/search/image 是否已配置）
   getFeatures: () => api.get("/api/settings/features"),
 

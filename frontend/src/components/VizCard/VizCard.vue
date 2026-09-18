@@ -25,12 +25,22 @@
     </div>
 
     <!-- 代码就绪，交给 EduVizSandbox 渲染（不传 title/description，避免内部 header 占用缩放空间） -->
-    <EduVizSandbox
-      v-else-if="code"
-      :code="code"
-      @ready="emit('ready')"
-      @error="emit('error', $event)"
-    />
+    <template v-else-if="code">
+      <EduVizSandbox
+        :code="code"
+        @ready="emit('ready')"
+        @error="emit('error', $event)"
+      />
+      <button
+        v-if="nodeIds.length"
+        class="viz-learning-complete"
+        type="button"
+        :disabled="completed"
+        @click="completeLearning"
+      >
+        {{ completed ? "已记录本次探索" : "我完成了这次探索" }}
+      </button>
+    </template>
   </div>
 </template>
 
@@ -46,14 +56,23 @@ const props = defineProps({
   title: { type: String, default: "" },
   /** 描述（可选） */
   description: { type: String, default: "" },
+  /** 该互动关联的知识节点；完成时由父级写入低权重操作证据 */
+  nodeIds: { type: Array, default: () => [] },
 });
 
-const emit = defineEmits(["ready", "error"]);
+const emit = defineEmits(["ready", "error", "completed"]);
 
 const fetching = ref(true);
 const fetchError = ref("");
 const code = ref("");
 const metaTitle = ref("");
+const completed = ref(false);
+
+function completeLearning() {
+  if (completed.value) return;
+  completed.value = true;
+  emit("completed", { interaction: "viz_complete" });
+}
 
 async function fetchCode() {
   if (!props.vizId) return;
@@ -106,6 +125,26 @@ defineExpose({ reload: fetchCode });
   width: 100%;
   height: 100%;
   overflow: hidden;
+}
+
+.viz-learning-complete {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 12px;
+  padding: 7px 10px;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  color: #fff;
+  background: rgba(31, 41, 89, 0.88);
+  backdrop-filter: blur(8px);
+  font-size: 12px;
+  cursor: pointer;
+}
+.viz-learning-complete:disabled {
+  border-color: rgba(16, 185, 129, 0.36);
+  color: #a7f3d0;
+  cursor: default;
 }
 
 /* 加载 */

@@ -9,6 +9,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from models import NodeUpdate, NodeReviewResult, NodeSchema, NodeBrief
 from services import MemoryService, NodeService
+from services.learning_map_service import LearningMapService
 from dependencies import get_current_user
 from database import get_db
 
@@ -117,6 +118,43 @@ def get_node_evidence(node_id: str, user_id: str = Depends(get_current_user)):
         for log in study_logs:
             log["node_ids"] = _loads(log.get("node_ids"), [])
 
+        learning_state_row = conn.execute(
+            """
+            SELECT exposure_count, recall_score, application_score,
+                   explanation_score, transfer_score, mastery, confidence,
+                   evidence_count, source_types, misconceptions, next_action,
+                   last_evidence_at, due_at
+              FROM learner_concept_states
+             WHERE user_id=? AND legacy_node_id=?
+            """,
+            (user_id, node_id),
+        ).fetchone()
+        learning_state = dict(learning_state_row) if learning_state_row else None
+        if learning_state:
+            learning_state["source_types"] = _loads(
+                learning_state.get("source_types"), []
+            )
+            learning_state["misconceptions"] = _loads(
+                learning_state.get("misconceptions"), []
+            )
+
+        learning_evidence = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT id, source_type, source_id, activity_type, payload, score,
+                       assessment_method, verified_by, created_at
+                  FROM learning_evidence
+                 WHERE user_id=? AND legacy_node_id=?
+                 ORDER BY created_at DESC
+                 LIMIT 10
+                """,
+                (user_id, node_id),
+            ).fetchall()
+        ]
+        for item in learning_evidence:
+            item["payload"] = _loads(item.get("payload"), {})
+
     return {
         "node_id": node.id,
         "origins": origins,
@@ -124,6 +162,8 @@ def get_node_evidence(node_id: str, user_id: str = Depends(get_current_user)):
         "quizzes": quizzes,
         "study_logs": study_logs,
         "memory": node.memory.model_dump(mode="json"),
+        "learning_state": learning_state,
+        "learning_evidence": learning_evidence,
     }
 
 
@@ -153,6 +193,18 @@ def review_node(
     user_id: str = Depends(get_current_user),
 ):
     try:
-        return MemoryService().review_node_for_user(user_id, node_id, body.quality)
+        result = MemoryService().review_node_for_user(user_id, node_id, body.quality)
+        result["learning_map_evidence"] = LearningMapService().record_evidence(
+            user_id,
+            node_id=node_id,
+            source_type="quiz",
+            source_id=f"node-review:{node_id}",
+            activity_type="recall",
+            score=body.quality / 5,
+            payload={"quality": body.quality},
+            assessment_method="sm2_review",
+            verified_by="system",
+        )
+        return result
     except ValueError as e:
         raise HTTPException(404, str(e))

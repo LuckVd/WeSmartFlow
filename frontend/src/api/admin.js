@@ -58,6 +58,45 @@ export const adminApi = {
 
   me: () => adminRequest("GET", "/api/admin/me"),
 
+  createCreditCard: (data) =>
+    adminRequest("POST", "/api/admin/credit-cards", data),
+
+  creditCards: ({
+    limit = 100,
+    offset = 0,
+    mode = "",
+    status = "",
+    q = "",
+    min_amount = "",
+    max_amount = "",
+    sort_by = "created_at",
+    sort_order = "desc",
+  } = {}) => {
+    const qsp = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+      sort_by,
+      sort_order,
+    });
+    if (mode) qsp.set("mode", mode);
+    if (status) qsp.set("status", status);
+    if (q) qsp.set("q", q);
+    if (min_amount !== "" && min_amount !== null && min_amount !== undefined) {
+      qsp.set("min_amount", String(min_amount));
+    }
+    if (max_amount !== "" && max_amount !== null && max_amount !== undefined) {
+      qsp.set("max_amount", String(max_amount));
+    }
+    return adminRequest("GET", `/api/admin/credit-cards?${qsp.toString()}`);
+  },
+
+  updateCreditCardStatus: (cardId, disabled) =>
+    adminRequest(
+      "PATCH",
+      `/api/admin/credit-cards/${encodeURIComponent(cardId)}/status`,
+      { disabled },
+    ),
+
   stats: () => adminRequest("GET", "/api/admin/proposals/stats"),
 
   list: ({ status = "pending", op = "", limit = 100, offset = 0 } = {}) => {

@@ -13,8 +13,16 @@
 
 from __future__ import annotations
 
+import base64
+import html
+import io
+import json
 import logging
+import mimetypes
+import re
+import zipfile
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from fastapi import (
     APIRouter,
@@ -26,7 +34,7 @@ from fastapi import (
     BackgroundTasks,
     Body,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from models.document import DocumentSchema, DocumentBrief
 from services import DocumentService
@@ -49,6 +57,19 @@ from dependencies import get_current_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
+
+_GENERATED_PDF_FILE_TYPES = {"pdf_card", "chapter_pdf"}
+_BAD_PDF_GUIDE_MARKERS = (
+    "PDF二进制",
+    "PDF 二进制",
+    "FlateDecode",
+    "xref",
+    "文件头",
+    "交叉引用",
+    "电子取证",
+    "解压",
+    "字体及元数据",
+)
 
 
 # ── MIME / 响应辅助 ──────────────────────────────────────────────────
@@ -78,6 +99,198 @@ def _infer_mime(path: Path) -> str:
     return _MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
+_DOWNLOAD_SUFFIX_BY_FILE_TYPE = {
+    "html_card": ".html",
+    "viz": ".html",
+    "pdf_card": ".pdf",
+    "md_note": ".md",
+    "course_outline": ".json",
+    "course_plan": ".md",
+    "chapter_overview": ".md",
+    "chapter_pdf": ".pdf",
+    "chapter_exercises": ".md",
+    "chapter_audio": ".zip",
+    "chapter_notes": ".json",
+}
+
+
+def _safe_download_filename(title: str, fallback: str) -> str:
+    name = (title or fallback or "document").strip()
+    name = re.sub(r'[\\/:*?"<>|\r\n]+', "_", name)
+    return name.strip(" .") or "document"
+
+
+def _download_filename(
+    title: str, file_type: str, file_name: str, abs_path: Path
+) -> str:
+    suffix = (
+        _DOWNLOAD_SUFFIX_BY_FILE_TYPE.get(file_type)
+        or abs_path.suffix
+        or Path(file_name).suffix
+    )
+    if not suffix:
+        suffix = ".txt"
+    if not suffix.startswith("."):
+        suffix = f".{suffix}"
+    stem = _safe_download_filename(title, abs_path.stem or file_name)
+    if stem.lower().endswith(suffix.lower()):
+        return stem
+    return f"{stem}{suffix}"
+
+
+def _zip_audio_package(abs_path: Path, filename: str) -> StreamingResponse:
+    buffer = io.BytesIO()
+    audio_dir = abs_path.parent
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(abs_path, arcname=abs_path.name)
+        for child in sorted(audio_dir.iterdir()):
+            if child.is_file() and child != abs_path:
+                zf.write(child, arcname=child.name)
+    buffer.seek(0)
+    encoded = quote(filename)
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
+    }
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers=headers,
+    )
+
+
+def _download_headers(filename: str) -> dict[str, str]:
+    encoded = quote(filename)
+    return {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"}
+
+
+def _stream_text_download(
+    content: str, filename: str, media_type: str
+) -> StreamingResponse:
+    payload = content.encode("utf-8")
+    headers = _download_headers(filename)
+    headers["Content-Length"] = str(len(payload))
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type=media_type,
+        headers=headers,
+    )
+
+
+def _resolve_download_asset(base_dir: Path, raw_src: str) -> Path | None:
+    if not raw_src or raw_src.startswith("data:"):
+        return None
+    src = unquote(raw_src.split("?", 1)[0].split("#", 1)[0])
+    asset_marker = "/asset/"
+    if asset_marker in src:
+        src = src.split(asset_marker, 1)[1]
+    elif src.startswith(("http://", "https://", "//", "/")):
+        return None
+    target = (base_dir / src).resolve()
+    try:
+        if not target.is_relative_to(base_dir.resolve()):
+            return None
+    except AttributeError:
+        if not str(target).startswith(str(base_dir.resolve())):
+            return None
+    return target if target.is_file() else None
+
+
+def _inline_html_assets(abs_path: Path) -> str:
+    """把 HTML 中本地/文档 asset 图片内嵌为 data URL，下载后可离线打开。"""
+    html = abs_path.read_text("utf-8")
+    base_dir = abs_path.parent
+
+    def repl(match: re.Match) -> str:
+        attr = match.group("attr")
+        quote_char = match.group("quote")
+        src = match.group("src")
+        asset_path = _resolve_download_asset(base_dir, src)
+        if not asset_path:
+            return match.group(0)
+        mime = mimetypes.guess_type(str(asset_path))[0] or "application/octet-stream"
+        if not mime.startswith("image/"):
+            return match.group(0)
+        data = base64.b64encode(asset_path.read_bytes()).decode("ascii")
+        return f"{attr}={quote_char}data:{mime};base64,{data}{quote_char}"
+
+    return re.sub(
+        r'(?P<attr>src)=(?P<quote>["\'])(?P<src>[^"\']+)(?P=quote)',
+        repl,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+
+def _build_standalone_viz_html(abs_path: Path, title: str) -> str:
+    """把 viz.js 包装成用户双击即可打开的独立 HTML。"""
+    from config import EDUVIZ_SDK_PATH
+
+    code = abs_path.read_text("utf-8")
+    sdk = EDUVIZ_SDK_PATH.read_text("utf-8") if EDUVIZ_SDK_PATH.exists() else ""
+    safe_title = html.escape(title or "交互可视化")
+    sdk_script = "<" + "script>" + sdk + "</" + "script>"
+    user_code_json = json.dumps(code).replace("<", "\\u003c")
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{safe_title}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    html, body {{ min-height: 100%; background: #0e0f14; color: #eeeef0; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    body {{ padding: 16px; }}
+    .export-title {{ margin: 0 0 12px; font-size: 18px; font-weight: 700; }}
+    .export-hint {{ margin: 0 0 16px; color: #9394a5; font-size: 12px; }}
+    .ev-error {{ padding: 12px 16px; margin: 8px 0; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; color: #ef4444; font-size: 12px; font-family: monospace; white-space: pre-wrap; word-break: break-all; }}
+    canvas {{ border-radius: 8px; display: block; }}
+    svg {{ overflow: visible; }}
+  </style>
+</head>
+<body>
+  <h1 class="export-title">{safe_title}</h1>
+  <p class="export-hint">这是从 WeSmartFlow 导出的交互可视化文件。若使用了第三方图形库，请保持联网以加载依赖。</p>
+  {sdk_script}
+  <script>
+    document.documentElement.setAttribute('data-theme', 'dark');
+    if (window.EduViz && typeof window.EduViz.setTheme === 'function') {{
+      window.EduViz.setTheme('dark');
+    }}
+    var AsyncFunction = Object.getPrototypeOf(async function() {{}}).constructor;
+    function showError(reason) {{
+      var div = document.createElement('div');
+      div.className = 'ev-error';
+      div.textContent = reason && reason.message ? reason.message : String(reason);
+      document.body.prepend(div);
+    }}
+    window.onerror = function(msg, url, line, col, err) {{ showError(err || msg); return true; }};
+    window.onunhandledrejection = function(event) {{ showError(event.reason); event.preventDefault(); }};
+    Promise.resolve().then(function() {{ return new AsyncFunction({user_code_json})(); }}).catch(showError);
+  </script>
+</body>
+</html>"""
+
+
+def _download_prepared_document(rf, filename: str) -> StreamingResponse | FileResponse:
+    if rf.doc.file_type == "chapter_audio":
+        return _zip_audio_package(rf.abs_path, filename)
+    if rf.doc.file_type == "html_card":
+        return _stream_text_download(
+            _inline_html_assets(rf.abs_path),
+            filename,
+            "text/html; charset=utf-8",
+        )
+    if rf.doc.file_type == "viz":
+        return _stream_text_download(
+            _build_standalone_viz_html(rf.abs_path, rf.doc.title),
+            filename,
+            "text/html; charset=utf-8",
+        )
+    return _file_response(rf.abs_path, download_filename=filename)
+
+
 def _file_response(
     abs_path: Path,
     *,
@@ -105,6 +318,14 @@ def _file_response(
 @router.get("", response_model=list[DocumentBrief])
 def list_documents(user_id: str = Depends(get_current_user)):
     return DocumentService().list_documents(user_id)
+
+
+def _is_bad_generated_pdf_guide(guide: dict) -> bool:
+    text = "\n".join(
+        str(guide.get(key, ""))
+        for key in ("basics", "order", "difficulties", "estimated")
+    )
+    return any(marker in text for marker in _BAD_PDF_GUIDE_MARKERS)
 
 
 def _extract_guide_json(text: str) -> dict:
@@ -152,7 +373,12 @@ async def get_study_guide(doc_id: str, user_id: str = Depends(get_current_user))
         return {"generated": False}
     import json as _json
 
-    return {"generated": True, "guide": _json.loads(guide_path.read_text("utf-8"))}
+    guide = _json.loads(guide_path.read_text("utf-8"))
+    if doc.file_type in _GENERATED_PDF_FILE_TYPES and _is_bad_generated_pdf_guide(
+        guide
+    ):
+        return {"generated": False}
+    return {"generated": True, "guide": guide}
 
 
 @router.post("/{doc_id}/study-guide")
@@ -166,7 +392,13 @@ async def generate_study_guide(doc_id: str, user_id: str = Depends(get_current_u
     if guide_path.exists():
         import json as _json
 
-        return {"generated": True, "guide": _json.loads(guide_path.read_text("utf-8"))}
+        guide = _json.loads(guide_path.read_text("utf-8"))
+        if (
+            doc.file_type not in _GENERATED_PDF_FILE_TYPES
+            or not _is_bad_generated_pdf_guide(guide)
+        ):
+            return {"generated": True, "guide": guide}
+        guide_path.unlink(missing_ok=True)
 
     # 读文档内容前 6000 字（够 LLM 判断基础/顺序/难点）
     try:
@@ -281,10 +513,14 @@ async def get_document_raw(doc_id: str, request: Request):
         raise HTTPException(404, "文件不存在")
 
     download = request.query_params.get("download") in {"1", "true", "yes"}
+    download_filename = _download_filename(
+        rf.doc.title, rf.doc.file_type, rf.doc.file_name, rf.abs_path
+    )
+    if download:
+        return _download_prepared_document(rf, download_filename)
     return _file_response(
         rf.abs_path,
         query_token=query_token,
-        download_filename=rf.doc.file_name if download else None,
     )
 
 

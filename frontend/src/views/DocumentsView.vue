@@ -258,7 +258,7 @@
               stroke-width="2"
             >
               <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
+              <polyline points="7 10 12 15 17 10" />
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
           </button>
@@ -473,10 +473,18 @@
             </div>
           </div>
           <div v-else-if="sgLoading" class="study-guide sg-loading">
-            正在生成学习建议...
+            正在生成学习建议，请稍等...
+          </div>
+          <div v-else-if="sgFailed" class="study-guide sg-error">
+            <div>
+              学习建议暂时生成失败：{{ sgErrorMessage || "请稍后重试" }}
+            </div>
+            <button class="sg-retry" type="button" @click="generateStudyGuide">
+              重试生成
+            </button>
           </div>
           <div
-            v-else-if="sgLoadable && !sgFailed"
+            v-else-if="sgLoadable"
             class="study-guide sg-generate"
             @click="generateStudyGuide"
           >
@@ -626,6 +634,7 @@
           </button>
           <button
             class="btn btn-primary"
+            :disabled="downloadingDocId === selectedDoc.id"
             @click="downloadDocument(selectedDoc)"
           >
             <svg
@@ -640,7 +649,9 @@
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
-            下载原文档
+            {{
+              downloadingDocId === selectedDoc.id ? "正在整理..." : "下载文件"
+            }}
           </button>
         </div>
       </div>
@@ -890,32 +901,46 @@ const showAddNodeModal = ref(false);
 const studyGuide = ref(null);
 const sgLoading = ref(false);
 const sgFailed = ref(false);
+const sgErrorMessage = ref("");
 const sgLoadable = computed(() =>
   ["processed", "ready"].includes(selectedDoc.value?.status),
 );
+function getApiErrorMessage(error, fallback) {
+  return error?.response?.data?.detail || error?.message || fallback;
+}
+function unwrapApiResponse(response) {
+  return response?.data ?? response;
+}
 async function loadStudyGuide(docId) {
   studyGuide.value = null;
   sgFailed.value = false;
+  sgErrorMessage.value = "";
   if (!sgLoadable.value) return;
   try {
     const r = await api.get(`/api/documents/${docId}/study-guide`);
-    if (r.data?.generated) studyGuide.value = r.data.guide;
-  } catch {
+    const data = unwrapApiResponse(r);
+    if (data?.generated) studyGuide.value = data.guide;
+  } catch (e) {
     sgFailed.value = true;
+    sgErrorMessage.value = getApiErrorMessage(e, "读取已有学习建议失败");
   }
 }
 async function generateStudyGuide() {
   if (!selectedDoc.value) return;
   sgLoading.value = true;
   sgFailed.value = false;
+  sgErrorMessage.value = "";
   try {
     const r = await api.post(
       `/api/documents/${selectedDoc.value.id}/study-guide`,
     );
-    if (r.data?.generated) studyGuide.value = r.data.guide;
+    const data = unwrapApiResponse(r);
+    if (data?.generated) studyGuide.value = data.guide;
+    else throw new Error("服务端没有返回学习建议内容");
   } catch (e) {
     sgFailed.value = true;
-    console.warn("学习建议生成失败:", e?.response?.data?.detail || e.message);
+    sgErrorMessage.value = getApiErrorMessage(e, "学习建议生成失败");
+    console.warn("学习建议生成失败:", sgErrorMessage.value);
   } finally {
     sgLoading.value = false;
   }
@@ -929,6 +954,7 @@ const uploading = ref(false);
 const documentContent = ref(null);
 const rawText = ref("");
 const loadingContent = ref(false);
+const downloadingDocId = ref("");
 const selectedNodeId = ref("");
 const availableNodes = ref([]);
 const nodeSearchQuery = ref("");
@@ -985,13 +1011,66 @@ const FILE_TYPE_LABEL = {
   chapter_notes: "章节讲解稿",
 };
 
+const DOWNLOAD_EXT_MAP = {
+  html_card: "html",
+  viz: "html",
+  pdf_card: "pdf",
+  md_note: "md",
+  course_outline: "json",
+  course_plan: "md",
+  chapter_overview: "md",
+  chapter_pdf: "pdf",
+  chapter_exercises: "md",
+  chapter_audio: "zip",
+  chapter_notes: "json",
+};
+function cleanFilename(name, fallback = "document") {
+  return (
+    String(name || fallback)
+      .replace(/[\\/:*?"<>|\r\n]+/g, "_")
+      .trim()
+      .replace(/[. ]+$/g, "") || fallback
+  );
+}
+
+function getDownloadExt(doc) {
+  const mapped = DOWNLOAD_EXT_MAP[doc.file_type || doc.type];
+  const fileNameExt = doc.file_name?.split(".").pop();
+  const ext = mapped || fileNameExt || doc.file_type || doc.type || "txt";
+  return String(ext).replace(/^\.+/, "").toLowerCase();
+}
+
+function getDisplayName(raw) {
+  const title = raw.title || raw.file_name || raw.id || "document";
+  if (raw.source === "uploaded") return title;
+  const ext = getDownloadExt(raw);
+  const base = cleanFilename(title, raw.id || "document");
+  return base.toLowerCase().endsWith(`.${ext}`) ? base : `${base}.${ext}`;
+}
+
+function parseDownloadFilename(disposition) {
+  const encoded = disposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) return decodeURIComponent(encoded);
+  const plain = disposition?.match(/filename="?([^";]+)"?/i)?.[1];
+  return plain ? decodeURIComponent(plain) : "";
+}
+
+function getFallbackDownloadName(doc) {
+  const ext = getDownloadExt(doc);
+  const base = cleanFilename(
+    doc.title || doc.name || doc.file_name,
+    `document_${doc.id}`,
+  );
+  return base.toLowerCase().endsWith(`.${ext}`) ? base : `${base}.${ext}`;
+}
+
 // 后端字段 → 模板字段的适配
 function adaptDoc(raw) {
   const fileType = raw.file_type || "pdf";
   const renderType = RENDER_TYPE_MAP[fileType] || "text";
   return {
     ...raw,
-    name: raw.title + (raw.file_type ? `.${raw.file_type}` : ""),
+    name: getDisplayName(raw),
     type: fileType, // 保留原始后端 file_type
     renderType, // 渲染家族
     typeLabel: FILE_TYPE_LABEL[fileType] || fileType.toUpperCase(),
@@ -1146,19 +1225,31 @@ function pdfNextPage() {
   renderPdfPage(pdfState.value.currentPage);
 }
 
-// 下载文档（带鉴权）
+// 下载文档（带鉴权）。生成类文件会由后端整理成用户可直接打开的版本：
+// - HTML 知识卡片：图片内嵌进单文件 HTML
+// - 交互可视化：裸 JS 包装成独立 HTML
 async function downloadDocument(doc) {
+  if (!doc || downloadingDocId.value) return;
+  downloadingDocId.value = doc.id;
   try {
     const res = await api.getRaw(`/api/documents/${doc.id}/raw?download=1`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = doc.name || `document_${doc.id}`;
+    a.download =
+      parseDownloadFilename(res.headers.get("Content-Disposition") || "") ||
+      getFallbackDownloadName(doc);
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   } catch (e) {
     console.warn("下载文档失败:", e.message);
+    alert(`下载失败：${e.message || "请稍后重试"}`);
+  } finally {
+    downloadingDocId.value = "";
   }
 }
 
@@ -1751,6 +1842,28 @@ async function addNodeToDocument() {
 .sg-loading {
   color: var(--text-dim, #888);
   text-align: center;
+}
+.sg-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+.sg-retry {
+  flex-shrink: 0;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: transparent;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 12px;
+}
+.sg-retry:hover {
+  background: rgba(239, 68, 68, 0.1);
 }
 .doc-error-reason {
   background: rgba(239, 68, 68, 0.08);

@@ -431,6 +431,8 @@
                   v-else-if="card.cardType === 'viz'"
                   :viz-id="card.cardId"
                   :title="card.title"
+                  :node-ids="card.nodeIds || []"
+                  @completed="onVizCompleted(card, $event)"
                 />
                 <!-- 做题卡片 -->
                 <QuizCard
@@ -1356,7 +1358,7 @@ function updateCardSlotStage(slotId, content) {
 }
 
 /** onToolResult 时，将占位卡片关联到真实 cardId */
-function resolveCardSlot(slotId, cardId, title, cardType) {
+function resolveCardSlot(slotId, cardId, title, cardType, nodeIds = []) {
   const idx = pendingCardSlots.get(slotId);
   if (idx === undefined) return;
   const card = cards.value[idx];
@@ -1367,6 +1369,7 @@ function resolveCardSlot(slotId, cardId, title, cardType) {
     cardId,
     cardType: cardType || card.cardType,
     title: title || card.title,
+    nodeIds: Array.isArray(nodeIds) ? nodeIds : [],
     loading: false,
     stage: "done",
     stageLabel: "",
@@ -1974,7 +1977,13 @@ async function sendWithSSE(text) {
                 typeof args === "string"
                   ? JSON.parse(args || "{}")
                   : args || {};
-              resolveCardSlot(id, vizId, cardArgs.title || "", "viz");
+              resolveCardSlot(
+                id,
+                vizId,
+                cardArgs.title || "",
+                "viz",
+                cardArgs.node_ids || [],
+              );
             }
           } catch {
             /* 解析失败，占位卡片保持 loading 状态 */

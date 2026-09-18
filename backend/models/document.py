@@ -58,6 +58,7 @@ class DocumentBrief(BaseSchema):
     id: str
     title: str
     source: Literal["uploaded", "generated"]
+    file_name: str
     file_type: str
     file_size: int
     status: str

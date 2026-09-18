@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 # agents 专属 skills 目录
 _AGENTS_SKILLS_DIR = Path(__file__).parent.parent / "agents" / "prompts" / "skills"
+_PDF_FILE_TYPES = {"pdf", "pdf_card", "chapter_pdf"}
+_GENERATED_PDF_FILE_TYPES = {"pdf_card", "chapter_pdf"}
 
 
 class ExtractService:
@@ -192,9 +194,58 @@ class ExtractService:
         """读取文档文本内容"""
         # file_path 已经是绝对路径，直接使用
         full_path = Path(file_path)
-        if file_type == "pdf":
+        if file_type in _GENERATED_PDF_FILE_TYPES:
+            source_text = self._read_generated_pdf_sources(full_path, file_type)
+            if source_text:
+                return source_text
+            return self._read_pdf(full_path)
+        if file_type in _PDF_FILE_TYPES:
             return self._read_pdf(full_path)
         return full_path.read_text(encoding="utf-8", errors="ignore")
+
+    @staticmethod
+    def _read_generated_pdf_sources(path: Path, file_type: str) -> str:
+        """读取生成型 PDF 的同目录源文本，避免把 PDF 二进制当正文喂给模型。"""
+        base_dir = path.parent
+        stem = path.stem
+        preferred_names = []
+        if file_type == "chapter_pdf":
+            preferred_names = [
+                f"{stem}_overview.md",
+                f"{stem}_exercises.md",
+                "speaker_notes.json",
+                "research.json",
+                f"{stem}.tex",
+            ]
+        elif file_type == "pdf_card":
+            preferred_names = [
+                "script.txt",
+                "notes.json",
+                f"{stem}.tex",
+                "card.tex",
+            ]
+
+        parts: list[str] = []
+        for name in preferred_names:
+            candidate = base_dir / name
+            if not candidate.is_file():
+                continue
+            try:
+                raw = candidate.read_text(encoding="utf-8", errors="ignore").strip()
+            except OSError as exc:
+                logger.warning("读取生成 PDF 源文件失败 %s: %s", candidate, exc)
+                continue
+            if not raw:
+                continue
+            if candidate.suffix == ".json":
+                try:
+                    parsed = json.loads(raw)
+                    raw = json.dumps(parsed, ensure_ascii=False, indent=2)
+                except json.JSONDecodeError:
+                    pass
+            parts.append(f"## 来源：{candidate.name}\n{raw}")
+
+        return "\n\n".join(parts).strip()
 
     @staticmethod
     def _read_pdf(path: Path) -> str:
@@ -218,8 +269,8 @@ class ExtractService:
         """将文档内容分段，便于精确引用"""
         segments = []
 
-        if doc_type == "pdf":
-            # PDF按页面分段
+        if doc_type in _PDF_FILE_TYPES:
+            # PDF 与生成型 PDF 按文本块分段；生成型 PDF 的文本块通常来自同目录源文件。
             lines = text.split("\n\n")
             for i, page_content in enumerate(lines, 1):
                 if page_content.strip():

@@ -102,6 +102,29 @@ def complete_immersive_session(
             workspace={"user_feedback": feedback, "completed_by_user": True},
         )
 
+    # 完成整门课程表示已完成一次有组织的应用过程，但不等于掌握每个概念。
+    # 因此使用低权重 apply evidence，章节习题的 recall evidence 会单独写入。
+    learning_map_evidence = []
+    try:
+        from services.learning_map_service import LearningMapService
+
+        learning_map_evidence = LearningMapService().record_evidence_for_nodes(
+            user_id,
+            node_ids=node_ids,
+            source_type="course",
+            source_id=f"{session_id}:completion",
+            activity_type="apply",
+            score=0.55,
+            payload={
+                "topic": session.topic or session.title or "",
+                "duration_minutes": duration,
+            },
+            assessment_method="course_completion",
+            verified_by="system",
+        )
+    except Exception as e:
+        logger.warning("课程完成写入 learning-map evidence 失败: %s", e)
+
     # ── 画像汇总：课程完成时更新统一画像事实 ──────────────────
     try:
         _summarize_to_profile(session, user_id, feedback)
@@ -120,6 +143,7 @@ def complete_immersive_session(
         "message": f"学习完成！共学习 {duration} 分钟，涉及 {len(node_ids)} 个知识点。",
         "duration_minutes": duration,
         "node_count": len(node_ids),
+        "learning_map_evidence": learning_map_evidence,
     }
 
 

@@ -82,6 +82,34 @@
         {{ formatCredits(wallet.monthly_credits) }}，补至
         {{ formatCredits(wallet.monthly_cap) }}。
       </p>
+      <div class="credit-card-box">
+        <div class="credit-card-copy">
+          <strong>兑换积分卡</strong>
+          <span>输入管理员发放的兑换码，可增加积分或重置可用积分。</span>
+        </div>
+        <div class="credit-card-actions">
+          <input
+            v-model="creditCardCode"
+            class="form-input credit-card-input"
+            placeholder="输入积分卡兑换码"
+            @keyup.enter="redeemCreditCard"
+          />
+          <button
+            class="btn btn-primary btn-sm"
+            :disabled="redeemingCard || !creditCardCode.trim()"
+            @click="redeemCreditCard"
+          >
+            {{ redeemingCard ? "兑换中..." : "兑换" }}
+          </button>
+        </div>
+        <div
+          v-if="creditCardMessage"
+          class="status-hint"
+          :class="creditCardStatus"
+        >
+          {{ creditCardMessage }}
+        </div>
+      </div>
       <div class="wallet-reward">
         <div class="wallet-reward-copy">
           <a
@@ -521,6 +549,10 @@ const wallet = ref({ remaining: 0, used: 0, transactions: [] });
 const rewardLoading = ref(false);
 const { user } = useAuth();
 const rewardMessage = ref("");
+const creditCardCode = ref("");
+const redeemingCard = ref(false);
+const creditCardStatus = ref("idle");
+const creditCardMessage = ref("");
 const formatCredits = (credits) => Number(credits || 0).toLocaleString("zh-CN");
 const walletCapacity = computed(() =>
   Math.max(
@@ -546,6 +578,8 @@ const transactionLabel = (kind) =>
     signup: "注册/迁移赠送",
     monthly: "月度补充",
     github_star: "GitHub Star 奖励",
+    credit_card_add: "积分卡充值",
+    credit_card_reset: "积分卡重置",
     usage: "API 消费",
   })[kind] || kind;
 async function claimGithubReward() {
@@ -558,6 +592,29 @@ async function claimGithubReward() {
   } catch (error) {
     rewardMessage.value = error.message;
     rewardLoading.value = false;
+  }
+}
+
+async function redeemCreditCard() {
+  const code = creditCardCode.value.trim();
+  if (!code) return;
+  redeemingCard.value = true;
+  creditCardStatus.value = "idle";
+  creditCardMessage.value = "";
+  try {
+    const data = await settingsApi.redeemCreditCard(code);
+    const value =
+      data.mode === "reset" ? data.card_amount : Math.abs(data.amount || 0);
+    const verb = data.mode === "reset" ? "已重置为" : "已增加";
+    creditCardStatus.value = "success";
+    creditCardMessage.value = `${verb} ${formatCredits(value)} 积分，当前可用 ${formatCredits(data.remaining)} 积分。`;
+    creditCardCode.value = "";
+    await loadQuota();
+  } catch (error) {
+    creditCardStatus.value = "error";
+    creditCardMessage.value = error.message || "兑换失败";
+  } finally {
+    redeemingCard.value = false;
   }
 }
 
@@ -1152,6 +1209,37 @@ onMounted(() => {
 .wallet-claim-button:disabled {
   opacity: 0.55;
   cursor: wait;
+}
+.credit-card-box {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-hover);
+}
+.credit-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.credit-card-copy strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.credit-card-copy span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.credit-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.credit-card-input {
+  flex: 1;
+  min-width: 220px;
 }
 .wallet-claimed {
   font-size: 12px;

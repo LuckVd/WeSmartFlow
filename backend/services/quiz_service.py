@@ -444,6 +444,35 @@ class QuizService:
             )
             mastery_delta = memory_result["mastery_delta"]
 
+        learning_map_evidence = None
+        if graded:
+            try:
+                from services.learning_map_service import LearningMapService
+
+                activity_type = (
+                    "explain" if quiz.quiz_type == "open_ended" else "recall"
+                )
+                learning_map_evidence = LearningMapService().record_evidence(
+                    user_id,
+                    node_id=quiz.node_id,
+                    source_type="quiz",
+                    source_id=quiz_id,
+                    activity_type=activity_type,
+                    score=score,
+                    payload={
+                        "quiz_type": quiz.quiz_type,
+                        "is_correct": is_correct,
+                        "question": quiz.question[:500],
+                    },
+                    assessment_method="quiz",
+                    verified_by="system"
+                    if quiz.quiz_type in {"multiple_choice", "true_false"}
+                    else "rubric",
+                )
+            except Exception:  # pylint: disable=broad-except
+                # 学习地图是附加记录，不应因记录失败破坏用户已完成的作答。
+                logger.exception("quiz %s 写入 learning-map evidence 失败", quiz_id)
+
         return {
             "quiz_id": quiz_id,
             "is_correct": is_correct,
@@ -451,6 +480,7 @@ class QuizService:
             "correct_answer": quiz.correct_answer,
             "explanation": quiz.explanation,
             "mastery_delta": mastery_delta,
+            "learning_map_evidence": learning_map_evidence,
         }
 
     def _build_prompt(

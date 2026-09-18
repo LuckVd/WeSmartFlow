@@ -241,5 +241,8 @@ backend/court/.assets/
 # 本地一键启动脚本（个人便利脚本，不入库）
 start.sh
 
+# 本地运行时日志与临时文件
+.runtime/
+
 # 知识之境预渲染音频资产（不入 git，体验时本地缺失则按需实时合成，音色已在 cast/音色池定好）
 examples/live_science/assets/audio/

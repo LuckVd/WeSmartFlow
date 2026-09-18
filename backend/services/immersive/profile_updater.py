@@ -102,6 +102,32 @@ async def update_profile_from_quiz(
     except Exception:
         logger.exception("写入统一画像事实失败")
 
+    learning_map_evidence = []
+    try:
+        from repositories import SessionRepository
+        from services.learning_map_service import LearningMapService
+
+        session = SessionRepository().get_by_id(session_id)
+        if session and session.user_id == user_id:
+            learning_map_evidence = LearningMapService().record_evidence_for_nodes(
+                user_id,
+                node_ids=list(session.node_ids_covered or []),
+                source_type="course",
+                source_id=f"{session_id}:chapter:{chapter_id}:quiz",
+                activity_type="recall",
+                score=overall_accuracy,
+                payload={
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title,
+                    "question_count": total,
+                    "correct_count": correct,
+                },
+                assessment_method="chapter_quiz",
+                verified_by="system",
+            )
+    except Exception:
+        logger.exception("沉浸式章节习题写入 learning-map evidence 失败")
+
     logger.info(
         "习题画像更新完成: topic=%s, chapter=%s, accuracy=%.0f%%",
         safe_log(topic_key),
@@ -117,4 +143,5 @@ async def update_profile_from_quiz(
             for k, v in stats.items()
             if v["total"] > 0
         },
+        "learning_map_evidence": learning_map_evidence,
     }

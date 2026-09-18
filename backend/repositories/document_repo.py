@@ -65,6 +65,7 @@ class DocumentRepository(BaseRepository):
                 id=r["id"],
                 title=r["title"],
                 source=r["source"],
+                file_name=r["file_name"],
                 file_type=r["file_type"],
                 file_size=r["file_size"],
                 status=r["status"],

@@ -394,12 +394,18 @@ def init_db() -> None:
     """
     with _make_connection() as conn:
         conn.executescript(_CREATE_TABLES_SQL)
+        conn.executescript(_LEARNING_MAP_SCHEMA)
         from migrate_credits import ensure_detail_columns
 
         ensure_detail_columns(conn)
-        from services.credit_wallet import SCHEMA, initialize_existing
+        from services.credit_wallet import (
+            SCHEMA,
+            ensure_credit_card_columns,
+            initialize_existing,
+        )
 
         conn.executescript(SCHEMA)
+        ensure_credit_card_columns(conn)
 
         # 确保默认用户存在（外键约束需要）
         default_hash = _hash_password("123456")
@@ -520,3 +526,72 @@ def set_settings_batch(user_id: str, data: dict[str, str]) -> None:
                 (user_id, key, value, user_id, key),
             )
         conn.commit()
+
+
+# --------------------------------------------------------------------------
+# Learning Map：学生概念状态与可追溯学习证据
+#
+# 这些表属于主库，概念规范化层仍复用 kg.db。concept_key 当前既可指向
+# 已审核 KG concept id，也可在迁移阶段使用 legacy:<node_id> 兼容旧节点。
+# --------------------------------------------------------------------------
+_LEARNING_MAP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS learner_concept_states (
+    user_id                 TEXT NOT NULL,
+    concept_key             TEXT NOT NULL,
+    canonical_concept_id    TEXT,
+    legacy_node_id          TEXT,
+    discovered_at           TEXT NOT NULL,
+    exposure_count          INTEGER NOT NULL DEFAULT 0,
+    recall_score            REAL NOT NULL DEFAULT 0.0,
+    application_score       REAL NOT NULL DEFAULT 0.0,
+    explanation_score       REAL NOT NULL DEFAULT 0.0,
+    transfer_score          REAL NOT NULL DEFAULT 0.0,
+    mastery                 REAL NOT NULL DEFAULT 0.0,
+    confidence              REAL NOT NULL DEFAULT 0.0,
+    evidence_count          INTEGER NOT NULL DEFAULT 0,
+    source_types            TEXT NOT NULL DEFAULT '[]',
+    misconceptions          TEXT NOT NULL DEFAULT '[]',
+    next_action             TEXT NOT NULL DEFAULT '',
+    last_evidence_at        TEXT,
+    due_at                  TEXT,
+    updated_at              TEXT NOT NULL,
+    PRIMARY KEY (user_id, concept_key),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_lcs_user_last_evidence
+    ON learner_concept_states(user_id, last_evidence_at);
+CREATE INDEX IF NOT EXISTS idx_lcs_user_legacy_node
+    ON learner_concept_states(user_id, legacy_node_id);
+
+CREATE TABLE IF NOT EXISTS learning_evidence (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT NOT NULL,
+    concept_key         TEXT NOT NULL,
+    canonical_concept_id TEXT,
+    legacy_node_id      TEXT,
+    source_type         TEXT NOT NULL,
+    source_id           TEXT NOT NULL DEFAULT '',
+    activity_type       TEXT NOT NULL,
+    payload             TEXT NOT NULL DEFAULT '{}',
+    score               REAL,
+    assessment_method   TEXT NOT NULL DEFAULT 'rule',
+    verified_by         TEXT NOT NULL DEFAULT 'system',
+    created_at          TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_user_concept_created
+    ON learning_evidence(user_id, concept_key, created_at);
+
+CREATE TABLE IF NOT EXISTS legacy_node_concept_map (
+    node_id                 TEXT PRIMARY KEY,
+    canonical_concept_id    TEXT,
+    match_type              TEXT NOT NULL DEFAULT 'legacy',
+    score                   REAL NOT NULL DEFAULT 0.0,
+    status                  TEXT NOT NULL DEFAULT 'unmapped',
+    reviewed_at             TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_legacy_map_status
+    ON legacy_node_concept_map(status, canonical_concept_id);
+"""

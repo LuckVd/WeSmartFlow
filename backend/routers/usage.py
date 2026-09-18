@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from dependencies import get_current_user
 from services.usage_meter import (
@@ -22,6 +23,10 @@ from services.usage_meter import (
 )
 
 router = APIRouter(prefix="/api/usage", tags=["usage"])
+
+
+class CreditCardRedeemRequest(BaseModel):
+    code: str
 
 
 @router.get("/credits")
@@ -42,6 +47,23 @@ def credits_quota(user_id: str = Depends(get_current_user)):
     from services.credit_quota import quota_overview
 
     return quota_overview(user_id)
+
+
+@router.post("/credits/cards/redeem")
+def redeem_credit_card(
+    body: CreditCardRedeemRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """兑换积分卡：支持增加积分或把当前余额重置为卡片额度。"""
+    from services.credit_wallet import (
+        CreditCardError,
+        redeem_credit_card as redeem_card,
+    )
+
+    try:
+        return redeem_card(user_id, body.code)
+    except CreditCardError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/credits/events")

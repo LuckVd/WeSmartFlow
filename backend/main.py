@@ -37,6 +37,7 @@ from routers.court import router as court_router
 from routers.examples import router as examples_router
 from routers.backup import router as backup_router
 from routers.graph import router as graph_router
+from routers.learning_map import router as learning_map_router
 
 from services.credit_quota import CreditsExceeded
 
@@ -138,6 +139,7 @@ app.include_router(court_router)
 app.include_router(examples_router)
 app.include_router(backup_router)
 app.include_router(graph_router)
+app.include_router(learning_map_router)
 
 
 # --------------------------------------------------------------------------

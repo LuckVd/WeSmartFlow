@@ -79,6 +79,223 @@ def admin_me(_: str = Depends(require_admin)):
 
 
 # ============================================================
+# 积分卡
+# ============================================================
+
+
+class CreditCardCreateRequest(BaseModel):
+    mode: str = "add"
+    amount: int
+    max_redemptions: int = 1
+    expires_at: str | None = None
+    note: str = ""
+
+
+class CreditCardStatusRequest(BaseModel):
+    disabled: bool = True
+
+
+@router.post("/credit-cards")
+def create_credit_card(
+    body: CreditCardCreateRequest, admin_id: str = Depends(require_admin)
+):
+    """管理员生成积分卡。普通用户只能拿卡码去兑换，看不到该管理接口。"""
+    from services.credit_wallet import (
+        CreditCardError,
+        create_credit_card as create_card,
+    )
+
+    try:
+        return create_card(
+            mode=body.mode,
+            amount=body.amount,
+            max_redemptions=body.max_redemptions,
+            expires_at=body.expires_at,
+            note=body.note,
+            created_by=admin_id,
+        )
+    except CreditCardError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/credit-cards")
+def list_credit_cards(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    mode: Optional[str] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    q: Optional[str] = Query(None),
+    min_amount: Optional[int] = Query(None, ge=0),
+    max_amount: Optional[int] = Query(None, ge=0),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc"),
+    _: str = Depends(require_admin),
+):
+    """管理员查看积分卡生成记录和兑换明细，支持筛选与排序。"""
+    from database import get_db
+    from services.credit_wallet import ensure_credit_card_columns
+
+    where = []
+    params: list = []
+
+    if mode:
+        normalized_mode = mode.strip().lower()
+        if normalized_mode not in {"add", "reset"}:
+            raise HTTPException(400, detail="mode 必须是 add 或 reset")
+        where.append("mode = ?")
+        params.append(normalized_mode)
+
+    if status_filter:
+        normalized_status = status_filter.strip().lower()
+        if normalized_status == "active":
+            where.append("disabled = 0")
+        elif normalized_status == "disabled":
+            where.append("disabled = 1")
+        elif normalized_status == "redeemed":
+            where.append("redeemed_count > 0")
+        elif normalized_status == "unused":
+            where.append("redeemed_count = 0")
+        elif normalized_status == "exhausted":
+            where.append("max_redemptions > 0 AND redeemed_count >= max_redemptions")
+        else:
+            raise HTTPException(
+                400,
+                detail="status 必须是 active|disabled|redeemed|unused|exhausted",
+            )
+
+    if min_amount is not None:
+        where.append("amount >= ?")
+        params.append(int(min_amount))
+    if max_amount is not None:
+        where.append("amount <= ?")
+        params.append(int(max_amount))
+    if min_amount is not None and max_amount is not None and min_amount > max_amount:
+        raise HTTPException(400, detail="最小额度不能大于最大额度")
+
+    if q:
+        keyword = f"%{q.strip()}%"
+        where.append(
+            "(code_plain LIKE ? OR code_preview LIKE ? OR note LIKE ? OR created_by LIKE ?)"
+        )
+        params.extend([keyword, keyword, keyword, keyword])
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    sort_columns = {
+        "created_at": "created_at",
+        "amount": "amount",
+        "redeemed_count": "redeemed_count",
+        "max_redemptions": "max_redemptions",
+        "mode": "mode",
+        "status": "disabled",
+        "code": "code_plain",
+    }
+    order_column = sort_columns.get(sort_by, "created_at")
+    order_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+
+    with get_db() as conn:
+        ensure_credit_card_columns(conn)
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM credit_cards {where_sql}", tuple(params)
+        ).fetchone()[0]
+        cards = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT
+                    code_hash,
+                    code_plain,
+                    code_preview,
+                    mode,
+                    amount,
+                    max_redemptions,
+                    redeemed_count,
+                    expires_at,
+                    note,
+                    disabled,
+                    created_by,
+                    created_at
+                FROM credit_cards
+                {where_sql}
+                ORDER BY {order_column} {order_direction}, created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params + [limit, offset]),
+            ).fetchall()
+        ]
+
+        hashes = [card["code_hash"] for card in cards]
+        redemption_map: dict[str, list[dict]] = {h: [] for h in hashes}
+        if hashes:
+            placeholders = ",".join("?" for _ in hashes)
+            rows = conn.execute(
+                f"""
+                SELECT
+                    r.id,
+                    r.code_hash,
+                    r.user_id,
+                    r.amount,
+                    r.balance_after,
+                    r.created_at,
+                    u.name AS user_name,
+                    u.email AS user_email,
+                    u.github_username AS github_username
+                FROM credit_card_redemptions r
+                LEFT JOIN users u ON u.id = r.user_id
+                WHERE r.code_hash IN ({placeholders})
+                ORDER BY r.id DESC
+                """,
+                tuple(hashes),
+            ).fetchall()
+            for row in rows:
+                item = dict(row)
+                code_hash = item.pop("code_hash")
+                redemption_map.setdefault(code_hash, []).append(item)
+
+        for card in cards:
+            card["redemptions"] = redemption_map.get(card["code_hash"], [])
+            card["card_id"] = card["code_hash"]
+            card["code_hash_tail"] = card["code_hash"][-8:]
+            del card["code_hash"]
+
+    return {
+        "items": cards,
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+        "count": len(cards),
+    }
+
+
+@router.patch("/credit-cards/{card_id}/status")
+def update_credit_card_status(
+    card_id: str,
+    body: CreditCardStatusRequest,
+    _: str = Depends(require_admin),
+):
+    """管理员停用或恢复某张积分卡。停用后普通用户不能再兑换。"""
+    from database import get_db
+    from services.credit_wallet import ensure_credit_card_columns
+
+    normalized_id = card_id.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized_id):
+        raise HTTPException(400, detail="积分卡 ID 无效")
+
+    with get_db() as conn:
+        ensure_credit_card_columns(conn)
+        row = conn.execute(
+            "SELECT code_hash FROM credit_cards WHERE code_hash=?", (normalized_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, detail="积分卡不存在")
+        conn.execute(
+            "UPDATE credit_cards SET disabled=? WHERE code_hash=?",
+            (1 if body.disabled else 0, normalized_id),
+        )
+
+    return {"ok": True, "card_id": normalized_id, "disabled": body.disabled}
+
+
+# ============================================================
 # Proposal 列表 / 计数 / 详情
 # ============================================================
 
