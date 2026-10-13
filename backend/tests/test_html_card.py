@@ -142,6 +142,15 @@ class CardDocumentTests(unittest.TestCase):
         result = card._wrap_html(VALID_CARD, "</title><script>alert(1)</script>")
         self.assertIn("&lt;/title&gt;&lt;script&gt;", result)
 
+    def test_writer_prompt_requires_cross_discipline_source_chains(self):
+        prompt = card._HTML_CARD_WRITER_SYSTEM_PROMPT
+        self.assertIn("不要按“物理/数学”机械判断是否推导", prompt)
+        self.assertIn("非显然的理论型结论", prompt)
+        self.assertIn("结构基础 → 过程机制 → 结果现象 → 例外/边界", prompt)
+        self.assertIn("模型假设 → 行为逻辑 → 均衡/结论 → 现实限制", prompt)
+        self.assertIn("贝叶斯公式", prompt)
+        self.assertIn("动态规划状态转移", prompt)
+
     def test_image_tool_matches_prompt_and_owns_its_output_directory(self):
         delegate = MagicMock()
         delegate.parameters = {

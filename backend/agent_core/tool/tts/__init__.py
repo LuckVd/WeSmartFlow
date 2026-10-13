@@ -9,6 +9,7 @@ from .base import BaseTTS, TTSResult
 from .cosyvoice import CosyVoiceTTS
 from .fallback import FallbackTTS
 from .mac_say import MacSayTTS
+from .openai_compat import OpenAICompatTTS
 from .qwen import QwenTTS
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "CosyVoiceTTS",
     "FallbackTTS",
     "MacSayTTS",
+    "OpenAICompatTTS",
     "QwenTTS",
     "TTSResult",
 ]

@@ -167,6 +167,13 @@ def _extract_usage(raw: Any) -> Dict[str, Any]:
         if val is not None:
             usage["reasoning_tokens"] = val
 
+    # 网关会在 usage 里直接给出本次真实成本（美元）；保留下来，
+    # 计费时优先使用，缺失才按 token 单价估算。
+    cost_usd = getattr(raw, "cost_usd", None)
+    if isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool):
+        if cost_usd > 0:
+            usage["cost_usd"] = float(cost_usd)
+
     return usage
 
 

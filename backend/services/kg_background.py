@@ -31,6 +31,7 @@ _background_tasks: set[asyncio.Task] = set()
 def start_kg_background_loops() -> None:
     """启动所有 KG 后台周期任务（幂等）。"""
     start_kg_aggregator_loop()
+    start_kg_probe_warmup()
 
 
 async def stop_kg_background_loops() -> None:
@@ -56,6 +57,47 @@ def _spawn(name: str, coro) -> bool:
     task.add_done_callback(_background_tasks.discard)
     _started.add(name)
     return True
+
+
+# ============================================================
+# 关系语义 probe 预热
+# ============================================================
+
+
+def start_kg_probe_warmup() -> None:
+    """后台预热关系语义 probe 表（幂等，daemon 线程，不阻塞启动）。
+
+    probe 表要把几十条探针文本送去远程 embedding，冷启动要好几秒；若留给
+    第一个用户请求去建，前置检索会超时、该轮白白跳过 KG 注入。
+    只在 embedder 可用**且** KG 已有 approved concept 时才预热，
+    空库不发起任何网络调用。
+    """
+    if "probe_warmup" in _started:
+        return
+    _started.add("probe_warmup")
+
+    import threading
+
+    threading.Thread(target=_warmup_probes, name="kg-probe-warmup", daemon=True).start()
+
+
+def _warmup_probes() -> None:
+    try:
+        from kg.embedder import get_embedder
+        from kg.relation_semantics import get_probes
+        from kg.repositories import ConceptRepository
+
+        embedder = get_embedder()
+        if not embedder or getattr(embedder, "dim", 0) <= 0:
+            return
+        if not ConceptRepository().exists_any_approved():
+            return
+        probes = get_probes()
+        logger.info("KG 关系语义 probe 预热完成 enabled=%s", probes.enabled)
+    except Exception:  # pylint: disable=broad-except
+        logger.warning(
+            "KG 关系语义 probe 预热失败（首个检索请求会按需构建）", exc_info=True
+        )
 
 
 # ============================================================

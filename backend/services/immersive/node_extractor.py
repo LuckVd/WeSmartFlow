@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+from json_repair import repair_json
 
 from agent_core.llm.base import BaseLLM
 
@@ -15,37 +17,137 @@ from repositories import NodeRepository
 logger = logging.getLogger(__name__)
 
 
-def _parse_json_array(text: str):
-    """解析 LLM 返回的 JSON 数组，容错 LaTeX 反斜杠转义。
-
-    数学/物理课程的 description/key_points 常含 \\frac、\\lambda 等 LaTeX 命令，
-    裸 json.loads 会因非法转义直接抛 JSONDecodeError（导致整批抽取静默失败）。
-    这里与 generate_speaker_notes 采用相同的三层反斜杠保护，逐层兜底。
-    """
+def _json_candidates(text: str) -> list[str]:
+    """Collect plausible JSON snippets from an LLM response."""
     text = (text or "").strip()
-    try:
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
-    # 第一层：把 "\后跟≥2 个连续字母" 的序列翻倍，让 \frac/\nu/\lambda 保持字面
+    if not text:
+        return []
+    candidates: list[str] = []
+    for match in re.finditer(
+        r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE
+    ):
+        block = match.group(1).strip()
+        if block:
+            candidates.append(block)
+    candidates.append(text)
+    for opener, closer in (("[", "]"), ("{", "}")):
+        start = text.find(opener)
+        end = text.rfind(closer)
+        if start >= 0 and end > start:
+            candidates.append(text[start : end + 1])
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def _loads_json_lenient(text: str) -> Any:
+    """Parse JSON with json_repair and LaTeX backslash protection."""
+    attempts = [text]
     protected = re.sub(r"(?<!\\)\\([A-Za-z]{2,})", r"\\\\\1", text)
-    try:
-        data = json.loads(protected)
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
-    # 第二层：再兜底非法转义反斜杠通配翻倍
-    fixed = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", protected)
-    try:
-        data = json.loads(fixed)
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
+    attempts.append(protected)
+    attempts.append(re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", protected))
+    last_error: Exception | None = None
+    for candidate in attempts:
+        try:
+            return json.loads(candidate)
+        except Exception as exc:  # pylint: disable=broad-except
+            last_error = exc
+        try:
+            return repair_json(candidate, return_objects=True)
+        except Exception as exc:  # pylint: disable=broad-except
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise ValueError("empty JSON candidate")
+
+
+def _unwrap_node_array(data: Any) -> list | None:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("nodes", "concepts", "items", "knowledge_nodes"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
     return None
+
+
+def _parse_json_array(text: str):
+    """解析 LLM 返回的 JSON 数组，容错围栏、wrapper object 和 LaTeX 转义。"""
+    best: list | None = None
+    for candidate in _json_candidates(text):
+        try:
+            parsed = _loads_json_lenient(candidate)
+        except Exception:  # pylint: disable=broad-except
+            continue
+        array = _unwrap_node_array(parsed)
+        if isinstance(array, list):
+            if best is None or len(array) > len(best):
+                best = array
+    return best
+
+
+def _normalize_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _fallback_node_from_kp(kp: str, chapter_title: str, topic: str) -> dict:
+    title = _normalize_text(kp)[:60]
+    chapter_title = _normalize_text(chapter_title)
+    description = (
+        f"{title} 是课程「{topic}」中与「{chapter_title or '本章'}」相关的核心概念。"
+        "该节点由章节大纲知识点兜底生成，用于保证知识图谱不断裂。"
+    )
+    return {
+        "title": title,
+        "description": description,
+        "tags": [topic, chapter_title] if chapter_title else [topic],
+        "key_points": [title],
+        "fallback": True,
+    }
+
+
+def _normalize_node_payload(nd: Any, topic: str) -> dict | None:
+    if isinstance(nd, str):
+        title = _normalize_text(nd)
+        if not title:
+            return None
+        return {
+            "title": title[:60],
+            "description": f"{title} 是课程「{topic}」中的核心概念。",
+            "tags": [topic],
+            "key_points": [title],
+        }
+    if not isinstance(nd, dict):
+        return None
+    title = _normalize_text(
+        nd.get("title") or nd.get("name") or nd.get("concept") or nd.get("kp")
+    )
+    if not title:
+        return None
+    description = _normalize_text(
+        nd.get("description") or nd.get("summary") or nd.get("definition") or title
+    )
+    raw_tags = nd.get("tags") if isinstance(nd.get("tags"), list) else [topic]
+    tags = [_normalize_text(tag) for tag in raw_tags if _normalize_text(tag)] or [topic]
+    raw_kps = nd.get("key_points") or nd.get("points") or nd.get("evidence") or []
+    if isinstance(raw_kps, str):
+        key_points = [_normalize_text(raw_kps)]
+    elif isinstance(raw_kps, list):
+        key_points = [
+            _normalize_text(item) for item in raw_kps if _normalize_text(item)
+        ]
+    else:
+        key_points = []
+    return {
+        "title": title[:60],
+        "description": description,
+        "tags": tags,
+        "key_points": key_points or [title],
+        "fallback": bool(nd.get("fallback")),
+    }
 
 
 def _link_nodes(
@@ -160,10 +262,6 @@ def extract_and_persist_nodes(
     if not all_kps:
         return []
 
-    if llm is None:
-        logger.warning("知识图谱抽取已跳过：未提供可用的 LLM 实例（llm=None）")
-        return []
-
     chapter_count = len(chapters)
     max_nodes = min(20, max(5, chapter_count * 3))
 
@@ -173,7 +271,15 @@ def extract_and_persist_nodes(
     # 因此按知识点分批抽取，且 prompt 保持极简（实测复杂规则/长前缀会触发空返回）。
     batch_size = 3
     all_nodes_data: List[dict] = []
-    for bi in range(0, len(all_kps), batch_size):
+    if llm is None:
+        logger.warning("知识图谱抽取无 LLM 实例，使用 knowledge_points 兜底")
+        all_nodes_data.extend(
+            _fallback_node_from_kp(it["kp"], it.get("chapter", ""), topic)
+            for it in all_kps
+            if _normalize_text(it.get("kp"))
+        )
+    batch_indexes = range(0, len(all_kps), batch_size) if llm is not None else []
+    for bi in batch_indexes:
         batch = all_kps[bi : bi + batch_size]
         kp_text = "\n".join(f"- {it['kp']}" for it in batch)
         prompt = (
@@ -196,33 +302,55 @@ def extract_and_persist_nodes(
                     "知识图谱抽取第%d批 LLM 调用失败: %s", bi // batch_size, e
                 )
                 break
-            match = re.search(r"\[[\s\S]*\]", response.content or "")
-            if match:
-                parsed = _parse_json_array(match.group())
-                if isinstance(parsed, list):
-                    data = parsed
-                    break
+            parsed = _parse_json_array(response.content or "")
+            if isinstance(parsed, list) and parsed:
+                data = parsed
+                break
             logger.warning(
-                "知识图谱抽取第%d批第%d次空返回，%s",
+                "知识图谱抽取第%d批第%d次空返回或格式无效，input_kps=%d raw_len=%d，%s",
                 bi // batch_size,
                 attempt,
-                "重试" if attempt == 0 else "放弃该批",
+                len(batch),
+                len(response.content or ""),
+                "重试" if attempt == 0 else "使用大纲兜底",
             )
-        if isinstance(data, list):
+        if isinstance(data, list) and data:
             all_nodes_data.extend(data)
         else:
-            logger.warning("知识图谱抽取第%d批最终失败", bi // batch_size)
+            logger.warning(
+                "知识图谱抽取第%d批最终失败，使用 knowledge_points 兜底",
+                bi // batch_size,
+            )
+            all_nodes_data.extend(
+                _fallback_node_from_kp(it["kp"], it.get("chapter", ""), topic)
+                for it in batch
+                if _normalize_text(it.get("kp"))
+            )
 
     if not all_nodes_data:
-        logger.warning("知识图谱抽取：所有批次均失败，未抽到任何节点")
+        logger.warning("知识图谱抽取：所有批次均失败且无可用 knowledge_points")
+        return []
+
+    normalized_nodes: list[dict] = []
+    seen_titles: set[str] = set()
+    for nd in all_nodes_data:
+        normalized = _normalize_node_payload(nd, topic)
+        if not normalized:
+            continue
+        title = normalized["title"]
+        if title in seen_titles:
+            continue
+        seen_titles.add(title)
+        normalized_nodes.append(normalized)
+
+    if not normalized_nodes:
+        logger.warning("知识图谱抽取：节点字段归一后为空")
         return []
 
     created_nodes: List[Dict[str, str]] = []
     node_repo = NodeRepository()
-    for nd in all_nodes_data[:max_nodes]:
-        title = nd.get("title", "").strip()
-        if not title:
-            continue
+    for nd in normalized_nodes[:max_nodes]:
+        title = nd["title"]
 
         # 查重节点
         existing_id = node_repo.find_by_title(user_id, title)

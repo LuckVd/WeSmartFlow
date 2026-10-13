@@ -299,6 +299,11 @@ def _file_response(
 ) -> FileResponse:
     """统一的文件响应：自动推断 MIME，可选写 Cookie / Content-Disposition。"""
     headers: dict[str, str] = {}
+    # Generated PDFs may be replaced in place by an audited resume.  Never let
+    # the browser replay older bytes for the same document URL.
+    if abs_path.suffix.lower() == ".pdf":
+        headers["Cache-Control"] = "no-store, max-age=0"
+        headers["Pragma"] = "no-cache"
     if query_token:
         # iframe / web-view 首次以 ?token= 打开主资源后，子资源请求由 cookie 兜底
         headers["Set-Cookie"] = (
@@ -498,8 +503,7 @@ async def get_document_content(doc_id: str, user_id: str = Depends(get_current_u
 # ── 文件读取（核心两个接口） ──────────────────────────────────────────
 
 
-@router.api_route("/{doc_id}/raw", methods=["GET", "HEAD"])
-async def get_document_raw(doc_id: str, request: Request):
+async def _get_document_raw(doc_id: str, request: Request):
     """读取文档主资源。
 
     URL 参数：
@@ -524,8 +528,17 @@ async def get_document_raw(doc_id: str, request: Request):
     )
 
 
-@router.api_route("/{doc_id}/asset/{sub_path:path}", methods=["GET", "HEAD"])
-async def get_document_asset(doc_id: str, sub_path: str, request: Request):
+@router.get("/{doc_id}/raw", operation_id="get_document_raw")
+async def get_document_raw(doc_id: str, request: Request):
+    return await _get_document_raw(doc_id, request)
+
+
+@router.head("/{doc_id}/raw", include_in_schema=False)
+async def head_document_raw(doc_id: str, request: Request):
+    return await _get_document_raw(doc_id, request)
+
+
+async def _get_document_asset(doc_id: str, sub_path: str, request: Request):
     """读取文档主资源同目录下的伴生文件。
 
     例如 HTML 卡片 ``card.html`` 内嵌图片：
@@ -540,6 +553,16 @@ async def get_document_asset(doc_id: str, sub_path: str, request: Request):
     except (ResolverNotFound, AssetPathInvalid):
         raise HTTPException(404, "文件不存在")
     return _file_response(rf.abs_path, query_token=query_token)
+
+
+@router.get("/{doc_id}/asset/{sub_path:path}", operation_id="get_document_asset")
+async def get_document_asset(doc_id: str, sub_path: str, request: Request):
+    return await _get_document_asset(doc_id, sub_path, request)
+
+
+@router.head("/{doc_id}/asset/{sub_path:path}", include_in_schema=False)
+async def head_document_asset(doc_id: str, sub_path: str, request: Request):
+    return await _get_document_asset(doc_id, sub_path, request)
 
 
 # ── 删除 / 节点挂接 ──────────────────────────────────────────────────

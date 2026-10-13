@@ -221,8 +221,15 @@ conda run -n edu-agent pip install -r backend/requirements.txt
 | `KG_EMBEDDING_BASE_URL` | OpenAI 兼容 base url | — |
 | `KG_EMBEDDING_MODEL` | 模型名 | `text-embedding-v4` |
 | `KG_EMBEDDING_DIM` | 向量维度 | `1024` |
-| `KG_EMBEDDING_BATCH` | 单批最大条数 | `10` |
+| `KG_EMBEDDING_BATCH` | 单批最大条数（范围 1–100） | `10` |
+| `PROVIDER_OPENAI_COMPATIBLE_EMBEDDING_TIMEOUT_SECONDS` | 单次 embedding 请求超时秒数 | `30` |
 | `KG_ANCHOR_*` / `KG_REL_WEIGHT_FLOOR` / `KG_NEIGHBOR_FANOUT` | Graph RAG 调参 | 见 `config.py` |
+
+Embedding 使用平台的 `KG_EMBEDDING_API_KEY`，成本以 `category=embedding`、
+`scene=kg` 记入系统流水，不进入任何用户积分或个人 Key 的额度判断。调用经过
+Provider Gateway，因此会携带请求关联 ID、无凭据指标和超时策略。即使 embedding
+请求是读取式的，超时后也无法确认供应商是否已经计费，当前实现不会自动重试；
+由离线 reindex 任务显式重试比隐式重复扣费更安全。
 
 ---
 

@@ -15,7 +15,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+from typing import Any
 
+from integrations import IntegrationHttpClient, IntegrationPolicy
 from .base_source import BaseSource
 from ..models import SearchResult
 
@@ -37,8 +39,17 @@ class YouTubeSource(BaseSource):
     modalities = ["video"]
     languages = ["zh", "en"]
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, http_client: Any = None):
         self._api_key = api_key or os.getenv("YOUTUBE_API_KEY", "")
+        self._http = http_client or IntegrationHttpClient(
+            IntegrationPolicy(
+                name="youtube",
+                timeout_seconds=12.0,
+                max_retries=1,
+                retry_safe=True,
+                max_concurrency=4,
+            )
+        )
 
     def is_available(self) -> bool:
         try:
@@ -62,23 +73,18 @@ class YouTubeSource(BaseSource):
     ) -> list[SearchResult]:
         """使用 YouTube Data API v3 搜索（官方，精准）"""
         try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                search_resp = await client.get(
-                    _YOUTUBE_SEARCH_API,
-                    params={
-                        "key": self._api_key,
-                        "q": query,
-                        "part": "snippet",
-                        "type": "video",
-                        "maxResults": max_results,
-                        "relevanceLanguage": "zh" if _is_chinese(query) else "en",
-                        "videoEmbeddable": "true",
-                    },
-                )
-                search_resp.raise_for_status()
-                data = search_resp.json()
+            data = await self._http.get_json(
+                _YOUTUBE_SEARCH_API,
+                params={
+                    "key": self._api_key,
+                    "q": query,
+                    "part": "snippet",
+                    "type": "video",
+                    "maxResults": max_results,
+                    "relevanceLanguage": "zh" if _is_chinese(query) else "en",
+                    "videoEmbeddable": "true",
+                },
+            )
 
         except Exception as e:
             logger.error("[YouTube] API 搜索异常: %s", e)
@@ -128,24 +134,20 @@ class YouTubeSource(BaseSource):
         2. 失败则返回空（不 crash）
         """
         try:
-            import httpx
-
             # YouTube 搜索页面（不需要 key）
             # 通过解析初始数据 JSON 获取结果
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                resp = await client.get(
-                    _YOUTUBE_SEARCH_URL,
-                    params={"search_query": query},
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/120.0.0.0 Safari/537.36"
-                        ),
-                        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                    },
-                )
-                html = resp.text
+            html = await self._http.get_text(
+                _YOUTUBE_SEARCH_URL,
+                params={"search_query": query},
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                },
+            )
 
         except Exception as e:
             logger.error("[YouTube] 无 key 搜索异常: %s", e)

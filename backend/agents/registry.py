@@ -158,7 +158,7 @@ AGENTS: Dict[str, AgentSpec] = {
     "course.researcher": AgentSpec(
         prompt="immersive/researcher.md",
         tools=("tavily", "arxiv", "web_fetch", "write_file"),
-        budget=Budget(max_steps=8),
+        budget=Budget(max_steps=14),
         description="章节资料检索与整理，输出 research.json",
     ),
     "course.tex_writer": AgentSpec(

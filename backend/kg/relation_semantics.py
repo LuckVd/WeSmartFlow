@@ -305,6 +305,11 @@ def _entry_relation_vecs(
 
     ★ 关系无 probe 时退回关系名本身（``RELATION_PROBES.get(rel) or [rel]``），
       保留与固定 8 种关系的兼容，也防御未来自由命名关系。
+
+    ★ embedding 失败时**直接抛出**而不是返回 ``()``：``lru_cache`` 不缓存异常，
+      下次检索可以重试；若在此吞掉异常返回空元组，一次瞬时超时会让该入口概念
+      的关系打分在整个进程生命周期内静默失效。吞异常放在调用方
+      :func:`score_relations_from_entry`。
     """
     embedder = get_embedder()
     if not embedder or getattr(embedder, "dim", 0) <= 0:
@@ -320,15 +325,7 @@ def _entry_relation_vecs(
     if not flat:
         return ()
 
-    try:
-        vecs = embedder.embed_many(flat)
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning(
-            "relation_semantics: 入口条件 probe 嵌入失败 entry=%r err=%s",
-            entry_name,
-            exc,
-        )
-        return ()
+    vecs = embedder.embed_many(flat)
 
     bucket: dict[str, list[list[float]]] = {}
     for rel, v in zip(index, vecs):
@@ -373,7 +370,15 @@ def score_relations_from_entry(
     if not relations:
         return {}
 
-    pairs = _entry_relation_vecs(entry_name, relations)
+    try:
+        pairs = _entry_relation_vecs(entry_name, relations)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "relation_semantics: 入口条件 probe 嵌入失败 entry=%r err=%s（本次不打关系分，下次重试）",
+            entry_name,
+            exc,
+        )
+        return {}
     if not pairs:
         return {}
 

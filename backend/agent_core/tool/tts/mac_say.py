@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -61,20 +62,47 @@ class MacSayTTS(BaseTTS):
                 timeout=120,
                 capture_output=True,
             )
-            subprocess.run(
-                [
-                    "afconvert",
-                    "-f",
-                    "WAVE",
-                    "-d",
-                    "LEI16@24000",
-                    aiff_path,
-                    str(out_path),
-                ],
-                check=True,
-                timeout=30,
-                capture_output=True,
-            )
+            try:
+                subprocess.run(
+                    [
+                        "afconvert",
+                        "-f",
+                        "WAVE",
+                        "-d",
+                        "LEI16@24000",
+                        aiff_path,
+                        str(out_path),
+                    ],
+                    check=True,
+                    timeout=30,
+                    capture_output=True,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                # ``afconvert`` occasionally aborts after creating a tiny,
+                # truncated WAV.  ffmpeg produces the same PCM contract and
+                # lets a background course repair complete reliably.
+                if not shutil.which("ffmpeg"):
+                    raise exc
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-v",
+                        "error",
+                        "-i",
+                        aiff_path,
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "24000",
+                        "-c:a",
+                        "pcm_s16le",
+                        str(out_path),
+                    ],
+                    check=True,
+                    timeout=30,
+                    capture_output=True,
+                )
 
             duration = 0.0
             try:

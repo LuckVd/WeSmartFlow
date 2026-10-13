@@ -456,7 +456,7 @@
             <div class="about-desc">
               WeSmartFlow 是一个开源的本地 AI 教育助手。你学过的所有东西，都被
               AI
-              组织成一张属于你自己的知识图谱，完全离线，完全私有，越用越懂你。
+              组织成一个属于你自己的知识大脑，完全离线，完全私有，越用越懂你。
             </div>
             <div class="about-meta">
               <div class="am-item">

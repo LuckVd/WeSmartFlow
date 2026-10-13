@@ -154,6 +154,16 @@ RUN_VIZ_BROWSER_TESTS=1 python -m pytest backend/tests/test_viz_runtime.py -q
 | `WECHAT_MP_APPID` | 微信小程序 AppID | 否 | — |
 | `WECHAT_MP_SECRET` | 微信小程序密钥 | 否 | — |
 
+### 积分卡邮件发送
+
+在管理后台「积分卡 → 生成积分卡」中勾选「生成后发送到用户邮箱」，搜索并选择用户后点击「生成并发送邮件」。收件地址取自用户资料，没有邮箱的用户不可选择。邮件包含兑换码、积分额度和兑换说明；用户收到后仍需自行兑换。
+
+已有兑换码可通过列表操作栏的「赠送」选择用户并发送。赠送沿用原卡的额度及兑换人数上限，不新增卡片、不自动兑换或预留名额。已停用、过期、兑完的卡及已兑换过该卡的收件人不能赠送。列表展示最近一次发送，变更收件人前的发送记录会保存在数据库中；「重发邮件」会发给最近一次的收件邮箱。
+
+邮件发送复用上述 `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASSWORD` 配置，`SMTP_FROM_NAME` 可设置发件人名称。可选设置 `PUBLIC_BASE_URL` 为网站公开访问地址，以便邮件提供设置页兑换链接。更新后重启后端，启动时会自动创建发送记录表。
+
+后台可查看发送状态，失败时重发同一兑换码，不会生成新卡。「已提交邮件服务器」表示 SMTP 服务已接受邮件，不代表已进入收件箱。发送任务在应用进程内执行；服务重启等导致任务中断时，约 3 分钟后显示状态不明，可检查收件箱后手动重发。
+
 ## 数据库
 
 使用 SQLite（WAL 模式），默认数据库为仓库根目录的 `data/wesmartflow.db`，由启动初始化创建。设置 `ROOT_DIR` 后，数据库路径为 `ROOT_DIR/data/wesmartflow.db`；文档位于 `data/documents/`，日志位于 `data/logs/`。
@@ -238,7 +248,7 @@ TAVILY_USD_PER_CREDIT=0.008
 | 知识之境 | 原始 HTTP 的 LLM、图片、搜索、两条 TTS 路径逐次检查和记录，后台线程继承用户上下文 |
 | 历史示例 / court | JWT 用户归属；后台生成及嵌套线程继承上下文，LLM、图片、CosyVoice 均记录 |
 | BingeMate | 当前为静态素材，无付费 API；浏览器播放不扣 credits |
-| 审核、画像、知识维护与 embedding | 系统成本单独记录，不占用户额度 |
+| 审核、画像、知识维护与 embedding | 系统成本单独记录，不占用户额度；embedding 以独立类别入账并经 Provider Gateway 观测 |
 
 示例构建统一注入 `frontend/public/example-auth.js`，只向同源 `/api/` 发送登录凭证。
 示例 AI 功能需要先在主应用登录；匿名请求不再记到 `default` 或系统账户。

@@ -607,8 +607,19 @@ class ProfileMemoryService:
             response = await llm_caller.async_think(
                 messages=chat_messages, tools=tools, tool_choice=tool_choice
             )
-            if response.is_error and _is_tool_choice_unsupported(response.content):
-                logger.warning("forced tool_choice 不支持，降级 auto 重试")
+            if response.is_error:
+                # 部分 OpenAI 兼容上游不支持强制 tool_choice（返回 400 等错误，
+                # 且错误文案不一定是 "tool_choice ... unsupported"），因此不再
+                # 依赖文案匹配：forced 失败一律降级 auto 重试一次。
+                if _is_tool_choice_unsupported(response.content):
+                    logger.warning("forced tool_choice 不支持，降级 auto 重试")
+                else:
+                    logger.warning(
+                        "forced tool_choice 调用失败 (finish_reason=%s, "
+                        "content=%.200s)，降级 auto 重试",
+                        response.finish_reason,
+                        response.content,
+                    )
                 response = await llm_caller.async_think(
                     messages=chat_messages, tools=tools, tool_choice="auto"
                 )

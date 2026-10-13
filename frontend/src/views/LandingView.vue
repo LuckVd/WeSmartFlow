@@ -34,14 +34,14 @@ const modes = [
   },
   {
     id: "knowledge",
-    label: "知识图谱",
-    english: "YOUR KNOWLEDGE, CONNECTED",
-    title: "学过的每一步，都有迹可循。",
+    label: "知识大脑",
+    english: "YOUR KNOWLEDGE BRAIN",
+    title: "学过的每一步，都在大脑里发光。",
     description:
-      "让零散的知识彼此连接。记录概念关系与掌握变化，在一次次学习和复习中，形成属于你的知识网络。",
+      "让零散概念沉淀成会生长的个人知识大脑。它记录理解证据、掌握状态与下一步探索方向，陪你持续点亮知识粒子。",
     image: "/landing/knowledge.webp",
-    alt: "WeSmartFlow 个人知识图谱与概念掌握详情示例",
-    tags: ["概念连接", "掌握度追踪", "持续积累"],
+    alt: "WeSmartFlow 个人知识大脑与概念掌握详情示例",
+    tags: ["知识粒子", "理解证据", "持续点亮"],
   },
 ];
 const currentMode = computed(() => modes[activeMode.value]);
@@ -369,7 +369,7 @@ onBeforeUnmount(() => {
               一种好奇。<br /><span>不止一种学法。</span>
             </h2>
             <p>
-              问一个问题，深入一门课程，连接一片知识。<br />找到适合你的方式，让理解真正发生。
+              问一个问题，深入一门课程，点亮一片知识大脑。<br />找到适合你的方式，让理解真正发生。
             </p>
           </div>
         </div>
@@ -499,7 +499,7 @@ onBeforeUnmount(() => {
         </h2>
         <div class="manifesto-bottom">
           <p>
-            WeSmartFlow 把对话、课程、练习与知识图谱连接起来，<br
+            WeSmartFlow 把对话、课程、练习与知识大脑连接起来，<br
               class="desktop-break"
             />陪你把片刻的好奇，变成持续生长的理解。
           </p>

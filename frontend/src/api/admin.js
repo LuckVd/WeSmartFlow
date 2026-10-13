@@ -5,6 +5,8 @@
  * - 401 时不跳普通登录页，而是跳 /#/admin/login
  */
 
+import { createRequestId } from "./base.js";
+
 const BASE_URL = import.meta.env.VITE_API_BASE || "";
 const ADMIN_TOKEN_KEY = "wesmartflow-admin-token";
 
@@ -33,6 +35,7 @@ async function adminRequest(method, path, body = null) {
   const headers = { "Content-Type": "application/json" };
   const token = getAdminToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  headers["X-Request-ID"] = createRequestId();
 
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
@@ -52,11 +55,50 @@ async function adminRequest(method, path, body = null) {
   return res.json();
 }
 
+function queryString(params = {}) {
+  return new URLSearchParams(
+    Object.entries(params).filter(
+      ([, v]) => v !== "" && v !== null && v !== undefined,
+    ),
+  ).toString();
+}
+
 export const adminApi = {
+  users: (params) =>
+    adminRequest("GET", `/api/admin/users?${queryString(params)}`),
+  user: (id) =>
+    adminRequest("GET", `/api/admin/users/${encodeURIComponent(id)}`),
+  userUsage: (id, period) =>
+    adminRequest(
+      "GET",
+      `/api/admin/users/${encodeURIComponent(id)}/usage?${queryString({ period })}`,
+    ),
+  userRecords: (id, params) =>
+    adminRequest(
+      "GET",
+      `/api/admin/users/${encodeURIComponent(id)}/records?${queryString(params)}`,
+    ),
   login: (username, password) =>
     adminRequest("POST", "/api/admin/login", { username, password }),
 
   me: () => adminRequest("GET", "/api/admin/me"),
+
+  cardEmail: (id) =>
+    adminRequest(
+      "GET",
+      `/api/admin/credit-cards/${encodeURIComponent(id)}/email`,
+    ),
+  retryCardEmail: (id) =>
+    adminRequest(
+      "POST",
+      `/api/admin/credit-cards/${encodeURIComponent(id)}/email/retry`,
+    ),
+  giftCreditCard: (id, data) =>
+    adminRequest(
+      "POST",
+      `/api/admin/credit-cards/${encodeURIComponent(id)}/gift`,
+      data,
+    ),
 
   createCreditCard: (data) =>
     adminRequest("POST", "/api/admin/credit-cards", data),

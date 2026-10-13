@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List
 
+from json_repair import repair_json
+
 from agent_core.llm.base import BaseLLM
 
 logger = logging.getLogger(__name__)
@@ -18,6 +20,217 @@ def count_beamer_frames(tex_path: Path) -> int:
     if not tex_path.exists():
         return 0
     return tex_path.read_text(encoding="utf-8").count(r"\begin{frame}")
+
+
+def _strip_latex_inline(text: str) -> str:
+    """Best-effort cleanup for short frame titles used in fallback narration."""
+    text = re.sub(r"%.*", "", text or "")
+    text = re.sub(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"\\[a-zA-Z]+\*?", "", text)
+    text = re.sub(r"[{}$]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_frame_titles(tex_content: str, num_pages: int) -> list[str]:
+    """Extract simple Beamer frame titles for deterministic note fallback."""
+    titles: list[str] = []
+    for match in re.finditer(r"\\frametitle(?:\[[^\]]*\])?\{([^{}]*)\}", tex_content):
+        title = _strip_latex_inline(match.group(1))
+        if title:
+            titles.append(title)
+    while len(titles) < num_pages:
+        titles.append(f"第{len(titles) + 1}页")
+    return titles[:num_pages]
+
+
+def _speaker_note_fallback(frame_number: int, title: str) -> str:
+    title = title or f"第{frame_number}页"
+    return (
+        f"同学们，这一页我们先聚焦“{title}”。请先观察页面中的核心概念、"
+        "公式或例子，想一想它和前后内容的联系；接下来我们把关键思路"
+        "一步步串起来，抓住这一页最重要的理解入口。"
+    )
+
+
+def _json_candidates(raw: str) -> list[str]:
+    """Collect plausible JSON snippets from an LLM response."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    candidates: list[str] = []
+    for match in re.finditer(
+        r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE
+    ):
+        block = match.group(1).strip()
+        if block:
+            candidates.append(block)
+    candidates.append(text)
+    for opener, closer in (("[", "]"), ("{", "}")):
+        start = text.find(opener)
+        end = text.rfind(closer)
+        if start >= 0 and end > start:
+            candidates.append(text[start : end + 1])
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def _loads_json_lenient(candidate: str) -> Any:
+    """Parse JSON with json_repair and LaTeX backslash protection."""
+    attempts = [candidate]
+    protected = re.sub(r"(?<!\\)\\([A-Za-z]{2,})", r"\\\\\1", candidate)
+    attempts.append(protected)
+    attempts.append(re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", protected))
+    last_error: Exception | None = None
+    for text in attempts:
+        try:
+            return json.loads(text)
+        except Exception as exc:  # pylint: disable=broad-except
+            last_error = exc
+        try:
+            return repair_json(text, return_objects=True)
+        except Exception as exc:  # pylint: disable=broad-except
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise ValueError("empty JSON candidate")
+
+
+def _coerce_frame_number(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if match:
+            return int(match.group())
+    return None
+
+
+def _normalize_speaker_notes_payload(data: Any, num_pages: int) -> dict[int, str]:
+    """Normalize common speaker-note shapes into {frame_number: text}."""
+    if isinstance(data, dict):
+        for key in (
+            "notes",
+            "speaker_notes",
+            "narrations",
+            "scripts",
+            "items",
+            "frames",
+        ):
+            value = data.get(key)
+            if isinstance(value, list):
+                return _normalize_speaker_notes_payload(value, num_pages)
+        numeric_items = []
+        for key, value in data.items():
+            frame = _coerce_frame_number(key)
+            if frame is not None:
+                numeric_items.append({"frame": frame, "text": value})
+        if numeric_items:
+            return _normalize_speaker_notes_payload(numeric_items, num_pages)
+        return {}
+
+    if not isinstance(data, list):
+        return {}
+
+    normalized: dict[int, str] = {}
+    next_frame = 1
+    for item in data:
+        frame = None
+        text: Any = None
+        if isinstance(item, str):
+            frame = next_frame
+            text = item
+        elif isinstance(item, dict):
+            for frame_key in (
+                "frame",
+                "frame_number",
+                "page",
+                "page_number",
+                "slide",
+                "index",
+            ):
+                if frame_key in item:
+                    frame = _coerce_frame_number(item.get(frame_key))
+                    break
+            for text_key in (
+                "text",
+                "script",
+                "note",
+                "narration",
+                "content",
+                "speaker_note",
+            ):
+                if item.get(text_key) is not None:
+                    text = item.get(text_key)
+                    break
+            if frame is None:
+                frame = next_frame
+        if frame is None or frame < 1 or frame > num_pages:
+            next_frame += 1
+            continue
+        note = str(text or "").strip()
+        if note:
+            normalized[frame] = note
+        next_frame = max(next_frame + 1, frame + 1)
+    return normalized
+
+
+def _notes_map_to_list(
+    notes_by_frame: dict[int, str], num_pages: int, tex_content: str = ""
+) -> list[str]:
+    titles = _extract_frame_titles(tex_content, num_pages)
+    return [
+        notes_by_frame.get(frame) or _speaker_note_fallback(frame, titles[frame - 1])
+        for frame in range(1, num_pages + 1)
+    ]
+
+
+def parse_speaker_notes_response(
+    raw: str, num_pages: int, tex_content: str = "", *, fill_missing: bool = True
+) -> list[str]:
+    """Parse speaker notes from imperfect LLM output.
+
+    Supports raw JSON arrays, fenced JSON, wrapper objects such as
+    {"notes": [...]}, object arrays with page/frame fields, and numeric-keyed
+    objects.  Missing frames can be filled with deterministic narration so a
+    single malformed item does not make the whole chapter lose audio.
+    """
+    if num_pages <= 0:
+        return []
+    best: dict[int, str] = {}
+    last_error: Exception | None = None
+    for candidate in _json_candidates(raw):
+        try:
+            parsed = _loads_json_lenient(candidate)
+            notes_by_frame = _normalize_speaker_notes_payload(parsed, num_pages)
+        except Exception as exc:  # pylint: disable=broad-except
+            last_error = exc
+            continue
+        if len(notes_by_frame) > len(best):
+            best = notes_by_frame
+        if len(best) >= num_pages:
+            break
+    if not best:
+        if last_error:
+            logger.warning("讲解稿解析失败: %s", last_error)
+        return _notes_map_to_list({}, num_pages, tex_content) if fill_missing else []
+    if len(best) < num_pages:
+        missing = [frame for frame in range(1, num_pages + 1) if frame not in best]
+        logger.warning(
+            "讲解稿页码不完整：parsed=%d expected=%d missing=%s",
+            len(best),
+            num_pages,
+            missing[:10],
+        )
+    return (
+        _notes_map_to_list(best, num_pages, tex_content)
+        if fill_missing
+        else [best[frame] for frame in range(1, num_pages + 1) if frame in best]
+    )
 
 
 def generate_speaker_notes(llm: BaseLLM, tex_path: Path, num_pages: int) -> List[str]:
@@ -42,47 +255,83 @@ def generate_speaker_notes(llm: BaseLLM, tex_path: Path, num_pages: int) -> List
         f"## 讲义源码\n\n"
         f"```tex\n{tex_content[:8000]}\n```"
     )
-    response = llm.think(
-        [
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一位深受学生喜爱的大学老师，擅长用通俗易懂的语言讲解复杂知识。"
+                "你的讲解风格是：先抛出问题引发思考，再给出清晰解释，最后用一句话总结要点。"
+                "语气亲切自然，像面对面上课一样。输出必须是可解析 JSON。"
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    best_notes: list[str] = []
+    best_raw = ""
+    for attempt in range(2):
+        try:
+            response = llm.think(
+                messages,
+                config={
+                    "temperature": 0.5 if attempt == 0 else 0.2,
+                    "max_tokens": 5000,
+                },
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("讲解稿生成 LLM 调用失败 attempt=%d: %s", attempt + 1, exc)
+            break
+        raw = response.content or ""
+        parsed = parse_speaker_notes_response(
+            raw, num_pages, tex_content, fill_missing=False
+        )
+        if len(parsed) > len(best_notes):
+            best_notes = parsed
+            best_raw = raw
+        if len(parsed) >= num_pages:
+            return parsed[:num_pages]
+        logger.warning(
+            "讲解稿结构化输出不完整 attempt=%d parsed=%d expected=%d raw_len=%d",
+            attempt + 1,
+            len(parsed),
+            num_pages,
+            len(raw),
+        )
+        messages = [
+            messages[0],
             {
-                "role": "system",
+                "role": "user",
                 "content": (
-                    "你是一位深受学生喜爱的大学老师，擅长用通俗易懂的语言讲解复杂知识。"
-                    "你的讲解风格是：先抛出问题引发思考，再给出清晰解释，最后用一句话总结要点。"
-                    "语气亲切自然，像面对面上课一样。"
+                    f"上一次讲解稿输出无法覆盖全部 {num_pages} 页。"
+                    "请重新输出严格 JSON，格式必须是："
+                    '[{"frame":1,"text":"第一页讲解"}, ...]。'
+                    f"frame 必须从 1 到 {num_pages} 连续覆盖，不要 Markdown 围栏。\n\n"
+                    f"讲义源码：\n```tex\n{tex_content[:8000]}\n```"
                 ),
             },
-            {"role": "user", "content": prompt},
-        ],
-        config={"temperature": 0.6, "max_tokens": 5000},
-    )
-    try:
-        match = re.search(r"\[[\s\S]*\]", response.content)
-        if match:
-            text = match.group()
-            try:
-                notes = json.loads(text)
-            except json.JSONDecodeError:
-                # LLM 经常把 LaTeX 命令直接塞进字符串（\frac \nu \theta 等），
-                # 这些反斜杠在 JSON 里要么非法、要么被当作合法转义吞掉。
-                # 这里把"\后跟≥2 个连续字母"的序列翻倍，让 \frac/\nu/\lambda
-                # 在解析后仍是字面 \frac/\nu/\lambda，不会被误读为 \f/\n + 字母。
-                protected = re.sub(r"(?<!\\)\\([A-Za-z]{2,})", r"\\\\\1", text)
-                try:
-                    notes = json.loads(protected)
-                except json.JSONDecodeError:
-                    # 兜底：再叠加非法转义反斜杠通配翻倍
-                    fixed = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", protected)
-                    notes = json.loads(fixed)
-            if isinstance(notes, list):
-                return [str(n) for n in notes]
-    except Exception as e:  # pylint: disable=broad-except
-        logger.warning("讲解稿解析失败: %s", e)
-    return []
+        ]
+    if best_notes:
+        logger.warning(
+            "讲解稿最终使用部分解析结果并本地补齐：parsed=%d expected=%d",
+            len(best_notes),
+            num_pages,
+        )
+        return parse_speaker_notes_response(
+            best_raw,
+            num_pages,
+            tex_content,
+            fill_missing=True,
+        )
+    logger.warning("讲解稿最终未获得可解析输出，使用 frame 标题本地兜底")
+    return _notes_map_to_list({}, num_pages, tex_content)
 
 
 def run_tts_for_chapter(
-    chapter_dir: Path, speaker_notes: List[str], user_id: str = ""
+    chapter_dir: Path,
+    speaker_notes: List[str],
+    user_id: str = "",
+    *,
+    frame_numbers: List[int] | None = None,
+    max_concurrency: int = 3,
 ) -> List[Dict[str, Any]]:
     """对单个章节的讲解稿批量合成语音。
 
@@ -99,9 +348,17 @@ def run_tts_for_chapter(
         return []
     audio_dir = chapter_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
+    numbers = frame_numbers or list(range(1, len(speaker_notes) + 1))
+    if len(numbers) != len(speaker_notes) or any(number < 1 for number in numbers):
+        raise ValueError("frame_numbers 必须与 speaker_notes 一一对应且从 1 开始")
     items = [
-        {"text": note, "filename": f"frame_{i + 1:03d}.wav"}
-        for i, note in enumerate(speaker_notes)
+        {"text": note, "filename": f"frame_{number:03d}.wav"}
+        for note, number in zip(speaker_notes, numbers)
     ]
-    result = tts.synthesize_batch(items=items, output_dir=str(audio_dir))
+    # Page narration requests are independent.  The default keeps the historical
+    # single-chapter behavior, while callers that parallelize chapters can lower
+    # this value to cap total provider concurrency.
+    result = tts.synthesize_batch(
+        items=items, output_dir=str(audio_dir), max_concurrency=max(1, max_concurrency)
+    )
     return result.get("results", [])

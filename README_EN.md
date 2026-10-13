@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](./LICENSE)
 
 WeSmartFlow is an open-source, agent-native adaptive learning framework.<br/>
-It understands learning goals, plans the next steps, supports practice, and records progress in a long-term knowledge graph.
+It understands learning goals, plans the next steps, supports practice, and records progress in a personal Knowledge Brain.
 
 [Try it online](http://wesmartflow.cn) · [Explore](#3-explore-a-world-designed-for-learning) · [Quick start](#-quick-start) · [Publish a course](#publish-your-course) · [中文](./README.md)
 
@@ -26,7 +26,7 @@ It understands learning goals, plans the next steps, supports practice, and reco
 
 ### 2026.08.31 · Free access program
 
-Sign up with **GitHub or email** to receive **5 million free credits** for tutoring, immersive courses, the knowledge graph, and Explore. Star the [WeSmartFlow GitHub repository](https://github.com/Tencent/WeSmartFlow) and verify your Star through your linked GitHub account to claim **another 5 million credits**, for a total of **10 million credits**. Each user account and GitHub account can claim the Star reward only once.
+Sign up with **GitHub or email** to receive **5 million free credits** for tutoring, immersive courses, the Knowledge Brain, and Explore. Star the [WeSmartFlow GitHub repository](https://github.com/Tencent/WeSmartFlow) and verify your Star through your linked GitHub account to claim **another 5 million credits**, for a total of **10 million credits**. Each user account and GitHub account can claim the Star reward only once.
 
 Starting the following month, receive up to **1 million credits per month**, topping up your balance to **5 million credits**. No monthly top-up is added while your balance is at or above 5 million. How long your credits last depends on the selected model, learning frequency, and response length.
 
@@ -48,7 +48,7 @@ WeSmartFlow supports that process in five ways:
 
 - **Understand the goal:** keep track of what the learner wants to achieve and where they are now
 - **Support practice:** use explanations, follow-up questions, cards, visualizations, and quizzes
-- **Remember progress:** save concepts, connections, and mastery changes in a personal knowledge graph
+- **Remember progress:** save concepts, connections, and mastery changes in a personal Knowledge Brain
 - **Adapt the path:** decide when to go deeper, change the explanation, or schedule a review
 - **Create context:** place knowledge inside stories, experiments, and meaningful tasks
 
@@ -56,7 +56,7 @@ WeSmartFlow supports that process in five ways:
 
 ### 1. Open tutoring: start with a question
 
-Begin with any question. The Agent can create a knowledge card, an interactive demonstration, or a short quiz when useful, then record the new understanding in the knowledge graph.
+Begin with any question. The Agent can create a knowledge card, an interactive demonstration, or a short quiz when useful, then record the new understanding in the Knowledge Brain.
 
 <p align="center">
   <img src="assets/learn.png" width="28%" alt="Choose a learning mode" />
@@ -95,12 +95,12 @@ These six experiences are a starting point. Teachers, developers, and course cre
 
 **Magic English Town** is designed for learners aged 8–16. Learners can use voice or keyboard to speak with characters while looking for a missing puppy or preparing a moonlight festival. The Agent interprets learner input and writes character responses, while a local state machine manages locations, tasks, rewards, and completion rules.
 
-### 4. Knowledge graph: see your understanding take shape
+### 4. Knowledge Brain: see your understanding take shape
 
-Every learning session leaves a useful trace. The knowledge graph records relationships between concepts, current mastery, and the next review date, giving learners a clear view of their progress.
+Every learning session leaves a useful trace. The Knowledge Brain turns what you learn into growing knowledge particles and records relationships between concepts, current mastery, and the next review date, giving learners a clear view of their progress.
 
 <p align="center">
-  <img src="assets/知识图谱.png" width="42%" alt="Personal knowledge graph and mastery details" />
+  <img src="assets/知识大脑.webp" width="60%" alt="Personal Knowledge Brain and concept mastery details" />
 </p>
 
 ## 🧠 Core Capabilities
@@ -120,7 +120,7 @@ The tutoring Agent calls focused educational tools during a conversation, with e
 | Multi-source search | Uses Tavily, arXiv, and DuckDuckGo to gather supporting material |
 | Voice explanation | Generates audio explanations in supported environments |
 
-### Graph Memory — personal knowledge graph
+### Graph Memory — personal Knowledge Brain
 
 - **Mastery tracking:** `mastery_level` records changes in mastery for each knowledge node
 - **Four relationship types:** prerequisite / related / extends / contrasts
@@ -140,7 +140,7 @@ A learning topic
   ├── Voice Agent         ── generates narrated explanations
   └── Quiz Agent          ── prepares exercises and feedback
   │
-  └── PDF + audio + exercises + knowledge graph nodes
+  └── PDF + audio + exercises + Knowledge Brain nodes
 ```
 
 ### HTML knowledge cards and EduViz
@@ -159,7 +159,7 @@ edu-agent can act as a message channel that plugs into **WeClaw (WeChat clawbrid
 
 - **QR-code binding** — Bind your WeChat bot to your account by scanning a QR code on the "WeChat Assistant" page (each user binds their own bot)
 - **Multi-tenant long polling** — One async httpx long-polling coroutine per bot (≈ one idle long connection instead of a thread), scheduled by a ChannelManager; a single machine can host many online bots
-- **Shared reasoning brain** — WeChat messages go straight through `TutorService`, sharing the same ReAct tutoring capabilities, knowledge graph, and user profile as the web app
+- **Shared reasoning brain** — WeChat messages go straight through `TutorService`, sharing the same ReAct tutoring capabilities, Knowledge Brain, and user profile as the web app
 - **Cards as images** — HTML knowledge cards / interactive visualizations / quiz cards are rendered into images via a headless browser (Playwright) and sent as pictures, with a link back to the web app for interaction
 
 ## 🛠️ For Developers

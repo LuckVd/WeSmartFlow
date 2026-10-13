@@ -4,7 +4,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">学习历史</h1>
-        <p class="page-subtitle">回顾每一次学习会话，追踪知识图谱的成长轨迹</p>
+        <p class="page-subtitle">回顾每一次学习会话，追踪知识大脑的成长轨迹</p>
       </div>
       <div class="header-right">
         <div class="search-bar">
@@ -132,18 +132,24 @@
                     ? s.duration_minutes + " 分钟"
                     : "时长未记录"
                 }}</span>
-                <template v-if="s.isImmersive && s.plannedChapters > 0">
+                <template
+                  v-if="
+                    s.isImmersive &&
+                    (s.plannedChapters > 0 || s.isBackgroundProcessing)
+                  "
+                >
                   <span class="session-dot">·</span>
                   <span
                     :style="{
-                      color: s.canResume ? 'var(--yellow)' : 'var(--green)',
+                      color: s.isBackgroundProcessing
+                        ? 'var(--blue, #60a5fa)'
+                        : s.canResume
+                          ? 'var(--yellow)'
+                          : 'var(--green)',
                       fontWeight: 600,
                     }"
                   >
-                    已生成 {{ s.generatedChapters }}/{{
-                      s.plannedChapters
-                    }}
-                    章{{ s.canResume ? "（可续传）" : "" }}
+                    {{ progressLabel(s) }}
                   </span>
                 </template>
                 <template v-else>
@@ -191,6 +197,22 @@
               >{{
                 activeSession.isImmersive ? "📚 AI主导学习" : "🤝 人机交互学习"
               }}</span
+            >
+            <span
+              v-if="activeSession.isBackgroundProcessing"
+              class="mode-tag processing"
+              >{{
+                activeSession.generationStatus === "running"
+                  ? "生成中"
+                  : "后台处理中"
+              }}</span
+            >
+            <span
+              v-if="
+                activeSession.isBackgroundProcessing &&
+                activeSession.progressText
+              "
+              >{{ activeSession.progressText }}</span
             >
             <span>{{ formatDate(activeSession.started_at) }}</span>
             <span v-if="activeSession.duration_minutes > 0"
@@ -289,7 +311,16 @@
         <div class="detail-actions">
           <!-- 沉浸式 + 未完成：续传生成 -->
           <button
-            v-if="activeSession.canResume"
+            v-if="activeSession.isBackgroundProcessing"
+            class="btn btn-danger"
+            style="flex: 1"
+            :disabled="cancellingBackground"
+            @click="cancelBackgroundProcessing"
+          >
+            {{ cancellingBackground ? "正在取消…" : "取消后台处理" }}
+          </button>
+          <button
+            v-else-if="activeSession.canResume"
             class="btn btn-primary"
             style="flex: 1"
             @click="continueGenerate"
@@ -360,9 +391,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { sessionApi, nodeApi } from "@/api";
+import {
+  formatProgressParts,
+  formatProgressPhase,
+} from "@/composables/useGenerationProgress.js";
 
 const router = useRouter();
 const searchQuery = ref("");
@@ -370,25 +405,57 @@ const searchQuery = ref("");
 // ── 数据（从后端加载）──────────────────────────────────────────
 const sessions = ref([]);
 const loading = ref(false);
+const cancellingBackground = ref(false);
 const nodeMap = ref({}); // { [node_id]: title }
 
-async function loadSessions() {
-  loading.value = true;
+// 列表行的进度文案：处理中显示分项进度，否则显示已生成章节数
+function progressLabel(s) {
+  const base = `已生成 ${s.generatedChapters}/${s.plannedChapters} 章`;
+  if (s.isBackgroundProcessing) {
+    const status = s.generationStatus === "running" ? "生成中" : "后台处理中";
+    if (s.progressText) {
+      return `${s.progressText}（${status} · ${s.progressPhase}）`;
+    }
+    return `${base}（${status}）`;
+  }
+  if (s.isInterrupted && s.enrichIncomplete) {
+    return `${s.progressText || base}（已中断，可续传）`;
+  }
+  return `${base}${s.canResume ? "（可续传）" : ""}`;
+}
+
+async function loadSessions(preferredId = null, { silent = false } = {}) {
+  if (!silent) loading.value = true;
   try {
-    // 并行加载会话列表和节点列表
+    // 并行加载会话列表和节点列表（轮询刷新时复用已有节点映射）
     const [raw, nodes] = await Promise.all([
       sessionApi.getAll(),
-      nodeApi.getAll().catch(() => []),
+      silent ? Promise.resolve(null) : nodeApi.getAll().catch(() => []),
     ]);
     // 建立节点 id -> title 映射
-    nodeMap.value = Object.fromEntries(nodes.map((n) => [n.id, n.title]));
+    if (nodes) {
+      nodeMap.value = Object.fromEntries(nodes.map((n) => [n.id, n.title]));
+    }
     sessions.value = raw.map((s) => {
       const isImmersive = (s.title || "").startsWith("[AI课程]");
       const ws = s.workspace || {};
       const generated = ws.generated_chapters ?? 0;
       const planned = ws.planned_chapters ?? 0;
-      // 是否可以续传：沉浸式 + 大纲已规划 + 还有未完成章节
-      const canResume = isImmersive && planned > 0 && generated < planned;
+      const generationStatus = ws.generation_status || "";
+      const isBackgroundProcessing = ["background", "running"].includes(
+        generationStatus,
+      );
+      const progress = isImmersive ? ws.progress || null : null;
+      // 后端已无对应任务（如服务重启）时为 interrupted
+      const isInterrupted = generationStatus === "interrupted";
+      // PDF 已齐但习题/语音/知识大脑等补全步骤未完成
+      const enrichIncomplete = !!progress && progress.phase !== "done";
+      // 是否可以续传：沉浸式 + 大纲已规划 + 还有未完成章节（或被中断时补全未完成）
+      const canResume =
+        isImmersive &&
+        planned > 0 &&
+        !isBackgroundProcessing &&
+        (generated < planned || (isInterrupted && enrichIncomplete));
       return {
         ...s,
         isImmersive,
@@ -400,20 +467,49 @@ async function loadSessions() {
         fileCount: (s.files || []).length,
         generatedChapters: generated,
         plannedChapters: planned,
+        generationStatus,
+        isBackgroundProcessing,
+        isInterrupted,
+        enrichIncomplete,
+        progressText: formatProgressParts(progress),
+        progressPhase: formatProgressPhase(progress),
         canResume,
       };
     });
     if (sessions.value.length > 0) {
-      activeSession.value = sessions.value[0];
+      activeSession.value =
+        sessions.value.find((s) => s.id === preferredId) || sessions.value[0];
     }
   } catch (e) {
     console.warn("会话列表加载失败:", e.message);
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
-onMounted(loadSessions);
+// 有会话在后台生成时，每 5 秒静默刷新一次进度；全部结束后自动停止
+let pollTimer = null;
+function syncPolling() {
+  const needPoll = sessions.value.some((s) => s.isBackgroundProcessing);
+  if (needPoll && !pollTimer) {
+    pollTimer = setInterval(async () => {
+      await loadSessions(activeSession.value?.id, { silent: true });
+      syncPolling();
+    }, 5000);
+  } else if (!needPoll && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+onMounted(async () => {
+  await loadSessions();
+  syncPolling();
+});
+onBeforeUnmount(() => {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+});
 
 const activeSession = ref(null);
 
@@ -487,6 +583,20 @@ function continueGenerate() {
     path: "/immersive",
     query: { session_id: activeSession.value.id, resume: "1" },
   });
+}
+
+async function cancelBackgroundProcessing() {
+  const session = activeSession.value;
+  if (!session?.id || cancellingBackground.value) return;
+  cancellingBackground.value = true;
+  try {
+    await sessionApi.cancelImmersiveJob(session.id);
+    await loadSessions(session.id);
+  } catch (e) {
+    console.warn("取消后台处理失败:", e.message);
+  } finally {
+    cancellingBackground.value = false;
+  }
 }
 
 function openFile(f) {
@@ -682,6 +792,10 @@ function openFile(f) {
 .mode-tag.courseware {
   background: var(--red-dim);
   color: var(--red);
+}
+.mode-tag.processing {
+  background: rgba(59, 130, 246, 0.14);
+  color: #60a5fa;
 }
 
 .detail-section {

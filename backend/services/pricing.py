@@ -52,8 +52,7 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
     # DeepSeek
     "deepseek-chat": {"in": 2.0, "in_cached": 0.2, "out": 8.0},
     "deepseek-reasoner": {"in": 4.0, "in_cached": 0.4, "out": 16.0},
-    "deepseek-v4-flash": {"in": 3.0, "in_cached": 0.1, "out": 9.0},
-    "deepseek-v4-pro": {"in": 9.0, "in_cached": 0.3, "out": 27.0},
+    # deepseek-v4-flash / -pro 为美元计价，在 USD_CNY 之后补登记（见下）
     # OpenAI
     "gpt-4o": {"in": 18.0, "in_cached": 9.0, "out": 72.0},
     "gpt-4o-mini": {"in": 1.1, "in_cached": 0.55, "out": 4.3},
@@ -72,8 +71,26 @@ DEFAULT_PRICING: Dict[str, float] = {"in": 4.0, "in_cached": 1.0, "out": 16.0}
 # https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 # https://help.aliyun.com/zh/model-studio/model-pricing
 # https://docs.tavily.com/documentation/api-credits
-PRICING_VERSION = "2026-09-06"
+PRICING_VERSION = "2026-10-13"
 USD_CNY = float(os.getenv("PRICING_USD_CNY", "7.2"))
+# 美元计价模型在 USD_CNY 之后补登记，避免依赖字典字面量的定义顺序。
+# text-embedding-3-large: $0.13 / 1M input tokens
+MODEL_PRICING["text-embedding-3-large"] = {
+    "in": float(Decimal("0.13") * Decimal(str(USD_CNY))),
+    "in_cached": float(Decimal("0.13") * Decimal(str(USD_CNY))),
+    "out": 0,
+}
+# DeepSeek V4（网关价目，美元 / 百万 token，高峰时段价；空闲时段半价）。
+# 顺序：输入（未命中缓存）、缓存命中、输出。
+DEEPSEEK_V4_USD = {
+    "deepseek-v4-flash": ("0.285714", "0.0058", "1.142858"),
+    "deepseek-v4-pro": ("1.285714", "0.0428", "3.85714"),
+}
+for _model, _usd in DEEPSEEK_V4_USD.items():
+    MODEL_PRICING[_model] = {
+        key: float(Decimal(value) * Decimal(str(USD_CNY)))
+        for key, value in zip(("in", "in_cached", "out"), _usd)
+    }
 OPENAI_USD = {
     "gpt-4o": (2.5, 1.25, 10),
     "gpt-4o-mini": (0.15, 0.075, 0.6),
@@ -86,6 +103,16 @@ IMAGE_CNY = {
     "qwen-image-max": 0.5,
     "qwen-image-plus": 0.2,
     "qwen-image": 0.25,
+    # seedream（Venus）：按张计费；5-0-pro 超大图档位（>236万像素 0.6 元）需 override
+    "seedream-5.0-lite": 0.22,
+    "seedream-5-0-pro": 0.3,
+    "seedream-4.5": 0.25,
+    "seedream-4.0": 0.2,
+    # gpt-image-2 实际按 token 计费（$5/M 输入、$30/M 输出），网关响应的
+    # usage.cost_usd 会给出真实成本，记账时优先使用（见 image_factory）。
+    # 此处仅为响应缺少 cost_usd 时的兜底估价：生产尺寸 1536x1024 实测
+    # ≈$0.0184/张 ≈ ¥0.13。
+    "gpt-image-2": 0.13,
 }
 AUDIO_CNY_PER_CHAR = {
     "qwen3-tts-instruct-flash": 0.00008,
@@ -96,6 +123,9 @@ AUDIO_CNY_PER_CHAR = {
     "cosyvoice-v3-flash": 0.0001,
     "tts-1-hd": Decimal("30") * Decimal(str(USD_CNY)) / 1_000_000,
     "tts-1": Decimal("15") * Decimal(str(USD_CNY)) / 1_000_000,
+    # MiniMax speech 目录价（美元 / 百万计费字符；计费字符数以供应商口径为准）
+    "minimax-speech-hd": Decimal("50") * Decimal(str(USD_CNY)) / 1_000_000,
+    "minimax-speech-turbo": Decimal("28.5714") * Decimal(str(USD_CNY)) / 1_000_000,
 }
 
 
@@ -125,7 +155,8 @@ def resolve_pricing(
             else "deepseek-v4-pro"
         ]
         dt = (at or datetime.now(timezone.utc)).astimezone(ZoneInfo("Asia/Shanghai"))
-        peak = dt.weekday() < 5 and (9 <= dt.hour < 12 or 14 <= dt.hour < 18)
+        # 网关价目页的峰谷规则不区分工作日/周末：北京时间 9-12、14-18 为高峰
+        peak = 9 <= dt.hour < 12 or 14 <= dt.hour < 18
         return {key: value * (1 if peak else 0.5) for key, value in base.items()}
     if name == "qwen-plus" or name.startswith("qwen-plus-"):
         u = normalize_usage(usage)
@@ -223,11 +254,15 @@ def calc_llm_credits(
 ) -> int:
     """按模型定价把 token 用量折算成 credits。
 
-    思考 token 不额外计费——它已计入 completion_tokens。
+    供应商（网关）在 usage 中给出真实成本 ``cost_usd`` 时直接采用，
+    否则按 token 单价估算。思考 token 不额外计费——它已计入 completion_tokens。
 
     Returns:
         向上取整的 credits；无 token 时返回 0。
     """
+    direct = usd_to_credits((usage or {}).get("cost_usd"))
+    if direct is not None:
+        return direct
     u = normalize_usage(usage)
     fresh_in = u["prompt_tokens"] - u["cached_tokens"]
     if fresh_in <= 0 and u["cached_tokens"] <= 0 and u["completion_tokens"] <= 0:
@@ -276,7 +311,8 @@ def calc_unit_credits(
     elif price is None and category == "audio":
         price = _match(name, AUDIO_CNY_PER_CHAR)
     elif price is None and category == "search" and provider == "tavily":
-        price = Decimal(os.getenv("TAVILY_USD_PER_CREDIT", "0.008")) * Decimal(
+        # 部署使用网关的 Tavily 兼容搜索，结算价与 Serper 一致：$0.0003 / credit
+        price = Decimal(os.getenv("TAVILY_USD_PER_CREDIT", "0.0003")) * Decimal(
             str(USD_CNY)
         )
     if price is None and category == "search" and provider == "anysearch":
@@ -291,6 +327,21 @@ def calc_unit_credits(
         (
             Decimal(str(price)) * Decimal(str(count)) * CREDITS_PER_YUAN
         ).to_integral_value(rounding=ROUND_CEILING)
+    )
+
+
+def usd_to_credits(usd: Any) -> Optional[int]:
+    """把供应商返回的美元成本折算成 credits；缺失、非法或非正数返回 None。"""
+    try:
+        value = Decimal(str(usd))
+    except Exception:  # pylint: disable=broad-except
+        return None
+    if not value.is_finite() or value <= 0:
+        return None
+    return int(
+        (value * Decimal(str(USD_CNY)) * CREDITS_PER_YUAN).to_integral_value(
+            rounding=ROUND_CEILING
+        )
     )
 
 

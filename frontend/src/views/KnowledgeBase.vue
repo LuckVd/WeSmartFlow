@@ -4,7 +4,7 @@
     <div class="kb-header">
       <div class="kb-header-left">
         <h1 class="page-title">知识库</h1>
-        <p class="page-subtitle">你的个人知识节点库，与知识图谱实时同步</p>
+        <p class="page-subtitle">你的个人知识节点库，与知识大脑实时同步</p>
       </div>
       <div class="kb-header-right">
         <div class="search-bar" :class="{ focused: searchFocused }">
@@ -41,7 +41,7 @@
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
             <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
           </svg>
-          图谱视图
+          知识大脑
         </button>
         <button class="btn btn-primary" @click="showUpload = true">
           <svg
@@ -736,7 +736,7 @@
               <circle cx="18" cy="19" r="3" />
               <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
             </svg>
-            图谱中查看
+            在知识大脑中查看
           </button>
           <button class="nqa-btn">
             <svg
@@ -845,7 +845,7 @@
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            Agent 将自动从文档中提取知识节点，并关联到你的知识图谱
+            Agent 将自动从文档中提取知识节点，并关联到你的知识大脑
           </div>
         </div>
       </div>

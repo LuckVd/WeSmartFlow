@@ -116,7 +116,7 @@
               @click="$router.push('/chat')"
               >人机交互学习</strong
             >
-            开始第一次学习，Agent 将根据你的知识图谱为你生成个性化建议。
+            开始第一次学习，Agent 将根据你的知识大脑为你生成个性化建议。
           </p>
           <div v-if="aiRec.focus" class="arc-meta">
             <span class="arc-focus">🎯 {{ aiRec.focus }}</span>
@@ -135,7 +135,7 @@
               class="btn btn-ghost btn-sm"
               @click="$router.push('/graph')"
             >
-              查看图谱
+              查看知识大脑
             </button>
           </div>
         </div>
@@ -219,31 +219,46 @@
         </div>
       </div>
 
-      <!-- 中列：知识图谱概览 + 遗忘提醒 -->
+      <!-- 中列：知识大脑概览 + 遗忘提醒 -->
       <div class="col-mid">
-        <!-- 知识图谱概览 -->
-        <div class="card section-card">
+        <!-- 知识大脑概览 -->
+        <div class="card section-card brain-overview-card">
           <div class="section-header">
-            <h2 class="section-title">知识图谱概览</h2>
+            <h2 class="section-title">知识大脑概览</h2>
             <button class="link-btn" @click="$router.push('/graph')">
-              查看全图 →
+              进入大脑 →
             </button>
           </div>
-          <div class="graph-preview">
-            <div v-for="s in subjectStats" :key="s.name" class="gp-subject">
-              <div class="gps-header">
-                <span class="gps-dot" :style="{ background: s.color }" />
-                <span class="gps-name">{{ s.name }}</span>
-                <span class="gps-count">{{ s.count }} 个概念</span>
-                <span class="gps-avg" :style="{ color: s.color }"
-                  >{{ s.avg }}%</span
-                >
+          <div class="brain-preview">
+            <div class="brain-orbit" aria-hidden="true">
+              <span class="brain-core">🧠</span>
+              <span
+                v-for="(s, i) in subjectStats.slice(0, 5)"
+                :key="s.name"
+                class="brain-node"
+                :class="`brain-node-${i}`"
+                :style="{ '--node-color': s.color }"
+              />
+            </div>
+            <div class="brain-regions">
+              <div v-for="s in subjectStats" :key="s.name" class="brain-region">
+                <div class="gps-header">
+                  <span class="gps-dot" :style="{ background: s.color }" />
+                  <span class="gps-name">{{ s.name }}</span>
+                  <span class="gps-count">{{ s.count }} 个知识粒子</span>
+                  <span class="gps-avg" :style="{ color: s.color }"
+                    >{{ s.avg }}%</span
+                  >
+                </div>
+                <div class="progress-bar">
+                  <div
+                    class="progress-fill"
+                    :style="{ width: s.avg + '%', background: s.color }"
+                  />
+                </div>
               </div>
-              <div class="progress-bar">
-                <div
-                  class="progress-fill"
-                  :style="{ width: s.avg + '%', background: s.color }"
-                />
+              <div v-if="!subjectStats.length" class="brain-empty-line">
+                完成一次学习后，知识粒子会在这里点亮。
               </div>
             </div>
           </div>
@@ -416,9 +431,9 @@ const quickEntries = [
   },
   {
     path: "/graph",
-    icon: "🕸️",
-    title: "知识图谱",
-    desc: "查看你的知识版图",
+    icon: "🧠",
+    title: "知识大脑",
+    desc: "查看你的知识粒子",
     color: "#a855f7",
   },
   {
@@ -549,7 +564,7 @@ const heatmapWeeks = computed(() =>
   ),
 );
 
-// ── 知识图谱概览（从节点数据中计算） ──────────────────────────────────────
+// ── 知识大脑概览（从节点数据中计算） ──────────────────────────────────────
 // 目前 tags 只有一级，按第一个 tag 聚合
 const tagColors = {
   算法: "#6366f1",
@@ -934,17 +949,109 @@ const greeting = computed(() => {
   margin-left: auto;
 }
 
-/* Graph preview */
-.graph-preview {
+/* Brain preview */
+.brain-overview-card {
+  overflow: hidden;
+}
+.brain-preview {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.brain-orbit {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  border-radius: 32px;
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(168, 85, 247, 0.28),
+      transparent 36%
+    ),
+    radial-gradient(
+      circle at 30% 25%,
+      rgba(99, 102, 241, 0.22),
+      transparent 42%
+    ),
+    var(--bg-hover);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 28px rgba(168, 85, 247, 0.12);
+}
+.brain-orbit::before,
+.brain-orbit::after {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border: 1px solid rgba(168, 85, 247, 0.28);
+  border-radius: 50%;
+  transform: rotate(-18deg) scaleX(1.35);
+}
+.brain-orbit::after {
+  inset: 27px 14px;
+  border-color: rgba(16, 185, 129, 0.22);
+  transform: rotate(34deg) scaleX(1.18);
+}
+.brain-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 10px 30px rgba(99, 102, 241, 0.22);
+  font-size: 23px;
+  z-index: 2;
+}
+.brain-node {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--node-color);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--node-color) 18%, transparent);
+}
+.brain-node-0 {
+  left: 16px;
+  top: 22px;
+}
+.brain-node-1 {
+  right: 16px;
+  top: 28px;
+}
+.brain-node-2 {
+  left: 23px;
+  bottom: 18px;
+}
+.brain-node-3 {
+  right: 24px;
+  bottom: 16px;
+}
+.brain-node-4 {
+  left: 46px;
+  top: 10px;
+}
+.brain-regions {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-bottom: 14px;
+  min-width: 0;
 }
-.gp-subject {
+.brain-region {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.brain-empty-line {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .gps-header {
   display: flex;

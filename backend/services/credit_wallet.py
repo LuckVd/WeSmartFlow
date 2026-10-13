@@ -49,6 +49,20 @@ CREATE TABLE IF NOT EXISTS credit_cards (
     created_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS credit_card_email_deliveries (
+    card_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    recipient_user_id TEXT NOT NULL,
+    recipient_name TEXT NOT NULL,
+    recipient_email TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    attempt_id TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    sent_at TEXT
+);
 CREATE TABLE IF NOT EXISTS credit_card_redemptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code_hash TEXT NOT NULL,
@@ -57,6 +71,11 @@ CREATE TABLE IF NOT EXISTS credit_card_redemptions (
     balance_after INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE (code_hash, user_id)
+);
+CREATE TABLE IF NOT EXISTS credit_card_email_history (
+    request_id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL,
+    delivery_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_credit_card_redemptions_user
     ON credit_card_redemptions(user_id, id);
@@ -131,6 +150,8 @@ def create_credit_card(
     expires_at: str | None = None,
     note: str = "",
     created_by: str = "admin",
+    recipient_user_id: str | None = None,
+    email_request_id: str | None = None,
 ):
     """管理员生成积分卡。mode=add 表示加积分，mode=reset 表示把余额重置为 amount。"""
     from database import get_db
@@ -142,11 +163,57 @@ def create_credit_card(
     if amount <= 0:
         raise CreditCardError("积分数量必须大于 0")
     max_redemptions = max(0, int(max_redemptions or 0))
+    if recipient_user_id:
+        from services.credit_card_mail import (
+            check_mail_config,
+            recipient,
+            public_delivery,
+            find_delivery_request,
+        )
+
+        check_mail_config()
+        if not email_request_id:
+            raise CreditCardError("邮件请求缺少唯一标识")
     timestamp = _clock()[1]
 
     with get_db() as conn:
         ensure_credit_card_columns(conn)
         conn.execute("BEGIN IMMEDIATE")
+        recipient_info = None
+        if recipient_user_id:
+            existing = find_delivery_request(conn, email_request_id)
+            if existing:
+                card = conn.execute(
+                    "SELECT * FROM credit_cards WHERE code_hash=?",
+                    (existing["card_id"],),
+                ).fetchone()
+                if (
+                    not card
+                    or existing["recipient_user_id"] != recipient_user_id
+                    or (
+                        card["mode"],
+                        card["amount"],
+                        card["max_redemptions"],
+                        card["expires_at"],
+                        card["note"],
+                    )
+                    != (
+                        mode,
+                        amount,
+                        max_redemptions,
+                        expires_at or None,
+                        (note or "")[:200],
+                    )
+                ):
+                    raise CreditCardError("请求已处理，请重新打开生成面板后创建新卡")
+                return {
+                    "card_id": card["code_hash"],
+                    "code": card["code_plain"],
+                    "mode": card["mode"],
+                    "amount": card["amount"],
+                    "delivery": public_delivery(existing),
+                }
+            recipient_info = recipient(conn, recipient_user_id)
         for _ in range(10):
             code = _new_code()
             digest = _code_hash(code)
@@ -175,7 +242,31 @@ def create_credit_card(
                         timestamp,
                     ),
                 )
+                delivery = None
+                if recipient_info:
+                    conn.execute(
+                        """INSERT INTO credit_card_email_deliveries
+                        (card_id,request_id,recipient_user_id,recipient_name,recipient_email,created_at,updated_at)
+                        VALUES (?,?,?,?,?,?,?)""",
+                        (
+                            digest,
+                            email_request_id,
+                            recipient_user_id,
+                            recipient_info["name"],
+                            recipient_info["email"],
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+                    delivery = public_delivery(
+                        conn.execute(
+                            "SELECT * FROM credit_card_email_deliveries WHERE card_id=?",
+                            (digest,),
+                        ).fetchone()
+                    )
                 return {
+                    "card_id": digest,
+                    "delivery": delivery,
                     "code": code,
                     "mode": mode,
                     "amount": amount,

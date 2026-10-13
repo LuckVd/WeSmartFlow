@@ -73,7 +73,9 @@ class CanvasBlock(BaseSchema):
         "chapter_status",
     ]
     title: str = ""
-    status: Literal["pending", "generating", "ready", "failed"] = "ready"
+    status: Literal["pending", "generating", "learning_ready", "ready", "failed"] = (
+        "ready"
+    )
     chapter_id: Optional[int] = None
     data: dict[str, Any] = Field(default_factory=dict)
     error: str = ""

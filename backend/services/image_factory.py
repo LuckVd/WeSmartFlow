@@ -17,6 +17,7 @@ from agent_core.hooks import hookwrapper, observe
 from agent_core.tool.imagegen.base import BaseImageGen
 from agent_core.tool.imagegen.openai import OpenAIImageGen
 from agent_core.tool.imagegen.qwen import QwenImageGen
+from services.provider_gateway import get_provider_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,30 @@ def _attach_hooks(
     model = getattr(client, "model", "") or ""
     region = "singapore" if "-intl." in getattr(client, "base_url", "") else "beijing"
 
+    # Instrument the raw provider call before the existing quota hook wraps it.
+    # A quota denial therefore never appears as a provider incident.
+    gateway = get_provider_gateway()
+    profile = gateway.resolve(
+        category="image",
+        backend=client.backend,
+        model=model,
+        endpoint=getattr(client, "base_url", ""),
+    )
+    raw_generate = client.generate
+
+    def _generate_with_policy(*args, **kwargs):
+        kwargs.setdefault("timeout", int(profile.retry.timeout_seconds))
+        return raw_generate(*args, **kwargs)
+
+    client.generate = gateway.instrument_sync(  # type: ignore[method-assign]
+        profile,
+        "images.generate",
+        _generate_with_policy,
+        scene=scene,
+        success=lambda result: bool(result),
+    )
+    client.provider_profile = profile  # type: ignore[attr-defined]
+
     def _pre(*_args, **_kwargs):
         from services.credit_quota import assert_available
 
@@ -72,9 +97,11 @@ def _attach_hooks(
         )
         assert_available(user_id, "image", platform_key=platform_key)
 
-    def _post(_result):
+    def _post(cost_usd=None):
+        from services.pricing import usd_to_credits
         from services.usage_meter import record_usage
 
+        # 供应商返回真实成本（usage.cost_usd）时按实际记账，否则按单张估价
         record_usage(
             user_id,
             category="image",
@@ -83,11 +110,12 @@ def _attach_hooks(
             model=model,
             provider=client.backend,
             region=region,
+            credits=usd_to_credits(cost_usd),
             counts_quota=platform_key,
         )
 
     pre = observe(_pre) if with_quota else None
-    client.on_generated = lambda: _post(None)
+    client.on_generated = lambda cost_usd=None: _post(cost_usd)
     client.generate = hookwrapper(client.generate, pre=pre)  # type: ignore[method-assign]
     return client
 

@@ -32,7 +32,10 @@ from services.pricing import (
 logger = logging.getLogger(__name__)
 
 # 合法计费类别与场景，用于防止打点处写错字导致维度污染
-VALID_CATEGORIES = frozenset({"llm", "search", "image", "audio"})
+# ``embedding`` is deliberately distinct from ``llm`` in the ledger: it has a
+# different operational path and lets platform-cost reports answer how much the
+# KG itself costs.  It is still token-priced through ``calc_llm_credits``.
+VALID_CATEGORIES = frozenset({"llm", "embedding", "search", "image", "audio"})
 
 # 场景维度：用于回答「成本花在哪个功能上」
 VALID_SCENES = frozenset(
@@ -93,11 +96,11 @@ def record_usage(
     """记录一次用量，返回本次折算的 credits（失败返回 0）。
 
     Args:
-        category:  llm / search / image / audio
+        category:  llm / embedding / search / image / audio
         scene:     业务场景，见 VALID_SCENES
-        model:     LLM 模型名（category='llm' 时用于计价）
-        usage:     LLM 返回的 usage 字典，支持各家字段别名
-        units:     非 LLM 调用的计量单位数（audio 为供应商计费字符数）
+        model:     token 模型名（category 为 llm 或 embedding 时用于计价）
+        usage:     token API 返回的 usage 字典，支持各家字段别名
+        units:     非 token 调用的计量单位数（audio 为供应商计费字符数）
         credits:   显式指定 credits，跳过自动计算（用于特殊计费）
         is_system: 系统内部任务，不计入用户额度但仍记明细
 
@@ -124,7 +127,7 @@ def record_usage(
             counts_quota = is_using_platform_key(user_id, cat)
 
         if credits is None:
-            if cat == "llm":
+            if cat in {"llm", "embedding"}:
                 cost = calc_llm_credits(model, usage)
             else:
                 cost = calc_unit_credits(
@@ -133,7 +136,11 @@ def record_usage(
         else:
             cost = max(0, int(credits))
 
-        tokens = normalize_usage(usage) if cat == "llm" else normalize_usage(None)
+        tokens = (
+            normalize_usage(usage)
+            if cat in {"llm", "embedding"}
+            else normalize_usage(None)
+        )
         period = current_period()
 
         event_id = new_id()

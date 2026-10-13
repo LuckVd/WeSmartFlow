@@ -4,8 +4,9 @@
 获取客户端实例——用量治理的单一收口。
 
 后端选择（``backend`` 参数）：
-  - ``"auto"``（默认）：qwen3-tts → macOS say → None（三级优先级），
-    单条失败自动回退（见 agent_core/tool/tts/fallback.py）；
+  - ``"auto"``（默认）：用户自配 DashScope Key → 平台 OpenAI 兼容 TTS
+    （TTS_*）→ 平台 DashScope qwen3-tts → macOS say → None，
+    单条失败回退 macOS say（见 agent_core/tool/tts/fallback.py）；
   - ``"cosyvoice"``：court demo 专用音色通道。
 
 计价：audio 按供应商计费字符数计量（见 services/pricing.py）。
@@ -25,7 +26,9 @@ from agent_core.tool.tts.base import BaseTTS
 from agent_core.tool.tts.cosyvoice import CosyVoiceTTS
 from agent_core.tool.tts.fallback import FallbackTTS
 from agent_core.tool.tts.mac_say import MacSayTTS
+from agent_core.tool.tts.openai_compat import OpenAICompatTTS
 from agent_core.tool.tts.qwen import QwenTTS
+from services.provider_gateway import get_provider_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +70,42 @@ def _dashscope_key(user_id: str) -> str:
     return _dotenv_value("IMG_API_KEY")
 
 
+def _user_tts_key(user_id: str) -> str:
+    try:
+        from database import get_setting
+
+        return (get_setting(user_id, "tts_api_key") or "").strip()
+    except Exception:  # pylint: disable=broad-except
+        return ""
+
+
+def _openai_compat_settings() -> Optional[dict]:
+    """读取平台 OpenAI 兼容 TTS 配置（TTS_API_KEY / TTS_BASE_URL / TTS_MODEL）。
+
+    三项全部留空表示未启用；只配了一部分时报错，避免静默回退到其他供应商。
+    """
+    names = ("TTS_API_KEY", "TTS_BASE_URL", "TTS_MODEL")
+    values = [os.environ.get(n, "").strip() or _dotenv_value(n) for n in names]
+    if not any(values):
+        return None
+    if not all(values):
+        raise RuntimeError(
+            "TTS 配置不完整。请同时设置 TTS_API_KEY, TTS_BASE_URL 和 TTS_MODEL。"
+        )
+    speed_raw = os.environ.get("TTS_SPEED", "").strip() or _dotenv_value("TTS_SPEED")
+    try:
+        speed = float(speed_raw) if speed_raw else None
+    except ValueError:
+        speed = None
+    return {
+        "api_key": values[0],
+        "base_url": values[1],
+        "model": values[2],
+        "voice": os.environ.get("TTS_VOICE", "").strip() or _dotenv_value("TTS_VOICE"),
+        "speed": speed,
+    }
+
+
 def _attach_hooks(
     client: BaseTTS,
     *,
@@ -85,6 +124,24 @@ def _attach_hooks(
     from services.pricing import calc_unit_credits
 
     platform_key = is_using_platform_key(user_id, "audio")
+
+    # Speech generation can be accepted and billed upstream before the response
+    # body reaches us, so its provider definitions intentionally disable generic
+    # retries.  We still get one traceable event for each primary/fallback call.
+    gateway = get_provider_gateway()
+    profile = gateway.resolve(
+        category="audio",
+        backend=client.backend,
+        model=getattr(client, "model", ""),
+    )
+    client.synthesize = gateway.instrument_sync(  # type: ignore[method-assign]
+        profile,
+        "speech.synthesize",
+        client.synthesize,
+        scene=scene,
+        success=lambda result: bool(getattr(result, "success", False)),
+    )
+    client.provider_profile = profile  # type: ignore[attr-defined]
 
     def _pre(*_args, **_kwargs):
         from services.credit_quota import assert_available
@@ -115,7 +172,7 @@ def _attach_hooks(
         )
 
     pre = observe(_pre) if with_quota else None
-    if isinstance(client, (QwenTTS, CosyVoiceTTS)):
+    if isinstance(client, (QwenTTS, CosyVoiceTTS, OpenAICompatTTS)):
         client.on_generated = _post
         post = None
     else:
@@ -148,18 +205,7 @@ def get_tts(
     key = _dashscope_key(user_id)
     say_available = shutil.which("say") is not None
 
-    if backend == "cosyvoice":
-        if not key:
-            return None
-        client: BaseTTS = CosyVoiceTTS(api_key=key)
-    elif key:
-        primary = _attach_hooks(
-            QwenTTS(api_key=key),
-            user_id=user_id,
-            scene=scene,
-            with_quota=with_quota,
-            is_system=is_system,
-        )
+    def _with_say_fallback(primary: BaseTTS) -> BaseTTS:
         fallback = (
             _attach_hooks(
                 MacSayTTS(),
@@ -172,6 +218,50 @@ def get_tts(
             else None
         )
         return FallbackTTS(primary, fallback)
+
+    compat = None
+    if backend != "cosyvoice" and not _user_tts_key(user_id):
+        try:
+            compat = _openai_compat_settings()
+        except RuntimeError:
+            # 配置错误不静默切换到其他供应商；跳过语音并留下明确日志
+            logger.error("TTS_* 配置不完整，已跳过语音生成", exc_info=True)
+            return None
+
+    if backend == "cosyvoice":
+        if not key:
+            return None
+        client: BaseTTS = CosyVoiceTTS(api_key=key)
+    elif compat:
+        # 平台 OpenAI 兼容 TTS；用户自配的 DashScope Key 仍优先走 qwen
+        compat_profile = get_provider_gateway().resolve(
+            category="audio",
+            backend="openai-compatible",
+            model=compat["model"],
+            endpoint=compat["base_url"],
+        )
+        primary = _attach_hooks(
+            OpenAICompatTTS(
+                **compat, timeout=int(compat_profile.retry.timeout_seconds)
+            ),
+            user_id=user_id,
+            scene=scene,
+            with_quota=with_quota,
+            is_system=is_system,
+        )
+        return _with_say_fallback(primary)
+    elif key:
+        qwen_profile = get_provider_gateway().resolve(
+            category="audio", backend="qwen3-tts", model="qwen3-tts-instruct-flash"
+        )
+        primary = _attach_hooks(
+            QwenTTS(api_key=key, timeout=int(qwen_profile.retry.timeout_seconds)),
+            user_id=user_id,
+            scene=scene,
+            with_quota=with_quota,
+            is_system=is_system,
+        )
+        return _with_say_fallback(primary)
     elif say_available:
         client = MacSayTTS()
     else:

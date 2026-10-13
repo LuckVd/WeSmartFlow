@@ -8,6 +8,7 @@ SessionRepository：会话数据访问层
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -43,7 +44,117 @@ def _row_to_schema(row: dict) -> SessionSchema:
     )
 
 
+_STEP_TERMINAL = {"done", "failed", "skipped"}
+
+
+def _chapter_step_state(chapter: dict, key: str, enabled: bool) -> Optional[str]:
+    """单章某个补全步骤的状态；无法判断时返回 None（如旧会话的图谱抽取）。"""
+    if not enabled:
+        return "skipped"
+    value = (chapter.get("enrich_steps") or {}).get(key)
+    if value:
+        return value
+    if key in {"exercises", "audio"}:
+        if (chapter.get("artifact_status") or {}).get(key):
+            return "done"
+        return "failed" if chapter.get("status") == "ready" else "pending"
+    return None
+
+
+def summarize_generation_progress(workspace: dict) -> dict:
+    """把各章状态汇总为历史页可展示的分项进度。
+
+    pdf / exercises / audio / kg 均为 ``{done, failed, total}``；
+    功能未开启（或旧数据无法判断）时对应项为 ``None``。
+    phase: pdf -> enrichment -> nodes -> done。
+    """
+    chapters = workspace.get("chapters") or []
+    total = int(workspace.get("planned_chapters") or len(chapters) or 0)
+    flags = {
+        "exercises": bool(workspace.get("enable_exercises", True)),
+        "audio": bool(workspace.get("enable_audio", False)),
+        "kg": True,
+    }
+    pdf_done = sum(
+        1 for c in chapters if c.get("status") in {"ready", "learning_ready"}
+    )
+    steps: dict[str, Optional[dict]] = {}
+    phase_pending = {"exercises": False, "audio": False, "kg": False}
+    for key, enabled in flags.items():
+        if not enabled:
+            steps[key] = None
+            continue
+        states = [_chapter_step_state(c, key, enabled) for c in chapters]
+        if key == "kg" and all(s is None for s in states):
+            steps[key] = None
+            continue
+        done = sum(1 for s in states if s == "done")
+        failed = sum(1 for s in states if s == "failed")
+        steps[key] = {"done": done, "failed": failed, "total": total}
+        # 尚未启动补全的章节（PDF 未就绪）由 pdf 阶段兜住，这里只看已就绪章节
+        phase_pending[key] = any(
+            c.get("status") in {"ready", "learning_ready"}
+            and (s is not None and s not in _STEP_TERMINAL)
+            for c, s in zip(chapters, states)
+        )
+    if pdf_done < total:
+        phase = "pdf"
+    elif phase_pending["exercises"] or phase_pending["audio"]:
+        phase = "enrichment"
+    elif phase_pending["kg"]:
+        phase = "nodes"
+    else:
+        phase = "done"
+    return {
+        "phase": phase,
+        "total": total,
+        "pdf": {"done": pdf_done, "failed": 0, "total": total},
+        **steps,
+    }
+
+
+def _normalize_immersive_topic(topic: str) -> str:
+    """Normalize immersive course topics for exact idempotency matching."""
+    return re.sub(r"\s+", "", (topic or "").strip().lower())
+
+
 class SessionRepository(BaseRepository):
+    def find_active_immersive_by_topic(
+        self, user_id: str, topic: str, limit: int = 80
+    ) -> Optional[SessionSchema]:
+        """Return the newest running/background immersive session with same topic.
+
+        This is intentionally an exact normalized-topic match, not semantic fuzzy
+        matching: users may legitimately create a new related course with a
+        different title.
+        """
+        target = _normalize_immersive_topic(topic)
+        if not target:
+            return None
+        rows = self._fetchall(
+            """
+            SELECT * FROM sessions
+             WHERE user_id=?
+               AND (title LIKE '[AI课程]%' OR topic IS NOT NULL)
+             ORDER BY created_at DESC
+             LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        for row in rows:
+            schema = _row_to_schema(row)
+            ws_data = self._read_workspace(schema.id)
+            workspace = ws_data.get("workspace", {}) or {}
+            status = workspace.get("generation_status") or ""
+            if status not in {"running", "background"}:
+                continue
+            saved_topic = workspace.get("topic") or schema.topic or schema.title or ""
+            if saved_topic.startswith("[AI课程]"):
+                saved_topic = saved_topic.replace("[AI课程]", "", 1)
+            if _normalize_immersive_topic(saved_topic) == target:
+                return schema
+        return None
+
     def get_all(self, user_id: str, limit: int = 20) -> list[SessionSchema]:
         rows = self._fetchall(
             "SELECT * FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
@@ -56,8 +167,13 @@ class SessionRepository(BaseRepository):
             workspace = ws_data.get("workspace", {}) or {}
             stage = ws_data.get("stage", "") or ""
             chapters_state = workspace.get("chapters", []) or []
+            # ``learning_ready`` chapters already have a validated PDF and are
+            # available to the learner.  Count them as generated so the list
+            # reflects the actual resumable progress during enrichment.
             generated_chapters = sum(
-                1 for c in chapters_state if c.get("status") == "ready"
+                1
+                for c in chapters_state
+                if c.get("status") in {"ready", "learning_ready"}
             )
             planned_chapters = workspace.get("planned_chapters") or len(chapters_state)
 
@@ -83,6 +199,10 @@ class SessionRepository(BaseRepository):
                 "generated_chapters": generated_chapters,
                 "planned_chapters": planned_chapters,
             }
+            if is_immersive:
+                schema.workspace["progress"] = summarize_generation_progress(
+                    schema.workspace
+                )
             result.append(schema)
             if len(result) >= limit:
                 break
@@ -99,6 +219,9 @@ class SessionRepository(BaseRepository):
         messages = self._read_messages(session_id)
         data = session.model_dump()
         data.update(self._read_workspace(session_id))
+        ws = data.get("workspace")
+        if isinstance(ws, dict) and (session.title or "").startswith("[AI课程]"):
+            data["workspace"] = {**ws, "progress": summarize_generation_progress(ws)}
         return SessionDetail(**data, messages=messages)
 
     def create(self, user_id: str, data: SessionCreate) -> SessionSchema:

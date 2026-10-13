@@ -59,6 +59,20 @@ python test_smart_search.py
 
 测试会跑 3 个 query，输出每一步详情：路由决策 → 各源返回数 → 筛选过程 → 最终 Markdown。
 
+## 外部 HTTP 调用规范
+
+SmartSearch 的 AnySearch、Wikimedia、Flickr、YouTube 与 WebFetch 均经
+`integrations.http.IntegrationHttpClient` 发出请求，不允许在 source adapter
+中直接创建 `httpx.AsyncClient`。每个源在构造时声明自己的超时、并发和
+重试策略：只有 GET/HEAD/OPTIONS 的瞬时失败可重试；AnySearch 的 POST
+检索始终只调用一次，避免上游接受请求后重复执行。
+
+`web_fetch` 还会校验初始 URL 及每一个跳转地址只解析到公网 IP；内网、
+loopback、localhost 与混合 DNS 答案都会被拒绝。外部请求的 URL 查询参数、
+授权头和响应正文不会进入错误信息或指标。管理员可在
+`GET /api/usage/providers/metrics?category=integration` 查看无密钥的调用
+结果、耗时和重试次数。
+
 ## 集成到 Agent（替代原有 TavilySearch）
 
 搜索工具统一经 `agents/tool_catalog.py` 解析（`smart_search` / `tavily`），

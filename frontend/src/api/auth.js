@@ -2,7 +2,7 @@
  * 认证 API — 邮箱验证码登录 + GitHub OAuth 登录
  */
 
-import { BASE_URL } from "./base.js";
+import { BASE_URL, createRequestId } from "./base.js";
 
 export const authApi = {
   // ── 邮箱验证码登录 ──
@@ -15,7 +15,10 @@ export const authApi = {
   async sendCode(email) {
     const res = await fetch(`${BASE_URL}/api/auth/send-code`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": createRequestId(),
+      },
       body: JSON.stringify({ email }),
     });
 
@@ -37,7 +40,10 @@ export const authApi = {
   async verifyCode(email, code, name = "") {
     const res = await fetch(`${BASE_URL}/api/auth/verify-code`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": createRequestId(),
+      },
       body: JSON.stringify({ email, code, name }),
     });
 
@@ -59,7 +65,10 @@ export const authApi = {
     const path = reward ? "github/reward/authorize" : "github/authorize";
     const token = localStorage.getItem("wesmartflow-token");
     const res = await fetch(`${BASE_URL}/api/auth/${path}`, {
-      headers: reward && token ? { Authorization: `Bearer ${token}` } : {},
+      headers: {
+        ...(reward && token ? { Authorization: `Bearer ${token}` } : {}),
+        "X-Request-ID": createRequestId(),
+      },
     });
 
     if (!res.ok) {
@@ -85,7 +94,10 @@ export const authApi = {
     sessionStorage.removeItem("github-oauth-state");
     const res = await fetch(`${BASE_URL}/api/auth/github/callback`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": createRequestId(),
+      },
       body: JSON.stringify({ code, state }),
     });
 

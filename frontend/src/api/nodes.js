@@ -11,7 +11,7 @@
 import { api } from "./base.js";
 
 export const nodeApi = {
-  // 获取所有节点（用于知识图谱、知识库）
+  // 获取所有节点（用于知识大脑、知识库）
   getAll: () => api.get("/api/nodes"),
 
   // 获取今日到期复习节点

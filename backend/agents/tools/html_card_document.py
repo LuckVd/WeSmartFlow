@@ -205,12 +205,12 @@ def prepare_card_html(
             errors.append(f"{name} 最多 {limit} 个，请合并内容而不是截断句子")
     if (
         len(root.find_class("formula-center")) + len(root.find_class("formula-block"))
-        > 3
+        > 4
     ):
-        errors.append("公式块合计最多 3 个")
+        errors.append("公式块合计最多 4 个")
     for parent, child, limit in [
         ("flow-row", "flow-node", 5),
-        ("step-list", "step-item", 5),
+        ("step-list", "step-item", 6),
         ("stat-row", "stat-card", 4),
         ("two-col", "col-item", 4),
     ]:
@@ -222,8 +222,10 @@ def prepare_card_html(
             errors.append("表格最多 5 行（含表头）")
         if any(len(row.xpath("./th|./td")) > 3 for row in table.iter("tr")):
             errors.append("表格最多 3 列，更多对象请改为列表")
-    if len(re.sub(r"\s+", " ", root.text_content()).strip()) > 1800:
-        errors.append("单张卡片内容过多，请聚焦一个知识点并保留完整公式和必要条件")
+    if len(re.sub(r"\s+", " ", root.text_content()).strip()) > 2600:
+        errors.append(
+            "单张卡片内容过多，请聚焦一个知识点并保留完整推导、公式和必要条件"
+        )
     for image in root.iter("img"):
         if work_dir is not None:
             image_source(image.get("src", ""), work_dir)

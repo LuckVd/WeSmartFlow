@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,8 +77,14 @@ class BaseTTS(ABC):
         output_dir: str,
         voice: str = "",
         instruct: str = "",
+        max_concurrency: int = 1,
     ) -> Dict[str, Any]:
         """批量合成：逐条调用 :meth:`synthesize`（每条独立触发治理 hook）。
+
+        ``max_concurrency`` keeps the historical sequential default.  Callers
+        that create many independent page narrations can opt into a small,
+        bounded pool; output ordering, per-item accounting hooks and failure
+        isolation remain identical to the sequential path.
 
         返回结构与历史 ``qwen_tts.synthesize_batch`` / ``say_batch_synthesize``
         完全一致::
@@ -90,50 +97,72 @@ class BaseTTS(ABC):
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        results: List[Dict[str, Any]] = []
+        results: List[Dict[str, Any] | None] = [None] * len(items or [])
         total_t0 = time.time()
 
-        for idx, item in enumerate(items or []):
+        def synthesize_one(idx: int, item: Dict[str, str]) -> Dict[str, Any]:
             text = (item.get("text") or "").strip()
             filename = _norm_filename(item.get("filename", ""), idx)
             if not text:
-                results.append(
-                    {
-                        "index": idx,
-                        "filename": filename,
-                        "path": "",
-                        "duration_seconds": 0,
-                        "success": False,
-                        "error": "文本为空",
-                    }
+                return {
+                    "index": idx,
+                    "filename": filename,
+                    "path": "",
+                    "duration_seconds": 0,
+                    "success": False,
+                    "error": "文本为空",
+                }
+            try:
+                result = self.synthesize(
+                    text, str(out_dir / filename), voice=voice, instruct=instruct
                 )
-                continue
-
-            r = self.synthesize(
-                text, str(out_dir / filename), voice=voice, instruct=instruct
-            )
+            except Exception as exc:  # defensive: a backend should return failure
+                logger.exception(
+                    "[%s %d/%d] 合成异常", self.backend, idx + 1, len(items)
+                )
+                return {
+                    "index": idx,
+                    "filename": filename,
+                    "path": "",
+                    "duration_seconds": 0,
+                    "success": False,
+                    "error": str(exc),
+                }
             logger.info(
                 "[%s %d/%d] %s %d字 -> %.1fs",
                 self.backend,
                 idx + 1,
                 len(items),
-                "✓" if r.success else "✗",
+                "✓" if result.success else "✗",
                 len(text),
-                r.duration,
+                result.duration,
             )
-            results.append(
-                {
-                    "index": idx,
-                    "filename": filename,
-                    "path": r.path,
-                    "duration_seconds": r.duration,
-                    "success": r.success,
-                    "error": r.error,
+            return {
+                "index": idx,
+                "filename": filename,
+                "path": result.path,
+                "duration_seconds": result.duration,
+                "success": result.success,
+                "error": result.error,
+            }
+
+        parallelism = max(1, min(int(max_concurrency or 1), len(items or []) or 1))
+        if parallelism == 1:
+            for idx, item in enumerate(items or []):
+                results[idx] = synthesize_one(idx, item)
+        else:
+            with ThreadPoolExecutor(max_workers=parallelism) as executor:
+                futures = {
+                    executor.submit(synthesize_one, idx, item): idx
+                    for idx, item in enumerate(items or [])
                 }
-            )
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    results[idx] = future.result()
 
         total_elapsed = time.time() - total_t0
-        success_count = sum(1 for r in results if r["success"])
+        ordered_results = [r for r in results if r is not None]
+        success_count = sum(1 for r in ordered_results if r["success"])
         return {
             "voice": voice,
             "backend": self.backend,
@@ -141,5 +170,5 @@ class BaseTTS(ABC):
             "success_count": success_count,
             "total_seconds": round(total_elapsed, 2),
             "output_dir": str(out_dir),
-            "results": results,
+            "results": ordered_results,
         }

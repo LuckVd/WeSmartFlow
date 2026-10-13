@@ -62,7 +62,7 @@ CREDITS_ENFORCEMENT_ENABLED = os.getenv(
 # 用于在「credits 调用后才知道」的约束下换取实现简单。
 CREDITS_BORROW_RATIO = float(os.getenv("CREDITS_BORROW_RATIO", "0.2"))
 
-# SMTP 邮件配置（用于邮箱验证码登录）
+# SMTP 邮件配置（用于邮箱验证码登录和积分卡发送）
 SMTP_HOST = os.getenv("SMTP_HOST", "")  # SMTP 服务器地址，如 smtp.qq.com
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # SMTP 端口，SSL 通常为 465
 SMTP_USER = os.getenv("SMTP_USER", "")  # 发件邮箱地址

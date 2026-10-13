@@ -15,3 +15,4 @@ export { settingsApi } from "./settings.js";
 export { graphApi } from "./graph.js";
 export { api, BASE_URL, ApiError, fetchAsBlobUrl } from "./base.js";
 export { llmApi } from "./llm.js";
+export { jobApi } from "./jobs.js";

@@ -16,12 +16,15 @@ class TavilySearchClient(BaseSearchClient):
 
     backend = "tavily"
 
-    def __init__(self, api_key: str = ""):
+    def __init__(self, api_key: str = "", base_url: str = ""):
         """
         Args:
-            api_key: Tavily API Key；为空时 :meth:`search` 抛 :class:`SearchError`。
+            api_key:  Tavily API Key；为空时 :meth:`search` 抛 :class:`SearchError`。
+            base_url: Tavily 兼容服务地址（SDK 会拼接 ``/search``）；
+                      留空使用 Tavily 官方地址。
         """
         self.api_key = api_key
+        self.base_url = (base_url or "").strip().rstrip("/")
 
     def search(
         self,
@@ -42,7 +45,9 @@ class TavilySearchClient(BaseSearchClient):
             ) from exc
 
         try:
-            client = TavilyClient(api_key=self.api_key)
+            client = TavilyClient(
+                api_key=self.api_key, api_base_url=self.base_url or None
+            )
             response: dict[str, Any] = client.search(
                 query=query,
                 search_depth=search_depth,

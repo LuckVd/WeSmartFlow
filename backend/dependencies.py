@@ -11,7 +11,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRE_HOURS
 
-security = HTTPBearer()
+# Missing credentials are authentication failures.  Returning 401 keeps the
+# browser and mini-program clients on the same re-login path as expired JWTs.
+security = HTTPBearer(auto_error=False)
 
 
 def create_access_token(user_id: str) -> str:
@@ -48,10 +50,16 @@ def decode_access_token(token: str) -> str:
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> str:
     """
     FastAPI 依赖：从 Authorization: Bearer <token> 中解析出 user_id。
     验证失败抛出 401。
     """
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="需要登录",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return decode_access_token(credentials.credentials)

@@ -264,67 +264,64 @@ class ValidateVizCodeTool(BaseTool):
         if not node:
             return ["缺少 Node.js"]
 
-        # 包成 async IIFE：与运行时行为一致，且让顶层 await 合法
+        # 包成 async IIFE：与运行时行为一致，且让顶层 await 合法。
+        # ESLint v9 使用显式 --config 时会以 cwd 作为 base path；目标文件若在
+        # cwd 之外会被标记为 ignored。因此这里在一次性临时目录中写入待检文件，
+        # 并把 subprocess cwd 指向该目录，避免在项目目录留下临时 JS 文件。
         wrapped = f"(async function() {{\n{code}\n}})()\n"
-        # eslint flat config 的 basePath 限制要求目标文件在 config 所在目录树内，
-        # 因此把临时文件写到 _ESLINT_DIR 下
-        tmp_name = f".tmp_{uuid.uuid4().hex}.js"
-        tmp_path = _ESLINT_DIR / tmp_name
         try:
-            tmp_path.write_text(wrapped, encoding="utf-8")
-            # 通过环境变量把 node 加到 PATH，eslint shebang 才能跑起来
-            env = os.environ.copy()
-            env["PATH"] = f"{Path(node).parent}{os.pathsep}{env.get('PATH', '')}"
-            proc = subprocess.run(
-                [
-                    str(_ESLINT_BIN),
-                    "--config",
-                    str(_ESLINT_CONFIG),
-                    "--no-config-lookup",
-                    "--format",
-                    "json",
-                    str(tmp_path),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                env=env,
-            )
-            stdout = proc.stdout.strip()
-            if proc.returncode not in (0, 1) or not stdout:
-                return ["ESLint 未完成检查：" + proc.stderr[:300]]
-            try:
-                results = json.loads(stdout)
-            except json.JSONDecodeError:
-                return ["ESLint 返回无效 JSON"]
-            if (
-                not isinstance(results, list)
-                or len(results) != 1
-                or "messages" not in results[0]
-            ):
-                return ["ESLint 未返回文件检查结果"]
+            with tempfile.TemporaryDirectory(prefix="eduviz_eslint_") as tmp_dir:
+                tmp_path = Path(tmp_dir) / f"tmp_{uuid.uuid4().hex}.js"
+                tmp_path.write_text(wrapped, encoding="utf-8")
+                # 通过环境变量把 node 加到 PATH，eslint shebang 才能跑起来
+                env = os.environ.copy()
+                env["PATH"] = f"{Path(node).parent}{os.pathsep}{env.get('PATH', '')}"
+                proc = subprocess.run(
+                    [
+                        str(_ESLINT_BIN),
+                        "--config",
+                        str(_ESLINT_CONFIG),
+                        "--no-config-lookup",
+                        "--format",
+                        "json",
+                        tmp_path.name,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    env=env,
+                    cwd=tmp_dir,
+                )
+                stdout = proc.stdout.strip()
+                if proc.returncode not in (0, 1) or not stdout:
+                    return ["ESLint 未完成检查：" + proc.stderr[:300]]
+                try:
+                    results = json.loads(stdout)
+                except json.JSONDecodeError:
+                    return ["ESLint 返回无效 JSON"]
+                if (
+                    not isinstance(results, list)
+                    or len(results) != 1
+                    or "messages" not in results[0]
+                ):
+                    return ["ESLint 未返回文件检查结果"]
 
-            issues: list[str] = []
-            for msg in results[0].get("messages", []):
-                if "ignored" in msg.get("message", "").lower():
-                    issues.append("ESLint 跳过了文件检查")
-                # 只把 error（severity=2）当成阻塞，warning 忽略
-                if msg.get("severity") != 2:
-                    continue
-                rule = msg.get("ruleId") or "parse"
-                line = msg.get("line", 0)
-                col = msg.get("column", 0)
-                # wrap 多了一行 "(async function() {"，所以行号 -1 还原用户视角
-                user_line = max(1, line - 1) if line else 0
-                text = (msg.get("message") or "").rstrip(".")
-                issues.append(f"{rule} @ line {user_line}:{col} — {text}")
-            return issues
+                issues: list[str] = []
+                for msg in results[0].get("messages", []):
+                    if "ignored" in msg.get("message", "").lower():
+                        issues.append("ESLint 跳过了文件检查")
+                    # 只把 error（severity=2）当成阻塞，warning 忽略
+                    if msg.get("severity") != 2:
+                        continue
+                    rule = msg.get("ruleId") or "parse"
+                    line = msg.get("line", 0)
+                    col = msg.get("column", 0)
+                    # wrap 多了一行 "(async function() {"，所以行号 -1 还原用户视角
+                    user_line = max(1, line - 1) if line else 0
+                    text = (msg.get("message") or "").rstrip(".")
+                    issues.append(f"{rule} @ line {user_line}:{col} — {text}")
+                return issues
         except subprocess.TimeoutExpired:
             return ["ESLint 超时（>15s），未通过语义检查"]
         except Exception as exc:  # pylint: disable=broad-except
             return [f"ESLint 检查异常：{exc}"]
-        finally:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:  # pylint: disable=broad-except
-                pass

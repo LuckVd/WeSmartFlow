@@ -72,11 +72,66 @@ class UsageTests(unittest.TestCase):
         }
         peak = datetime(2026, 9, 7, 9, tzinfo=ZoneInfo("Asia/Shanghai"))
         quiet = peak.replace(hour=12)
+        # 网关价目：$0.285714 / $0.0058 / $1.142858 每百万 token，按 7.2 折算
         self.assertEqual(
-            pricing.calc_llm_credits("deepseek-v4-flash", usage, at=peak), 3320
+            pricing.calc_llm_credits("deepseek-v4-flash", usage, at=peak), 2477
         )
         self.assertEqual(
-            pricing.calc_llm_credits("deepseek-v4-flash", usage, at=quiet), 1660
+            pricing.calc_llm_credits("deepseek-v4-flash", usage, at=quiet), 1239
+        )
+        # 周末与工作日同一峰谷规则
+        saturday_peak = datetime(2026, 9, 12, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
+        saturday_quiet = saturday_peak.replace(hour=20)
+        self.assertEqual(
+            pricing.calc_llm_credits("deepseek-v4-flash", usage, at=saturday_peak),
+            2477,
+        )
+        self.assertEqual(
+            pricing.calc_llm_credits("deepseek-v4-flash", usage, at=saturday_quiet),
+            1239,
+        )
+
+    def test_llm_uses_provider_cost_usd_else_token_estimate(self):
+        usage = {"prompt_tokens": 1000, "completion_tokens": 100}
+        peak = datetime(2026, 9, 7, 9, tzinfo=ZoneInfo("Asia/Shanghai"))
+        estimated = pricing.calc_llm_credits("deepseek-v4-flash", usage, at=peak)
+        # 供应商给出真实成本时直接采用（$0.001 × 7.2 = 7200 credits）
+        self.assertEqual(
+            pricing.calc_llm_credits(
+                "deepseek-v4-flash", {**usage, "cost_usd": 0.001}, at=peak
+            ),
+            7200,
+        )
+        # 缺失 / 非法 / 非正数 → 退回 token 估算
+        for bad in (None, 0, -0.5, "x", float("nan")):
+            self.assertEqual(
+                pricing.calc_llm_credits(
+                    "deepseek-v4-flash", {**usage, "cost_usd": bad}, at=peak
+                ),
+                estimated,
+            )
+
+    def test_extract_usage_keeps_gateway_cost_usd(self):
+        from types import SimpleNamespace
+
+        from agent_core.llm.openai_llm import _extract_usage
+
+        raw = SimpleNamespace(
+            prompt_tokens=10, completion_tokens=5, total_tokens=15, cost_usd=1.5e-05
+        )
+        self.assertEqual(_extract_usage(raw)["cost_usd"], 1.5e-05)
+        raw.cost_usd = 0
+        self.assertNotIn("cost_usd", _extract_usage(raw))
+        raw.cost_usd = True
+        self.assertNotIn("cost_usd", _extract_usage(raw))
+
+    def test_usd_to_credits_and_tavily_price(self):
+        self.assertEqual(pricing.usd_to_credits(0.018395), 132444)
+        for bad in (None, 0, -1, "x", float("nan")):
+            self.assertIsNone(pricing.usd_to_credits(bad))
+        # 网关 Tavily 兼容搜索按 $0.0003/credit 计费
+        self.assertEqual(
+            pricing.calc_unit_credits("search", 1000, provider="tavily"), 2160000
         )
 
     def test_media_units_and_overrides(self):
@@ -91,7 +146,7 @@ class UsageTests(unittest.TestCase):
             pricing.calc_unit_credits("audio", 1000, model="cosyvoice-v1"), 200000
         )
         self.assertEqual(
-            pricing.calc_unit_credits("search", 2, provider="tavily"), 115200
+            pricing.calc_unit_credits("search", 2, provider="tavily"), 4320
         )
         self.assertEqual(
             pricing.calc_unit_credits("search", 1, provider="anysearch"), 0
@@ -149,6 +204,42 @@ class UsageTests(unittest.TestCase):
         with self.assertRaises(credit_quota.CreditsExceeded):
             credit_quota.assert_available("alice", platform_key=True)
         credit_quota.assert_available("alice", platform_key=False)
+
+    def test_system_embedding_is_token_priced_but_never_debits_a_user_wallet(self):
+        credits = usage_meter.record_usage(
+            "__system__",
+            category="embedding",
+            scene="kg",
+            model="text-embedding-v4",
+            usage={"prompt_tokens": 1000, "completion_tokens": 0},
+            provider="openai-compatible-embedding",
+            is_system=True,
+            counts_quota=False,
+        )
+        self.assertEqual(credits, 500)
+        event = self.conn.execute(
+            "SELECT category, is_system, prompt_tokens, credits FROM usage_events"
+        ).fetchone()
+        self.assertEqual(
+            dict(event),
+            {
+                "category": "embedding",
+                "is_system": 1,
+                "prompt_tokens": 1000,
+                "credits": 500,
+            },
+        )
+        details = self.conn.execute(
+            "SELECT provider, counts_quota FROM usage_details"
+        ).fetchone()
+        self.assertEqual(
+            dict(details),
+            {
+                "provider": "openai-compatible-embedding",
+                "counts_quota": 0,
+            },
+        )
+        self.assertEqual(usage_meter.get_period_credits("__system__"), 0)
 
     def test_raw_platform_calls_cannot_use_personal_key_exemption(self):
         self.exhaust("alice")
@@ -239,7 +330,7 @@ class UsageTests(unittest.TestCase):
                 with_quota=True,
             )
             s.search("q")
-        self.assertEqual(usage_meter.get_period_credits("alice"), 115200)
+        self.assertEqual(usage_meter.get_period_credits("alice"), 4320)
         self.assertEqual(usage_meter.get_period_credits("__system__"), 0)
         self.assertEqual(usage_meter.list_usage_events("__system__")[0]["is_system"], 1)
 

@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     id                TEXT PRIMARY KEY,
     user_id           TEXT NOT NULL,
     period            TEXT NOT NULL,
-    category          TEXT NOT NULL,
+    category          TEXT NOT NULL,              -- llm / embedding / search / image / audio
     scene             TEXT NOT NULL DEFAULT 'unknown',
     model             TEXT NOT NULL DEFAULT '',
     prompt_tokens     INTEGER NOT NULL DEFAULT 0,

@@ -184,12 +184,12 @@
             </div>
           </div>
 
-          <!-- Knowledge graph overview -->
+          <!-- Knowledge brain overview -->
           <div class="card ov-card">
             <div class="section-header">
-              <h3 class="section-title">知识图谱概览</h3>
+              <h3 class="section-title">知识大脑概览</h3>
               <button class="link-btn" @click="$router.push('/graph')">
-                查看图谱 →
+                进入大脑 →
               </button>
             </div>
             <!-- 无节点提示 -->
@@ -456,7 +456,7 @@ const maxHours = computed(() =>
   Math.max(...weekData.value.map((d) => d.hours), 0.1),
 );
 
-// ── 知识图谱学科概览 ──────────────────────────────────────
+// ── 知识大脑学科概览 ──────────────────────────────────────
 const TAG_COLORS = [
   "#6366f1",
   "#10b981",

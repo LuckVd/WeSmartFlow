@@ -12,7 +12,10 @@ import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import Field
+
+from api.contracts import ApiRequest
+from api.streaming import encode_sse_event, event_stream_headers
 
 from dependencies import get_current_user
 from services.credit_quota import CreditsExceeded
@@ -25,10 +28,10 @@ logger = logging.getLogger(__name__)
 gen_router = APIRouter(prefix="/api/cards", tags=["cards"])
 
 
-class GenerateHtmlCardRequest(BaseModel):
-    title: str
-    content: str
-    node_ids: list[str] = []
+class GenerateHtmlCardRequest(ApiRequest):
+    title: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=40_000)
+    node_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 @gen_router.post("/generate-html")
@@ -63,7 +66,7 @@ async def generate_html_card(
                     try:
                         parsed = json.loads(text)
                         if "file_id" in parsed:
-                            yield f"data: {json.dumps({'type': 'result', **parsed}, ensure_ascii=False)}\n\n"
+                            yield encode_sse_event("result", **parsed)
                             continue
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.exception(
@@ -72,23 +75,25 @@ async def generate_html_card(
                             text,
                         )
 
-                    yield f"data: {json.dumps({'type': 'progress', 'message': text}, ensure_ascii=False)}\n\n"
+                    yield encode_sse_event("progress", message=text)
                 # AgentFinalEvent / 其它流式事件忽略
         except asyncio.CancelledError:
             logger.info("[generate_html_card] 生成被取消")
         except CreditsExceeded as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'code': 'credits_exceeded'}, ensure_ascii=False)}\n\n"
-        except Exception as e:  # pylint: disable=broad-except
+            yield encode_sse_event("error", message=str(e), code="credits_exceeded")
+        except Exception:  # pylint: disable=broad-except
             logger.exception("[generate_html_card] 生成失败")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            yield encode_sse_event(
+                "error",
+                message="服务暂时不可用，请稍后重试。",
+                code="internal_error",
+                retryable=True,
+            )
         finally:
-            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            yield encode_sse_event("done")
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers=event_stream_headers(),
     )

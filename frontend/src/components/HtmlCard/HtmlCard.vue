@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootRef" class="html-card-root">
+  <div ref="rootRef" class="html-card-root" :class="{ 'is-compact': compact }">
     <!-- 加载中 -->
     <div v-if="loading" class="html-card-loading">
       <div class="html-card-spinner"></div>
@@ -24,22 +24,51 @@
       <button class="html-card-btn" @click="load">重试</button>
     </div>
 
-    <!-- 缩放容器：固定原始尺寸，通过 transform scale 适配，绝对居中 -->
+    <!-- 可滚动缩放视口：自动适配 + 用户手动放大查看局部 -->
+    <div ref="viewportRef" class="html-card-viewport">
+      <div
+        class="html-card-stage"
+        :style="{
+          width: naturalW * effectiveScale + 'px',
+          height: naturalH * effectiveScale + 'px',
+          visibility: loading || !sizeReady ? 'hidden' : 'visible',
+        }"
+      >
+        <div
+          class="html-card-scaler"
+          :style="{
+            width: naturalW + 'px',
+            height: naturalH + 'px',
+            transform: `scale(${effectiveScale})`,
+          }"
+        >
+          <iframe
+            ref="iframeRef"
+            class="html-card-iframe"
+            scrolling="no"
+            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            @load="onIframeLoad"
+          ></iframe>
+        </div>
+      </div>
+    </div>
+
     <div
-      class="html-card-scaler"
-      :style="{
-        width: naturalW + 'px',
-        height: naturalH + 'px',
-        transform: `translate(-50%, -50%) scale(${scale})`,
-        visibility: loading || !sizeReady ? 'hidden' : 'visible',
-      }"
+      v-if="showZoomControls && !loading && !error && sizeReady"
+      class="html-card-zoom-controls"
     >
-      <iframe
-        ref="iframeRef"
-        class="html-card-iframe"
-        sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-        @load="onIframeLoad"
-      ></iframe>
+      <span class="zoom-label">缩放</span>
+      <input
+        v-model.number="userZoomPct"
+        class="zoom-slider"
+        type="range"
+        min="80"
+        max="220"
+        step="5"
+        aria-label="卡片缩放"
+      />
+      <span class="zoom-value">{{ userZoomPct }}%</span>
+      <button class="zoom-reset" type="button" @click="resetZoom">适配</button>
     </div>
 
     <!-- 选中文本气泡 -->
@@ -156,7 +185,14 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
+import {
+  computed,
+  ref,
+  watch,
+  onMounted,
+  onBeforeUnmount,
+  nextTick,
+} from "vue";
 import { api } from "../../api/base.js";
 import { renderMd } from "../../composables/useMarkdown.js";
 import { llmApi } from "../../api/llm.js";
@@ -166,6 +202,8 @@ const props = defineProps({
   title: { type: String, default: "" },
   script: { type: String, default: "" },
   showHeader: { type: Boolean, default: true },
+  /** 缩略图/只读预览模式：隐藏缩放控件、禁用交互，只展示主体内容 */
+  compact: { type: Boolean, default: false },
   /** 传入当前会话 ID，用于「问AI」功能；不传则不显示气泡 */
   sessionId: { type: String, default: "" },
 });
@@ -173,6 +211,7 @@ const props = defineProps({
 const emit = defineEmits(["loaded", "error"]);
 
 const rootRef = ref(null);
+const viewportRef = ref(null);
 const iframeRef = ref(null);
 const loading = ref(true);
 const error = ref("");
@@ -184,6 +223,10 @@ const DEFAULT_NATURAL_HEIGHT = 600;
 const naturalW = ref(DEFAULT_NATURAL_WIDTH);
 const naturalH = ref(DEFAULT_NATURAL_HEIGHT);
 const scale = ref(1);
+const userZoomPct = ref(100);
+const compact = computed(() => props.compact || props.showHeader === false);
+const showZoomControls = computed(() => !compact.value);
+const effectiveScale = computed(() => scale.value * (userZoomPct.value / 100));
 
 // ── 选中文本气泡 ──────────────────────────────────────────────────
 const selectionBubble = ref({ visible: false, x: 0, y: 0, text: "" });
@@ -250,12 +293,23 @@ async function doAsk() {
 
 // ── 缩放计算 ──────────────────────────────────────────────────────
 function updateScale() {
-  if (!rootRef.value) return;
-  const { offsetWidth: cw, offsetHeight: ch } = rootRef.value;
-  if (!cw || !ch) return;
-  const scaleW = cw / naturalW.value;
-  const scaleH = ch / naturalH.value;
-  scale.value = Math.min(scaleW, scaleH);
+  const viewport = viewportRef.value || rootRef.value;
+  if (!viewport) return;
+  const { clientWidth: cw } = viewport;
+  if (!cw) return;
+  // 默认只按宽度贴合 frame：高度超出时交给外层视口滚动，避免为了塞进高度而把卡片缩得很窄。
+  scale.value = Math.max(0.05, (cw - 1) / naturalW.value);
+}
+
+function resetZoom() {
+  userZoomPct.value = 100;
+  nextTick(() => {
+    if (viewportRef.value) {
+      viewportRef.value.scrollLeft = 0;
+      viewportRef.value.scrollTop = 0;
+    }
+    updateScale();
+  });
 }
 
 function isRootMeasurable() {
@@ -324,6 +378,14 @@ function handleMessage(event) {
     return;
   }
 
+  // iframe 内禁用自带滚动条，滚轮统一转给外层视口，避免出现内外两个纵向滚动条。
+  if (msg?.type === "html_card_wheel") {
+    const viewport = viewportRef.value;
+    if (!viewport || compact.value) return;
+    viewport.scrollBy({ left: msg.deltaX || 0, top: msg.deltaY || 0 });
+    return;
+  }
+
   // 选中文本上报
   if (msg?.type === "text_selected") {
     const text = (msg.text || "").trim();
@@ -331,18 +393,13 @@ function handleMessage(event) {
       selectionBubble.value.visible = false;
       return;
     }
-    // 将 iframe 内坐标转换为卡片容器坐标
-    // msg.x / msg.y 是相对 iframe 内容的坐标，需要乘以 scale 再加上 scaler 的偏移
+    // 将 iframe 内坐标转换为卡片容器坐标；放大并滚动后要扣掉视口滚动量
     const root = rootRef.value;
-    if (!root) return;
+    const viewport = viewportRef.value;
+    if (!root || !viewport) return;
     const cw = root.offsetWidth;
-    const ch = root.offsetHeight;
-    const scalerLeft = cw / 2;
-    const scalerTop = ch / 2;
-    // scaler 的 transform: translate(-50%,-50%) scale(scale)
-    // 所以 iframe 内 (x, y) 对应容器坐标：scalerLeft + (x - naturalW/2) * scale
-    const bx = scalerLeft + (msg.x - naturalW.value / 2) * scale.value;
-    const by = scalerTop + (msg.y - naturalH.value / 2) * scale.value - 32; // 气泡在选区上方
+    const bx = msg.x * effectiveScale.value - viewport.scrollLeft;
+    const by = msg.y * effectiveScale.value - viewport.scrollTop - 32;
 
     selectionBubble.value = {
       visible: true,
@@ -363,6 +420,15 @@ function handleMessage(event) {
 function injectResizeScript(html) {
   const style = `
 <style id="html-card-adaptive-image-style">
+  html,
+  body {
+    overflow: hidden !important;
+    scrollbar-width: none !important;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none !important;
+  }
   img,
   .card-image {
     max-width: 100% !important;
@@ -418,6 +484,10 @@ ${scriptOpen}
   normalizeExternalLinks();
   window.addEventListener('load', function() { normalizeImages(); normalizeExternalLinks(); setTimeout(report, 300); });
   window.addEventListener('message', function(e) { if (e.data?.type === 'requestResize') report(); });
+  document.addEventListener('wheel', function(e) {
+    window.parent.postMessage({ type: 'html_card_wheel', deltaX: e.deltaX, deltaY: e.deltaY }, '*');
+    e.preventDefault();
+  }, { passive: false });
   var t;
   new MutationObserver(function() { normalizeImages(); normalizeExternalLinks(); clearTimeout(t); t = setTimeout(report, 200); })
     .observe(document.body, { childList: true, subtree: true, attributes: true });
@@ -469,6 +539,11 @@ async function load() {
   naturalW.value = DEFAULT_NATURAL_WIDTH;
   naturalH.value = DEFAULT_NATURAL_HEIGHT;
   scale.value = 1;
+  userZoomPct.value = 100;
+  if (viewportRef.value) {
+    viewportRef.value.scrollLeft = 0;
+    viewportRef.value.scrollTop = 0;
+  }
 
   try {
     const res = await api.getRaw(`/api/documents/${props.fileId}/raw`);
@@ -571,13 +646,47 @@ defineExpose({ reload: load });
   overflow: hidden;
 }
 
-/* 固定原始尺寸的缩放层，绝对居中 */
+.html-card-viewport {
+  position: absolute;
+  inset: 0 0 40px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.html-card-viewport::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.html-card-viewport::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.42);
+  border-radius: 999px;
+}
+
+.html-card-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.html-card-root.is-compact .html-card-viewport {
+  inset: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.html-card-stage {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+/* 固定原始尺寸的缩放层：左上角缩放，放大后可滚动查看局部 */
 .html-card-scaler {
   flex-shrink: 0;
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform-origin: center center;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
 }
 
 /* iframe 撑满缩放层 */
@@ -647,6 +756,71 @@ defineExpose({ reload: load });
   background: transparent;
   cursor: pointer;
   font-size: 12px;
+}
+
+.html-card-zoom-controls {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card, #fff) 92%, transparent);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.zoom-label,
+.zoom-value {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  font-weight: 600;
+}
+
+.zoom-value {
+  min-width: 38px;
+  text-align: right;
+}
+
+.zoom-slider {
+  flex: 1 1 auto;
+  min-width: 80px;
+  accent-color: var(--brand, #4f46e5);
+}
+
+.zoom-reset {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 999px;
+  background: var(--bg-elevated, #fff);
+  color: var(--text-secondary, #4b5563);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.zoom-reset:hover {
+  color: var(--brand, #4f46e5);
+  border-color: color-mix(
+    in srgb,
+    var(--brand, #4f46e5) 35%,
+    var(--border, #e5e7eb)
+  );
+}
+
+.html-card-root.is-compact .html-card-zoom-controls,
+.html-card-root.is-compact .ask-ai-bubble,
+.html-card-root.is-compact .ask-ai-panel {
+  display: none;
 }
 
 /* ── 选中文本气泡 ─────────────────────────────────────────────── */

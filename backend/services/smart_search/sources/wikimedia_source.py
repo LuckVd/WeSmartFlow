@@ -15,7 +15,9 @@ API 文档：https://commons.wikimedia.org/w/api.php
 from __future__ import annotations
 
 import logging
+from typing import Any
 
+from integrations import IntegrationHttpClient, IntegrationPolicy
 from .base_source import BaseSource
 from ..models import SearchResult
 
@@ -30,6 +32,17 @@ class WikimediaSource(BaseSource):
     description = "维基共享资源图片搜索（免费，无需注册），返回 CC 协议的教育/学术图片"
     modalities = ["image"]
     languages = ["zh", "en"]
+
+    def __init__(self, http_client: Any = None):
+        self._http = http_client or IntegrationHttpClient(
+            IntegrationPolicy(
+                name="wikimedia",
+                timeout_seconds=12.0,
+                max_retries=1,
+                retry_safe=True,
+                max_concurrency=4,
+            )
+        )
 
     def is_available(self) -> bool:
         try:
@@ -47,24 +60,19 @@ class WikimediaSource(BaseSource):
         返回图片标题 + 描述 + 图片直链 URL。
         """
         try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                # Step 1: 搜索文件
-                search_resp = await client.get(
-                    _WIKIMEDIA_API,
-                    params={
-                        "action": "query",
-                        "format": "json",
-                        "list": "search",
-                        "srsearch": f"{query} filetype:bitmap|drawing",
-                        "srnamespace": "6",  # File namespace
-                        "srlimit": max_results,
-                        "srprop": "snippet|titlesnippet",
-                    },
-                )
-                search_resp.raise_for_status()
-                search_data = search_resp.json()
+            # Step 1: 搜索文件
+            search_data = await self._http.get_json(
+                _WIKIMEDIA_API,
+                params={
+                    "action": "query",
+                    "format": "json",
+                    "list": "search",
+                    "srsearch": f"{query} filetype:bitmap|drawing",
+                    "srnamespace": "6",  # File namespace
+                    "srlimit": max_results,
+                    "srprop": "snippet|titlesnippet",
+                },
+            )
 
         except Exception as e:
             logger.error("[Wikimedia] 搜索异常: %s", e)
@@ -78,23 +86,18 @@ class WikimediaSource(BaseSource):
         titles = [p["title"] for p in pages]
         results = []
         try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                img_resp = await client.get(
-                    _WIKIMEDIA_API,
-                    params={
-                        "action": "query",
-                        "format": "json",
-                        "titles": "|".join(titles),
-                        "prop": "imageinfo|revisions",
-                        "iiprop": "url|extmetadata",
-                        "iiurlwidth": 800,  # 请求缩略图宽度 800px
-                        "rvprop": "content",
-                    },
-                )
-                img_resp.raise_for_status()
-                img_data = img_resp.json()
+            img_data = await self._http.get_json(
+                _WIKIMEDIA_API,
+                params={
+                    "action": "query",
+                    "format": "json",
+                    "titles": "|".join(titles),
+                    "prop": "imageinfo|revisions",
+                    "iiprop": "url|extmetadata",
+                    "iiurlwidth": 800,  # 请求缩略图宽度 800px
+                    "rvprop": "content",
+                },
+            )
 
         except Exception as e:
             logger.error("[Wikimedia] 图片信息获取异常: %s", e)

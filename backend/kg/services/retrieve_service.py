@@ -70,34 +70,49 @@ class RetrieveService:
         degraded = False
         degraded_reason = ""
 
+        # ---- Stage 0: 空库短路 ----
+        # 库里没有任何 approved concept 时，后续的 query embedding、关系 probe
+        # 冷启动全是白花钱白等时间，直接返回空结果（原因文案与旧行为一致）。
+        # 探测本身失败（None）不阻断，继续走原流程。
+        try:
+            has_data: Optional[bool] = self.concept_repo.exists_any_approved()
+        except Exception:  # pylint: disable=broad-except
+            has_data = None
+        if has_data is False:
+            return RetrieveResponse(
+                degraded=True,
+                degraded_reason="KG 库内无 approved concept(尚未建档)",
+            )
+
+        # ---- query 向量：整次检索只 embed 一次 ----
+        # 锚定（Stage 1）与关系打分/图扩展（Stage 2）共用同一个 q_emb。
+        embedder = get_embedder()
+        q_emb: list[float] = []
+        query = (req.query or "").strip()
+        if query and embedder and getattr(embedder, "dim", 0) > 0:
+            try:
+                q_emb = embedder.embed_one(query)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("retrieve: query 嵌入失败，无法锚定入口 err=%s", exc)
+                q_emb = []
+                degraded = True
+                degraded_reason = f"query 嵌入失败: {exc}"
+
         # ---- Stage 1: 锚定入口 ----
-        entry_briefs, weak_candidates, anchor_reason = self._anchor(req)
+        entry_briefs, weak_candidates, anchor_reason = self._anchor(req, q_emb)
         entry_ids = [c.id for c in entry_briefs]
         if not entry_briefs:
             degraded = True
-            degraded_reason = anchor_reason or "未找到符合阈值的入口概念"
+            degraded_reason = degraded_reason or (
+                anchor_reason or "未找到符合阈值的入口概念"
+            )
 
         # 记录被走过的边,稍后异步累加 support_count
         traversed_edge_ids: list[str] = []
 
         # ---- 关系语义打分 ----
-        embedder = get_embedder()
-        q_emb: list[float] = []
-        if (
-            req.graph_expand
-            and embedder
-            and getattr(embedder, "dim", 0) > 0
-            and req.query
-        ):
-            try:
-                q_emb = embedder.embed_one(req.query)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("retrieve: query 嵌入失败，退化为非图模式 err=%s", exc)
-                q_emb = []
-                degraded = True
-                degraded_reason = degraded_reason or f"query 嵌入失败: {exc}"
-
-        rel_scores = score_relations(q_emb) if q_emb else {}
+        # 仅图扩展模式需要关系语义（graph_expand=False 时不触发 probe 构建）
+        rel_scores = score_relations(q_emb) if (req.graph_expand and q_emb) else {}
         rel_dist = softmax_normalize(rel_scores, temperature=0.08)
 
         # ---- Stage 2: 图扩展 ----
@@ -122,7 +137,7 @@ class RetrieveService:
         facets: list[FacetBrief] = []
         if req.need_facets and subgraph_concept_ids:
             facets = self._select_facets(
-                req=req, subgraph_concept_ids=subgraph_concept_ids
+                req=req, subgraph_concept_ids=subgraph_concept_ids, q_emb=q_emb
             )
 
         # ---- 反馈强化:被走过的 edge 累加 support_count(失败不影响响应) ----
@@ -150,8 +165,9 @@ class RetrieveService:
     # ============================================================
 
     def _anchor(
-        self, req: RetrieveRequest
+        self, req: RetrieveRequest, q_emb: list[float]
     ) -> tuple[list[ConceptBrief], list[ConceptBrief], str]:
+        """入口锚定。``q_emb`` 为调用方已算好的 query 向量（避免重复 embed）。"""
         results: list[ConceptBrief] = []
         weak: list[ConceptBrief] = []
         seen: set[str] = set()
@@ -165,6 +181,10 @@ class RetrieveService:
             logger.warning("_anchor: vector store 未启用，无法锚定入口")
             return results, weak, "向量库未启用（embedder 不可用）"
 
+        if not q_emb:
+            # query 嵌入失败/不可用：原因已由 retrieve 记录，这里不再重试 embed
+            return results, weak, "query 向量不可用，无法锚定入口"
+
         min_score = (
             req.anchor_min_score
             if req.anchor_min_score is not None
@@ -177,7 +197,9 @@ class RetrieveService:
         )
 
         try:
-            hits = store.search(COLLECTION_CONCEPT, query, top_k=KG_ANCHOR_TOPK)
+            hits = store.search_by_vector(
+                COLLECTION_CONCEPT, q_emb, top_k=KG_ANCHOR_TOPK
+            )
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("_anchor: 向量召回失败 err=%s", exc)
             return results, weak, f"向量召回异常: {exc}"
@@ -412,6 +434,7 @@ class RetrieveService:
         self,
         req: RetrieveRequest,
         subgraph_concept_ids: list[str],
+        q_emb: Optional[list[float]] = None,
     ) -> list[FacetBrief]:
         per_concept = max(1, req.top_k_facets_per_concept)
         # 总预算 = 每个概念配额 × 概念数(再做向量重排,留点余量)
@@ -423,6 +446,8 @@ class RetrieveService:
             kinds=req.facet_kinds or None,
             top_k=total_budget,
             per_concept_cap=per_concept,
+            # 复用本次检索已算好的 query 向量，不在 facet 召回里重复 embed
+            query_vec=q_emb or None,
         )
 
     # ============================================================

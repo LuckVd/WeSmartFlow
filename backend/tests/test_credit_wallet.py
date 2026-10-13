@@ -150,26 +150,33 @@ class WalletTests(unittest.TestCase):
         self.assertEqual(len(self.entries("signup")), 2)
 
     def test_github_204_404_failure_and_retry(self):
-        for status in [404, 403, 500]:
-            with patch.object(
-                github_reward.requests,
-                "get",
-                return_value=MagicMock(status_code=status),
-            ):
-                result = github_reward.verify_and_grant("a", "123", "fake-token")
-                self.assertIn(result["status"], ("not_starred", "unavailable"))
-                self.assertEqual(len(self.entries("github_star")), 0)
-        with patch.object(
-            github_reward.requests, "get", return_value=MagicMock(status_code=204)
-        ):
-            self.assertEqual(
-                github_reward.verify_and_grant("a", "123", "fake-token")["status"],
-                "granted",
+        from integrations.http import IntegrationHttpError
+
+        for outcome in [False, IntegrationHttpError("GitHub unavailable")]:
+            client = MagicMock()
+            if isinstance(outcome, Exception):
+                client.has_starred.side_effect = outcome
+            else:
+                client.has_starred.return_value = outcome
+            result = github_reward.verify_and_grant(
+                "a", "123", "fake-token", client=client
             )
-            self.assertEqual(
-                github_reward.verify_and_grant("a", "123", "fake-token")["status"],
-                "already_claimed",
-            )
+            self.assertIn(result["status"], ("not_starred", "unavailable"))
+            self.assertEqual(len(self.entries("github_star")), 0)
+        client = MagicMock()
+        client.has_starred.return_value = True
+        self.assertEqual(
+            github_reward.verify_and_grant("a", "123", "fake-token", client=client)[
+                "status"
+            ],
+            "granted",
+        )
+        self.assertEqual(
+            github_reward.verify_and_grant("a", "123", "fake-token", client=client)[
+                "status"
+            ],
+            "already_claimed",
+        )
 
     def test_oauth_state_one_use_and_expiry(self):
         from fastapi import HTTPException
@@ -211,12 +218,12 @@ class WalletTests(unittest.TestCase):
     def test_wechat_registration_and_login_only_grant_once(self):
         from routers import auth
 
-        response = MagicMock()
-        response.json.return_value = {"openid": "wallet-test-openid"}
+        client = MagicMock()
+        client.exchange_code.return_value = "wallet-test-openid"
         with (
             patch.object(auth, "WECHAT_MP_APPID", "test"),
             patch.object(auth, "WECHAT_MP_SECRET", "test"),
-            patch.object(auth.http_requests, "get", return_value=response),
+            patch.object(auth, "get_wechat_client", return_value=client),
         ):
             a = auth.wechat_mp_login(auth.WechatMpLoginRequest(code="test"))
             b = auth.wechat_mp_login(auth.WechatMpLoginRequest(code="test"))
@@ -227,25 +234,21 @@ class WalletTests(unittest.TestCase):
     def test_github_registration_receives_signup_and_star_bonus_once(self):
         from routers import auth
 
-        token = MagicMock()
-        token.json.return_value = {"access_token": "test-token"}
-        profile = MagicMock()
-        profile.json.return_value = {
+        client = MagicMock()
+        client.exchange_code.return_value = "test-token"
+        client.current_user.return_value = {
             "id": 789,
             "login": "new",
             "name": "New",
             "email": "github-wallet@example.com",
         }
-
-        def get(url, **kwargs):
-            return MagicMock(status_code=204) if "/user/starred/" in url else profile
+        client.has_starred.return_value = True
 
         with (
             patch.object(auth, "GITHUB_CLIENT_ID", "test"),
             patch.object(auth, "GITHUB_CLIENT_SECRET", "test"),
             patch.object(github_reward, "GITHUB_CLIENT_ID", "test"),
-            patch.object(auth.http_requests, "post", return_value=token),
-            patch.object(auth.http_requests, "get", get),
+            patch.object(auth, "get_github_client", return_value=client),
         ):
             results = []
             for _ in range(2):
@@ -282,28 +285,20 @@ class WalletTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(auth.router)
         client = TestClient(app)
-        token = MagicMock()
-        token.json.return_value = {"access_token": "fake"}
-        profile = MagicMock()
-        profile.json.return_value = {
+        client_adapter = MagicMock()
+        client_adapter.exchange_code.return_value = "fake"
+        client_adapter.current_user.return_value = {
             "id": 789,
             "login": "new",
             "email": "different@example.com",
         }
-
-        def get(url, **kwargs):
-            if "/user/starred/" in url:
-                return MagicMock(status_code=204)
-            if url.endswith("/user"):
-                return profile
-            raise AssertionError("Binding must not query email for account matching")
+        client_adapter.has_starred.return_value = True
 
         with (
             patch.object(auth, "GITHUB_CLIENT_ID", "test"),
             patch.object(auth, "GITHUB_CLIENT_SECRET", "test"),
             patch.object(github_reward, "GITHUB_CLIENT_ID", "test"),
-            patch.object(auth.http_requests, "post", return_value=token),
-            patch.object(auth.http_requests, "get", get),
+            patch.object(auth, "get_github_client", return_value=client_adapter),
         ):
             self.assertIn(
                 client.get("/api/auth/github/reward/authorize").status_code, (401, 403)
@@ -379,17 +374,15 @@ class WalletTests(unittest.TestCase):
             patch.object(auth, "GITHUB_CLIENT_SECRET", "secret"),
         ):
             state = github_reward.authorize("a", "reward")["state"]
-            token_response = MagicMock()
-            token_response.json.return_value = {"access_token": "fake-token"}
-            user_response = MagicMock()
-            user_response.json.return_value = {
+            client_adapter = MagicMock()
+            client_adapter.exchange_code.return_value = "fake-token"
+            client_adapter.current_user.return_value = {
                 "id": 456,
                 "login": "b",
                 "email": "b@example.com",
             }
             with (
-                patch.object(auth.http_requests, "post", return_value=token_response),
-                patch.object(auth.http_requests, "get", return_value=user_response),
+                patch.object(auth, "get_github_client", return_value=client_adapter),
             ):
                 response = TestClient(app).post(
                     "/api/auth/github/callback", json={"code": "test", "state": state}

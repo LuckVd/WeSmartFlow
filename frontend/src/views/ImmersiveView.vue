@@ -70,7 +70,7 @@
 
           <button
             class="start-btn"
-            :disabled="!topicInput.trim()"
+            :disabled="!topicInput.trim() || imGenerating"
             @click="startImmersive"
           >
             🤖 开始生成课件
@@ -103,6 +103,17 @@
                 <span class="st-topic-name">{{ currentTopic }}</span>
               </div>
             </div>
+            <button
+              v-if="
+                imHasPendingGeneration &&
+                !imBackgroundProcessing &&
+                !imGenerating
+              "
+              class="im-toolbar-resume-btn"
+              @click="imResumeGenerate"
+            >
+              ▶ 继续生成
+            </button>
           </div>
 
           <div v-if="imRestoreError" class="im-resume-banner" role="alert">
@@ -115,8 +126,44 @@
             </button>
           </div>
 
+          <!-- 已转入后台的课程：可重新接入同一个后台任务；若后端已重启则自动从断点续传。 -->
+          <div
+            v-if="imBackgroundProcessing && !imGenerating"
+            class="im-resume-banner im-background-banner"
+          >
+            <div class="im-resume-info">
+              <div class="im-resume-title">⏳ 后台处理中</div>
+              <div class="im-resume-desc">
+                课程正在后台继续生成，已完成
+                <strong>{{ imChapters.length }}</strong>
+                <template v-if="imOutline?.chapters?.length">
+                  / <strong>{{ imOutline.chapters.length }}</strong> 章
+                </template>
+                。可以重新接入实时进度；如果后端刚重启，会自动按磁盘产物从断点续传。
+              </div>
+              <div v-if="imProgressText" class="im-resume-desc">
+                进度：{{ imProgressText }}（{{ imProgressPhase }}）
+              </div>
+            </div>
+            <div class="im-resume-actions">
+              <button class="im-resume-btn-primary" @click="imResumeGenerate">
+                ▶ 查看实时进度
+              </button>
+              <button
+                class="im-resume-btn-ghost im-cancel-background-btn"
+                :disabled="imCancellingBackground"
+                @click="cancelBackgroundProcessing"
+              >
+                {{ imCancellingBackground ? "正在取消…" : "取消后台处理" }}
+              </button>
+            </div>
+          </div>
+
           <!-- 续传提示横幅：恢复历史会话且未完成时由用户决定是否继续 -->
-          <div v-if="imResumePrompt && !imGenerating" class="im-resume-banner">
+          <div
+            v-if="imResumePrompt && !imBackgroundProcessing && !imGenerating"
+            class="im-resume-banner"
+          >
             <div class="im-resume-info">
               <div class="im-resume-title">📚 这门课程还没生成完</div>
               <div class="im-resume-desc">
@@ -150,7 +197,7 @@
             </div>
           </div>
 
-          <!-- 修复提示横幅：课程已“完成”但个别章节 PDF 编译失败/缺失时展示 -->
+          <!-- 修复提示横幅：课程已“完成”但个别章节 PDF 缺失或缺少可访问 doc_id 时展示 -->
           <div
             v-if="imShowRepairPrompt"
             class="im-resume-banner im-repair-banner"
@@ -165,9 +212,9 @@
                       .join("、")
                   }}
                 </strong>
-                的 PDF 未成功生成（共
+                的 PDF 暂时不可打开（共
                 <strong>{{ imMissingPdfChapters.length }}</strong>
-                章）。可以点击“修复”重新生成缺失的讲义，已完整的章节不受影响。
+                章）。可以点击“修复”重新登记或补生成讲义，已完整的章节不受影响。
               </div>
             </div>
             <div class="im-resume-actions">
@@ -298,7 +345,9 @@
                   <div
                     class="md-render md-render-askable"
                     @mouseup="onMdMouseUp($event)"
-                    v-html="renderMd(block.data?.markdown || '')"
+                    v-html="
+                      renderMd(stripHandbookHeading(block.data?.markdown))
+                    "
                   />
                 </div>
 
@@ -622,8 +671,14 @@
                         <div
                           v-if="pdfBlockStates[block.id]?.error"
                           class="pdf-embed-loading pdf-embed-error"
+                          role="button"
+                          tabindex="0"
+                          @click="initPdfBlock(block.id, { force: true })"
+                          @keydown.enter="
+                            initPdfBlock(block.id, { force: true })
+                          "
                         >
-                          {{ pdfBlockStates[block.id].error }}
+                          {{ pdfBlockStates[block.id].error }}，点击重试
                         </div>
                         <div
                           v-else-if="!pdfBlockStates[block.id]?.totalPages"
@@ -712,9 +767,11 @@
                       class="gen-pulse"
                     />
                     <span>{{
-                      block.status === "generating"
-                        ? "正在生成本章内容"
-                        : "本章内容已就绪"
+                      block.data?.stage === "learning_ready"
+                        ? "PDF 已就绪，可以开始学习"
+                        : block.status === "generating"
+                          ? "正在生成本章内容"
+                          : "本章内容已就绪"
                     }}</span>
                   </div>
                   <div class="chapter-status-sub">
@@ -969,23 +1026,13 @@
             <!-- 单一 Agent 视图头部 -->
             <div class="im-agent-header">
               <div class="im-agent-header-left">
-                <div class="agent-avatar" style="width: 28px; height: 28px">
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="white"
-                    stroke-width="2.5"
-                  >
-                    <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" />
-                    <line x1="12" y1="17" x2="12.01" y2="17" />
-                  </svg>
+                <div class="agent-avatar im-logo-avatar">
+                  <img src="/logo.png" alt="AI" />
                 </div>
                 <div>
-                  <div class="im-agent-header-title">智流 Agent</div>
+                  <div class="im-agent-header-title">智流辅导 Agent</div>
                   <div class="im-agent-header-status">
-                    {{ imGenerating ? "正在思考..." : "随时为你解答" }}
+                    {{ imAgentGenerating ? "正在思考..." : "在线" }}
                   </div>
                 </div>
               </div>
@@ -1067,21 +1114,8 @@
                     :class="m.role"
                   >
                     <div v-if="m.role === 'assistant'" class="im-agent-msg-av">
-                      <div
-                        class="agent-avatar"
-                        style="width: 22px; height: 22px"
-                      >
-                        <svg
-                          width="9"
-                          height="9"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="white"
-                          stroke-width="2.5"
-                        >
-                          <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" />
-                          <line x1="12" y1="17" x2="12.01" y2="17" />
-                        </svg>
+                      <div class="agent-avatar im-msg-logo-avatar">
+                        <img src="/logo.png" alt="AI" />
                       </div>
                     </div>
                     <div class="im-agent-msg-bubble" :class="m.role">
@@ -1152,17 +1186,28 @@
           <div class="lc-icon">⚠️</div>
           <div class="lc-title">确认离开？</div>
           <div class="lc-desc">
-            当前正在生成内容，离开将会<strong>中断生成</strong>，已生成的部分内容可能丢失。
+            当前正在生成内容。你可以让它在后台继续，也可以停止生成并保留已经完成的内容。
           </div>
           <div class="lc-actions">
             <button
               class="btn btn-ghost btn-sm"
               @click="showLeaveConfirm = false"
             >
-              继续等待
+              留在当前页
             </button>
-            <button class="btn btn-danger btn-sm" @click="confirmLeave">
-              确认离开
+            <button
+              class="btn btn-ghost btn-sm"
+              :disabled="!currentSessionId"
+              @click="leaveInBackground"
+            >
+              后台继续
+            </button>
+            <button
+              class="btn btn-danger btn-sm"
+              :disabled="!currentSessionId"
+              @click="stopAndLeave"
+            >
+              停止并离开
             </button>
           </div>
         </div>
@@ -1183,6 +1228,10 @@ import {
 } from "@/api/base.js";
 import { api } from "@/api/base.js";
 import { renderMd } from "@/composables/useMarkdown.js";
+import {
+  formatProgressParts,
+  formatProgressPhase,
+} from "@/composables/useGenerationProgress.js";
 import HtmlCard from "@/components/HtmlCard/HtmlCard.vue";
 import VizCard from "@/components/VizCard/VizCard.vue";
 import QuizCard from "@/components/QuizCard/QuizCard.vue";
@@ -1221,10 +1270,19 @@ const imCurrentStage = ref("");
 const imStatusMessage = ref("");
 const imOutline = ref(null);
 const imChapters = ref([]);
+const imPlannedChapters = ref(0);
+const imGeneratedChapters = ref(0);
 // 返回未完成会话时，是否展示“继续生成”提示（交给用户决定）
 const imResumePrompt = ref(false);
+const imBackgroundProcessing = ref(false);
+const imCancellingBackground = ref(false);
+const imGenProgress = ref(null);
+const imProgressText = computed(() => formatProgressParts(imGenProgress.value));
+const imProgressPhase = computed(() =>
+  formatProgressPhase(imGenProgress.value),
+);
 const imRestoreError = ref("");
-// 重新进入课程时，若已“完成”的章节缺失 PDF，可手动触发修复；用户可关闭提示
+// 重新进入课程时，若已“完成”的章节缺失 PDF 或缺少可访问 doc_id，可手动触发修复；用户可关闭提示
 const imRepairDismissed = ref(false);
 const imCurrentChapterIndex = ref(0);
 const imCurrentPage = ref(1);
@@ -1239,24 +1297,43 @@ const imExercisesHtml = ref("");
 const imGeneratingChapterId = ref(0);
 const imGeneratingChapterTitle = ref("");
 const imPdfDocMap = new Map();
+let imGenerationAbortController = null;
 // PDF 渲染任务锁：每个 canvas 同一时间只允许一个 render task。
 // 解决：连续切页/容器尺寸变化触发的并发 render 导致内容旋转错位/重影。
 const imPdfRenderTasks = new WeakMap(); // canvas -> RenderTask
 let imCurrentAudio = null;
 
-// 已装载的章节中，缺少 PDF 讲义的章节（后端标记 ready 但 PDF 编译失败时会出现）。
-// 依据：章节既没有 pdf_doc_id 也没有 pdf_path，即前端无法展示 PDF。
+const imHasPendingGeneration = computed(() => {
+  if (imCompleted.value) return false;
+  if (imPlannedChapters.value > imGeneratedChapters.value) return true;
+  return Boolean(
+    imOutline.value?.chapters?.length &&
+    imChapters.value.length < imOutline.value.chapters.length,
+  );
+});
+
+// 已装载的章节中，PDF 缺失或缺少可访问 doc_id 的章节。
+// 注意：仅有 pdf_path 还不够，前端 PDF 渲染统一走 /api/documents/{doc_id}/raw。
 const imMissingPdfChapters = computed(() =>
-  (imChapters.value || []).filter((c) => !c.pdf_doc_id && !c.pdf_path),
+  (imChapters.value || []).filter((c) => !chapterHasPublishedPdf(c)),
 );
-// 是否展示“修复缺失 PDF”提示：存在缺 PDF 章节、当前非生成中、未在续传、用户未关闭。
+// 是否展示“修复 PDF”提示：存在 PDF 不可访问章节、当前非生成中、未在续传、用户未关闭。
 const imShowRepairPrompt = computed(
   () =>
     imMissingPdfChapters.value.length > 0 &&
     !imGenerating.value &&
+    !imBackgroundProcessing.value &&
     !imResumePrompt.value &&
     !imRepairDismissed.value,
 );
+
+function chapterHasPublishedPdf(chapter) {
+  if (chapter?.pdf_doc_id) return true;
+  const block = canvasBlocks.value.find(
+    (b) => b.id === `pdf_ch${chapter?.chapter_id}`,
+  );
+  return Boolean(block?.data?.doc_id);
+}
 
 // ── LearningCanvas 工作区 ───────────────────────────────────────
 const canvasBlocks = ref([]);
@@ -1264,6 +1341,22 @@ const currentCanvasPageIndex = ref(0);
 const workspaceStage = ref("");
 const workspaceNextActions = ref([]);
 const currentBlockId = ref(null);
+
+const chapterBlockOrder = {
+  md: 0,
+  pdf: 1,
+  quiz_batch: 2,
+  chapter_status: 3,
+};
+
+function sortChapterBlocks(blocks) {
+  return [...blocks].sort((a, b) => {
+    const typeDelta =
+      (chapterBlockOrder[a.type] ?? 99) - (chapterBlockOrder[b.type] ?? 99);
+    if (typeDelta !== 0) return typeDelta;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+}
 
 // ── 分页逻辑：将 canvasBlocks 按规则分组为 pages ─────────────────
 // 规则：
@@ -1292,23 +1385,32 @@ const canvasPages = computed(() => {
     });
   }
 
-  // 章节页：按 chapter_id 分组
+  // 章节页：按 chapter_id 分组。chapter_status 与 PDF 同页展示，让用户
+  // 能看到“可以先学，其他资源继续补全”的状态。
   const chapterIds = [
     ...new Set(
       blocks
         .filter(
           (b) =>
             b.chapter_id &&
-            (b.type === "md" || b.type === "pdf" || b.type === "quiz_batch"),
+            (b.type === "md" ||
+              b.type === "pdf" ||
+              b.type === "quiz_batch" ||
+              b.type === "chapter_status"),
         )
         .map((b) => b.chapter_id),
     ),
   ].sort((a, b) => a - b);
   for (const chId of chapterIds) {
-    const chBlocks = blocks.filter(
-      (b) =>
-        b.chapter_id === chId &&
-        (b.type === "md" || b.type === "pdf" || b.type === "quiz_batch"),
+    const chBlocks = sortChapterBlocks(
+      blocks.filter(
+        (b) =>
+          b.chapter_id === chId &&
+          (b.type === "md" ||
+            b.type === "pdf" ||
+            b.type === "quiz_batch" ||
+            b.type === "chapter_status"),
+      ),
     );
     if (chBlocks.length > 0) {
       const ch = imChapters.value.find((c) => c.chapter_id === chId);
@@ -1592,9 +1694,18 @@ function blockStatusLabel(status) {
 function upsertCanvasBlock(block) {
   if (!block || !block.id) return;
   const idx = canvasBlocks.value.findIndex((b) => b.id === block.id);
-  const next = { ...block, data: block.data || {} };
+  const previous = idx >= 0 ? canvasBlocks.value[idx] : null;
+  const next = {
+    ...previous,
+    ...block,
+    data: { ...(previous?.data || {}), ...(block.data || {}) },
+  };
+  const previousPdfKey = previous
+    ? pdfBlockVersionKey(previous.data || {})
+    : "";
+  const nextPdfKey = next.type === "pdf" ? pdfBlockVersionKey(next.data) : "";
   if (idx >= 0) {
-    canvasBlocks.value[idx] = { ...canvasBlocks.value[idx], ...next };
+    canvasBlocks.value[idx] = next;
   } else {
     canvasBlocks.value.push(next);
   }
@@ -1602,9 +1713,11 @@ function upsertCanvasBlock(block) {
     imOutline.value = next.data.outline;
   }
   if (next.type === "quiz_batch") hydrateQuizBlock(next.id);
-  // ✅ 续传/SSE 新增 PDF block 时主动触发加载，避免 :ref 钩子未触发导致一直转圈
-  if (next.type === "pdf" && !pdfDocMap.has(next.id)) {
-    nextTick(() => initPdfBlock(next.id));
+  // Regenerated chapters may keep their block id.  A changed document id or
+  // content revision must replace the old PDF.js document rather than reuse it.
+  if (next.type === "pdf" && nextPdfKey && previousPdfKey !== nextPdfKey) {
+    invalidatePdfBlock(next.id);
+    nextTick(() => initPdfBlock(next.id, { force: true }));
   }
 }
 
@@ -1795,6 +1908,42 @@ const pdfMainCanvasRefs = {}; // blockId -> 主视图 canvas 元素
 const pdfThumbCanvasRefs = {}; // blockId -> { [pageNum]: canvas }
 const pdfMainRenderTasks = {}; // blockId -> 当前主视图 RenderTask（用于 cancel 旧任务）
 const pdfThumbRenderTasks = {}; // blockId -> { [pageNum]: RenderTask }
+const pdfLoadTokens = {}; // blockId -> latest asynchronous PDF load token
+const pdfThumbQueues = {}; // blockId -> serial thumbnail queue
+
+function pdfBlockVersionKey(data = {}) {
+  const docId = data.doc_id || "";
+  const revision = data.artifact_revision || data.pdf_revision || "";
+  return docId ? `${docId}:${revision}` : "";
+}
+
+function invalidatePdfBlock(blockId) {
+  pdfLoadTokens[blockId] = (pdfLoadTokens[blockId] || 0) + 1;
+  const doc = pdfDocMap.get(blockId);
+  try {
+    doc?.destroy?.();
+  } catch (error) {
+    console.warn("[PDF] 释放旧文档失败:", error);
+  }
+  pdfDocMap.delete(blockId);
+  delete pdfMainRenderTasks[blockId];
+  delete pdfThumbRenderTasks[blockId];
+  delete pdfThumbQueues[blockId];
+  pdfBlockStates.value[blockId] = {
+    currentPage: 1,
+    totalPages: 0,
+    loading: false,
+    error: "",
+    version: "",
+  };
+}
+
+function queuePdfThumb(blockId, pageNum) {
+  const previous = pdfThumbQueues[blockId] || Promise.resolve();
+  pdfThumbQueues[blockId] = previous
+    .catch(() => {})
+    .then(() => renderPdfThumb(blockId, pageNum));
+}
 
 function setPdfMainCanvasRef(blockId, el) {
   if (el) {
@@ -1817,7 +1966,7 @@ function setPdfThumbRef(blockId, pageNum, el) {
     pdfThumbCanvasRefs[blockId][pageNum] = el;
     nextTick(() => {
       if (pdfDocMap.has(blockId)) {
-        renderPdfThumb(blockId, pageNum);
+        queuePdfThumb(blockId, pageNum);
       }
     });
   } else {
@@ -1825,9 +1974,26 @@ function setPdfThumbRef(blockId, pageNum, el) {
   }
 }
 
-async function initPdfBlock(blockId) {
+async function initPdfBlock(blockId, { force = false } = {}) {
+  const block = canvasBlocks.value.find((b) => b.id === blockId);
+  if (!block) return;
+  const docId = block?.data?.doc_id;
+  const version = pdfBlockVersionKey(block.data);
+  if (!docId) {
+    pdfBlockStates.value[blockId] = {
+      ...(pdfBlockStates.value[blockId] || {}),
+      loading: false,
+      error: "正在等待 PDF 发布…",
+      version,
+    };
+    return;
+  }
   // 已加载过则跳过（doc 在普通 Map 里）
-  if (pdfDocMap.has(blockId)) {
+  if (
+    !force &&
+    pdfDocMap.has(blockId) &&
+    pdfBlockStates.value[blockId]?.version === version
+  ) {
     const state = pdfBlockStates.value[blockId];
     if (state && pdfMainCanvasRefs[blockId]) {
       await nextTick();
@@ -1836,20 +2002,21 @@ async function initPdfBlock(blockId) {
     return;
   }
   const existingState = pdfBlockStates.value[blockId];
-  if (existingState?.loading || existingState?.error) return;
-
-  const block = canvasBlocks.value.find((b) => b.id === blockId);
-  if (!block) return;
-  const docId = block?.data?.doc_id;
-  if (!docId) return;
+  if (existingState?.loading && !force) return;
+  if (pdfDocMap.has(blockId)) invalidatePdfBlock(blockId);
+  const loadToken = (pdfLoadTokens[blockId] || 0) + 1;
+  pdfLoadTokens[blockId] = loadToken;
   try {
     pdfBlockStates.value[blockId] = {
       ...(pdfBlockStates.value[blockId] || {}),
       loading: true,
       error: "",
       docId,
+      version,
     };
-    const pdfUrl = docRawUrl(docId);
+    const pdfUrl = docRawUrl(docId, {
+      revision: block.data?.artifact_revision || block.data?.pdf_revision || "",
+    });
     console.log("[PDF] 开始加载:", pdfUrl);
     const headRes = await fetch(pdfUrl, {
       method: "HEAD",
@@ -1869,6 +2036,10 @@ async function initPdfBlock(blockId) {
       cMapUrl: "https://unpkg.com/pdfjs-dist@5.6.205/cmaps/",
       cMapPacked: true,
     }).promise;
+    if (pdfLoadTokens[blockId] !== loadToken) {
+      await doc.destroy();
+      return;
+    }
     console.log("[PDF] 加载成功，页数:", doc.numPages);
     pdfDocMap.set(blockId, doc);
     pdfBlockStates.value[blockId] = {
@@ -1877,14 +2048,15 @@ async function initPdfBlock(blockId) {
       loading: false,
       error: "",
       docId,
+      version,
     };
     await nextTick();
     await renderPdfMainPage(blockId, 1);
-    // 异步渲染缩略图
-    for (let i = 1; i <= doc.numPages; i++) {
-      renderPdfThumb(blockId, i);
-    }
+    // Each canvas ref renders itself after mounting.  Rendering every thumbnail
+    // here causes a large recovered course to decode many image-heavy pages at
+    // once and can starve the visible page render.
   } catch (e) {
+    if (pdfLoadTokens[blockId] !== loadToken) return;
     console.warn("[PDF] 加载失败:", e);
     const message = e?.message || "未知错误";
     pdfBlockStates.value[blockId] = {
@@ -1893,6 +2065,7 @@ async function initPdfBlock(blockId) {
       totalPages: 0,
       error: `PDF 加载失败：${message}`,
       docId,
+      version,
     };
     imAddLog(`PDF 加载失败: ${message}`, "error");
   }
@@ -2085,7 +2258,16 @@ function applyWorkspacePayload(payload = {}) {
     });
   }
   const workspace = workspacePayload.workspace || {};
+  if (workspace.generation_status) {
+    imBackgroundProcessing.value = workspace.generation_status === "background";
+  }
   if (workspace.topic) currentTopic.value = workspace.topic;
+  if (Number.isFinite(Number(workspace.planned_chapters))) {
+    imPlannedChapters.value = Number(workspace.planned_chapters);
+  }
+  if (Number.isFinite(Number(workspace.generated_chapters))) {
+    imGeneratedChapters.value = Number(workspace.generated_chapters);
+  }
   if (typeof workspace.enable_audio === "boolean") {
     enableAudio.value = workspace.enable_audio;
   }
@@ -2097,7 +2279,8 @@ function applyWorkspacePayload(payload = {}) {
       .filter((ch) => {
         // 严格验证产物完整性：根据课程配置判断该章节是否真正完成
         // 1. 后端标记为 ready 的章节，信任后端的判断
-        if (ch.status === "ready") return true;
+        if (ch.status === "ready" || ch.status === "learning_ready")
+          return true;
         // 2. 兼容：没有 status 但产物齐全的也算完成
         const hasPdf = (ch.files || []).some((f) => /\.pdf$/i.test(f));
         if (!hasPdf) return false;
@@ -2126,6 +2309,7 @@ function applyWorkspacePayload(payload = {}) {
           pdf_exists: !!pdfPath || !!ch.pdf_doc_id,
           pdf_path: pdfPath,
           pdf_doc_id: ch.pdf_doc_id || "",
+          pdf_revision: ch.pdf_revision || "",
           exercises_exists: !!exPath || !!ch.exercises_doc_id,
           exercises_path: exPath,
           exercises_doc_id: ch.exercises_doc_id || "",
@@ -2154,7 +2338,11 @@ function rememberImmersiveSession(sessionId) {
 
 function handleWorkspaceUpdate(data) {
   rememberImmersiveSession(data.session_id);
-  if (data.workspace) applyWorkspacePayload(data.workspace);
+  if (data.canvas_blocks) {
+    applyWorkspacePayload(data);
+  } else if (data.workspace) {
+    applyWorkspacePayload(data.workspace);
+  }
   if (data.next_actions) workspaceNextActions.value = data.next_actions;
   if (data.block) upsertCanvasBlock(data.block);
   const title = data.block?.title || data.event || "workspace";
@@ -2163,22 +2351,25 @@ function handleWorkspaceUpdate(data) {
 
 // ── 启动生成 ─────────────────────────────────────────────────────
 function startImmersive() {
-  if (!topicInput.value.trim()) return;
+  if (!topicInput.value.trim() || imGenerating.value) return;
   currentTopic.value = topicInput.value.trim();
   phase.value = "immersive";
   imStartGenerate();
 }
 
 async function imStartGenerate() {
+  if (imGenerating.value) return;
   imGenerating.value = true;
   imCompleted.value = false;
   imProgress.value = 0;
   imCurrentStage.value = "init";
   imStatusMessage.value = "正在初始化...";
   imAddLog(`🚀 开始生成课件：${currentTopic.value}`);
+  imGenerationAbortController = new AbortController();
   try {
     const res = await api.postRaw(`/api/immersive/generate`, {
       headers: { "Content-Type": "application/json" },
+      signal: imGenerationAbortController.signal,
       body: JSON.stringify({
         topic: currentTopic.value,
         enable_audio: enableAudio.value,
@@ -2206,6 +2397,7 @@ async function imStartGenerate() {
   } catch (e) {
     imAddLog(`❌ 连接失败: ${e.message}`, "error");
   } finally {
+    imGenerationAbortController = null;
     imGenerating.value = false;
     imGeneratingChapterTitle.value = "";
     imGeneratingChapterId.value = 0;
@@ -2214,20 +2406,24 @@ async function imStartGenerate() {
 
 // ── 断点续传：从未完成的章节继续生成 ─────────────────────────
 async function imResumeGenerate() {
+  if (imGenerating.value) return;
   if (!currentSessionId.value) {
     imAddLog("❌ 无 session_id，无法续传", "error");
     return;
   }
   imResumePrompt.value = false;
+  imBackgroundProcessing.value = false;
   imGenerating.value = true;
   imCompleted.value = false;
   imProgress.value = 5;
   imCurrentStage.value = "init";
   imStatusMessage.value = "正在恢复生成...";
   imAddLog(`🔄 断点续传：从未完成的章节继续生成`, "success");
+  imGenerationAbortController = new AbortController();
   try {
     const res = await api.postRaw(`/api/immersive/resume`, {
       headers: { "Content-Type": "application/json" },
+      signal: imGenerationAbortController.signal,
       body: JSON.stringify({ session_id: currentSessionId.value }),
     });
     const reader = res.body.getReader();
@@ -2251,6 +2447,7 @@ async function imResumeGenerate() {
   } catch (e) {
     imAddLog(`❌ 续传失败: ${e.message}`, "error");
   } finally {
+    imGenerationAbortController = null;
     imGenerating.value = false;
     imGeneratingChapterTitle.value = "";
     imGeneratingChapterId.value = 0;
@@ -2271,6 +2468,24 @@ async function imRepairMissingPdf() {
     "success",
   );
   await imResumeGenerate();
+}
+
+async function cancelBackgroundProcessing() {
+  if (!currentSessionId.value || imCancellingBackground.value) return;
+  imCancellingBackground.value = true;
+  try {
+    await api.post("/api/immersive/jobs/cancel", {
+      session_id: currentSessionId.value,
+    });
+    imBackgroundProcessing.value = false;
+    imResumePrompt.value = true;
+    imStatusMessage.value = "后台处理已取消，可以继续生成剩余章节。";
+    imAddLog("⏹️ 已取消后台处理，可从断点继续生成", "success");
+  } catch (e) {
+    imAddLog(`取消后台处理失败：${e.message}`, "error");
+  } finally {
+    imCancellingBackground.value = false;
+  }
 }
 
 function imHandleSSE(data) {
@@ -2332,9 +2547,37 @@ function imHandleSSE(data) {
       if (imChapters.value.length === 1) nextTick(() => imSelectChapter(0));
       break;
     }
+    case "chapter_learning_ready": {
+      const ch = data.data;
+      const existIdx = imChapters.value.findIndex(
+        (item) => item.chapter_id === ch.chapter_id,
+      );
+      const learningReady = {
+        ...ch,
+        status: "learning_ready",
+        exercises_exists: false,
+        exercises_path: "",
+        exercises_doc_id: "",
+        audio_files: [],
+        audio_doc_id: "",
+        notes_doc_id: "",
+        speaker_notes_count: 0,
+      };
+      if (existIdx >= 0) {
+        imChapters.value[existIdx] = {
+          ...imChapters.value[existIdx],
+          ...learningReady,
+        };
+      } else {
+        imChapters.value.push(learningReady);
+      }
+      imAddLog(`📖 ${ch.title} 的 PDF 已就绪，现在可以开始学习`, "success");
+      if (imChapters.value.length === 1) nextTick(() => imSelectChapter(0));
+      break;
+    }
     case "nodes_extracted":
       imAddLog(
-        `🧠 知识图谱：${data.nodes?.length || 0} 个节点（${data.new_count || 0} 个新建）`,
+        `🧠 知识大脑：${data.nodes?.length || 0} 个节点（${data.new_count || 0} 个新建）`,
         "success",
       );
       break;
@@ -2413,7 +2656,7 @@ async function imSelectChapter(idx) {
     imExercisesHtml.value = "";
     imParsedQuizzes.value = [];
   }
-  const pdfUrl = docRawUrl(ch.pdf_doc_id);
+  const pdfUrl = docRawUrl(ch.pdf_doc_id, { revision: ch.pdf_revision || "" });
   if (!imPdfDocMap.has(pdfUrl)) {
     try {
       const headRes = await fetch(pdfUrl, {
@@ -2964,6 +3207,12 @@ function onDocClickForAskBubble(e) {
   }
 }
 
+// 预习手册 markdown 首行的「## 📖 … — 预习手册」与卡片标题重复，渲染时去掉
+function stripHandbookHeading(md) {
+  if (!md) return "";
+  return md.replace(/^\s*#{1,6}[^\n]*预习手册[^\n]*\n+/, "");
+}
+
 // ── 习题解析 ─────────────────────────────────
 function _detectDifficulty(text) {
   if (!text) return "";
@@ -3049,7 +3298,7 @@ function parseExercises(mdText) {
     // 题干行（去掉 **题干：** 前缀）
     if (!inOptions && line.trim()) {
       const cleaned = line.replace(
-        /^\s*\*{0,2}\s*(?:题干|题目)\s*\*{0,2}\s*[：:]\s*/,
+        /^\s*\*{0,2}\s*(?:题干|题目)\s*\*{0,2}\s*[：:]\s*\*{0,2}\s*/,
         "",
       );
       currentQ.question += (currentQ.question ? "\n" : "") + cleaned;
@@ -3183,14 +3432,46 @@ function handleBack() {
     pendingLeaveAction = "reset";
     showLeaveConfirm.value = true;
   } else {
-    resetToIdle();
+    resetToIdle("/chat");
   }
 }
-function confirmLeave() {
+
+async function leaveInBackground() {
+  const sessionId = currentSessionId.value;
+  try {
+    if (sessionId) {
+      await api.post("/api/immersive/jobs/detach", { session_id: sessionId });
+    }
+  } catch (error) {
+    imAddLog(`后台继续请求失败：${error.message}`, "error");
+    return;
+  }
+  imGenerationAbortController?.abort();
+  imGenerationAbortController = null;
   showLeaveConfirm.value = false;
-  if (pendingLeaveAction === "reset") resetToIdle();
-  else if (typeof pendingLeaveAction === "function") pendingLeaveAction();
+  const action = pendingLeaveAction;
   pendingLeaveAction = null;
+  if (action === "reset") resetToIdle("/chat");
+  else if (typeof action === "function") action();
+}
+
+async function stopAndLeave() {
+  const sessionId = currentSessionId.value;
+  try {
+    if (sessionId) {
+      await api.post("/api/immersive/jobs/cancel", { session_id: sessionId });
+    }
+  } catch (error) {
+    imAddLog(`停止生成请求失败：${error.message}`, "error");
+    return;
+  }
+  imGenerationAbortController?.abort();
+  imGenerationAbortController = null;
+  showLeaveConfirm.value = false;
+  const action = pendingLeaveAction;
+  pendingLeaveAction = null;
+  if (action === "reset") resetToIdle("/chat");
+  else if (typeof action === "function") action();
 }
 onBeforeRouteLeave((to, from, next) => {
   if (imGenerating.value || imAgentGenerating.value) {
@@ -3201,7 +3482,9 @@ onBeforeRouteLeave((to, from, next) => {
   }
 });
 
-function resetToIdle() {
+function resetToIdle(destination = null) {
+  imGenerationAbortController?.abort();
+  imGenerationAbortController = null;
   if (currentSessionId.value && sessionStartTime) {
     const minutes = Math.max(
       1,
@@ -3222,10 +3505,14 @@ function resetToIdle() {
   imCurrentStage.value = "";
   imRestoreError.value = "";
   imResumePrompt.value = false;
-  router.replace({ path: route.path, query: {} });
+  imBackgroundProcessing.value = false;
+  imCancellingBackground.value = false;
+  router.replace({ path: destination || route.path, query: {} });
   imStatusMessage.value = "";
   imOutline.value = null;
   imChapters.value = [];
+  imPlannedChapters.value = 0;
+  imGeneratedChapters.value = 0;
   imCurrentChapterIndex.value = 0;
   imCurrentPage.value = 1;
   imTotalPages.value = 0;
@@ -3250,14 +3537,16 @@ function resetToIdle() {
 async function restoreImmersive() {
   imRestoreError.value = "";
   imResumePrompt.value = false;
+  imBackgroundProcessing.value = false;
   const sessionId = route.query.session_id;
   const topic = route.query.topic;
   const shouldResume = route.query.resume === "1" || route.query.resume === 1;
   if (sessionId) {
+    let detail;
     phase.value = "immersive";
     currentTopic.value = String(topic || "历史课程");
     try {
-      const detail = await sessionApi.getById(sessionId);
+      detail = await sessionApi.getById(sessionId);
       currentSessionId.value = detail.id;
       sessionStartTime = Date.now();
       currentTopic.value =
@@ -3384,7 +3673,7 @@ async function restoreImmersive() {
         }
         if (agentMsgs.length > 0) {
           imAgentMessages.value = agentMsgs;
-          imAddLog(`已恢复 ${agentMsgs.length} 条智流 Agent 对话`);
+          imAddLog(`已恢复 ${agentMsgs.length} 条智流辅导 Agent 对话`);
         }
       }
     } catch (e) {
@@ -3393,9 +3682,29 @@ async function restoreImmersive() {
       imAddLog(`课程恢复失败：${e.message}`, "error");
       return;
     }
-    // 如果路由要求续传，且会话尚未完成 → 不再自动跳转，
-    // 展示一个提示横幅，由用户手动点击“继续生成”。
-    if (shouldResume && !imCompleted.value && currentSessionId.value) {
+    // 未完成的课程无论从会话列表还是带 resume=1 进入，都展示同一个
+    // 手动操作入口。若后台 job 仍在运行，点击后会重新订阅它；若已停下，
+    // 后端会按磁盘产物审计后从断点继续。
+    const workspaceState = detail.workspace || {};
+    imBackgroundProcessing.value =
+      workspaceState.generation_status === "background";
+    imGenProgress.value = workspaceState.progress || null;
+    const hasPendingGeneration =
+      !imCompleted.value &&
+      currentSessionId.value &&
+      (shouldResume ||
+        [
+          "planning",
+          "planned",
+          "generating",
+          "partial_ready",
+          "failed",
+          "cancelled",
+        ].includes(detail.stage || workspaceState.stage));
+    if (
+      (hasPendingGeneration || imHasPendingGeneration.value) &&
+      !imBackgroundProcessing.value
+    ) {
       imResumePrompt.value = true;
     }
   } else if (topic) {
@@ -3418,16 +3727,16 @@ onMounted(restoreImmersive);
 function onWindowResize() {
   const ch = imChapters.value[imCurrentChapterIndex.value];
   if (ch?.pdf_doc_id) {
-    const pdfUrl = docRawUrl(ch.pdf_doc_id);
+    const pdfUrl = docRawUrl(ch.pdf_doc_id, {
+      revision: ch.pdf_revision || "",
+    });
     const doc = imPdfDocMap.get(pdfUrl);
     if (doc) imRenderPage(doc, imCurrentPage.value);
   }
 }
-function handleBeforeUnload(e) {
-  if (imGenerating.value || imAgentGenerating.value) {
-    e.preventDefault();
-    e.returnValue = "";
-  }
+function handleBeforeUnload() {
+  // Browser close cannot show our custom three-way dialog.  The backend treats
+  // the lost SSE connection as a background detach, so closing the tab is safe.
 }
 onMounted(() => {
   window.addEventListener("resize", onWindowResize);
@@ -4721,6 +5030,22 @@ onUnmounted(() => {
   color: var(--text-primary, #e5e7ff);
   flex-shrink: 0;
 }
+.im-toolbar-resume-btn {
+  margin-left: auto;
+  padding: 7px 13px;
+  border: 1px solid rgba(139, 92, 246, 0.55);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.28);
+}
+.im-toolbar-resume-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.4);
+}
 /* 修复缺失 PDF 提示：用琥珀/橙色系与“继续生成”区分开 */
 .im-repair-banner {
   background: linear-gradient(
@@ -4729,6 +5054,22 @@ onUnmounted(() => {
     rgba(239, 68, 68, 0.16)
   );
   border-color: rgba(245, 158, 11, 0.5);
+}
+.im-background-banner {
+  background: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.18),
+    rgba(14, 165, 233, 0.12)
+  );
+  border-color: rgba(96, 165, 250, 0.5);
+}
+.im-cancel-background-btn {
+  background: rgba(239, 68, 68, 0.82);
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);
+}
+.im-cancel-background-btn:hover {
+  background: rgba(220, 38, 38, 0.92);
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35);
 }
 .im-resume-info {
   flex: 1;
@@ -5878,6 +6219,29 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.im-logo-avatar,
+.im-msg-logo-avatar {
+  overflow: hidden;
+  background: none;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+.im-logo-avatar {
+  width: 34px;
+  height: 34px;
+}
+.im-msg-logo-avatar {
+  width: 22px;
+  height: 22px;
+}
+.im-logo-avatar img,
+.im-msg-logo-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
 }
 .typing-dots {
   display: flex;

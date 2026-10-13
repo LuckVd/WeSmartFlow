@@ -496,6 +496,7 @@
                       class="cg-html-thumb"
                       :file-id="card.cardId"
                       :show-header="false"
+                      compact
                     />
                     <div
                       v-else
@@ -3204,6 +3205,15 @@ onUnmounted(() => {
 .cg-html-thumb :deep(.html-card-spinner) {
   width: 12px;
   height: 12px;
+}
+.cg-html-thumb :deep(.html-card-zoom-controls),
+.cg-html-thumb :deep(.ask-ai-bubble),
+.cg-html-thumb :deep(.ask-ai-panel) {
+  display: none !important;
+}
+.cg-html-thumb :deep(.html-card-viewport) {
+  inset: 0 !important;
+  overflow: hidden !important;
 }
 .cg-thumb-fallback {
   width: 100%;

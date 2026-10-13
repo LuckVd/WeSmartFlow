@@ -29,6 +29,7 @@ from repositories import (
     SessionRepository,
     StudyLogRepository,
 )
+from agent_core.tool.pdf_compile import validate_chapter_pdf
 
 from config import COURSES_DIR
 from utils.log_safe import safe_log
@@ -189,6 +190,12 @@ def register_chapter_pdf(
     node_ids: Optional[List[str]] = None,
 ) -> Optional[str]:
     """登记一章 PDF 讲义。"""
+    validation_error = validate_chapter_pdf(
+        pdf_path, pdf_path.with_suffix(".tex"), pdf_path.parent / "images"
+    )
+    if validation_error:
+        logger.warning("拒绝登记未通过视觉校验的章节 PDF: %s", validation_error)
+        return None
     return _register_if_ready(
         path=pdf_path,
         file_type="chapter_pdf",

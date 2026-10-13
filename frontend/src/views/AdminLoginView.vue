@@ -38,10 +38,10 @@
     </button>
     <div class="login-card">
       <div class="brand">
-        <div class="brand-mark">⚙</div>
+        <div class="brand-mark">W</div>
         <div>
           <div class="brand-title">WeSmartFlow Admin</div>
-          <div class="brand-sub">反馈审核台 · 仅授权人员</div>
+          <div class="brand-sub">用户 · 积分 · 知识图谱</div>
         </div>
       </div>
 
@@ -74,25 +74,27 @@
           type="submit"
           :disabled="loading || !canSubmit"
         >
-          {{ loading ? "登录中…" : "登 录" }}
+          {{ loading ? "正在验证…" : "进入管理后台" }}
         </button>
       </form>
 
-      <div class="hint">
-        本页面与普通用户登录互相独立，账号由 <code>.env</code> 配置。
-      </div>
+      <div class="hint">使用管理员账号登录工作空间。</div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { adminApi, setAdminToken } from "../api/admin.js";
 import { useTheme } from "../composables/useTheme.js";
 
 const router = useRouter();
 const { isDark, toggleTheme } = useTheme();
+isDark.value = localStorage.getItem("wesmartflow-admin-theme") === "dark";
+watch(isDark, (value) =>
+  localStorage.setItem("wesmartflow-admin-theme", value ? "dark" : "light"),
+);
 
 const username = ref("");
 const password = ref("");
@@ -110,7 +112,7 @@ async function handleLogin() {
   try {
     const resp = await adminApi.login(username.value.trim(), password.value);
     setAdminToken(resp.access_token);
-    router.replace("/admin/console");
+    router.replace("/admin/users");
   } catch (e) {
     errorMsg.value = e.message || "登录失败";
   } finally {
@@ -126,7 +128,7 @@ async function handleLogin() {
   align-items: center;
   justify-content: center;
   background: var(--bg-base);
-  padding: 24px;
+  padding: 32px;
   position: relative;
 }
 .theme-fab {

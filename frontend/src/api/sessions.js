@@ -197,4 +197,10 @@ export const sessionApi = {
   // 记录本次会话学习时长（前端离开页面时调用，minutes 为整数分钟数）
   recordDuration: (id, minutes) =>
     api.patch(`/api/sessions/${id}/duration`, { minutes }),
+
+  // 沉浸式课程后台任务控制
+  detachImmersiveJob: (sessionId) =>
+    api.post("/api/immersive/jobs/detach", { session_id: sessionId }),
+  cancelImmersiveJob: (sessionId) =>
+    api.post("/api/immersive/jobs/cancel", { session_id: sessionId }),
 };

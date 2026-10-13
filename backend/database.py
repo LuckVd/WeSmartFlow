@@ -211,7 +211,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     id                TEXT PRIMARY KEY,
     user_id           TEXT NOT NULL,
     period            TEXT NOT NULL,              -- 'YYYY-MM'，额度重置周期
-    category          TEXT NOT NULL,              -- llm / search / image / audio
+    category          TEXT NOT NULL,              -- llm / embedding / search / image / audio
     scene             TEXT NOT NULL DEFAULT 'unknown',
                                                   -- quiz/chat/immersive/profile/kg/court...
     model             TEXT NOT NULL DEFAULT '',

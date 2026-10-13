@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import Field
+
+from api.contracts import ApiRequest
+from api.streaming import encode_sse_event, event_stream_headers
 
 from agent_core.llm.base import StreamChunkEvent, StreamFinishEvent
 from dependencies import get_current_user
@@ -24,11 +26,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
 
-class QuickAskRequest(BaseModel):
+class QuickAskRequest(ApiRequest):
     """轻量级问答请求体"""
 
-    question: str  # 用户选中的文本或问题
-    context: str = ""  # 可选的上下文（如当前学习主题）
+    question: str = Field(min_length=1, max_length=12_000)
+    context: str = Field(default="", max_length=8_000)
 
 
 @router.post("/quick-ask")
@@ -52,22 +54,16 @@ async def quick_ask(
         guard_result = await guard.check_input(body.question)
         if not guard_result.is_safe:
             guard.log_violation(user_id, body.question, guard_result)
-            err_data = json.dumps(
-                {
-                    "type": "error",
-                    "message": guard_result.reason,
-                    "code": "content_blocked",
-                },
-                ensure_ascii=False,
-            )
 
             async def blocked_stream():
-                yield f"data: {err_data}\n\n"
+                yield encode_sse_event(
+                    "error", message=guard_result.reason, code="content_blocked"
+                )
 
             return StreamingResponse(
                 blocked_stream(),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers=event_stream_headers(),
             )
 
     llm = get_llm(user_id, scene="chat")
@@ -91,27 +87,23 @@ async def quick_ask(
                     break
 
                 if isinstance(event, StreamChunkEvent):
-                    data = json.dumps(
-                        {"type": "text_chunk", "delta": event.delta},
-                        ensure_ascii=False,
-                    )
-                    yield f"data: {data}\n\n"
+                    yield encode_sse_event("text_chunk", delta=event.delta)
                 elif isinstance(event, StreamFinishEvent):
                     # 流结束
-                    done_data = json.dumps({"type": "done"}, ensure_ascii=False)
-                    yield f"data: {done_data}\n\n"
-        except asyncio.CancelledError as e:
-            logger.warning("quick-ask 被取消: %s", e)
-        except Exception as e:
-            logger.error("quick-ask 出错: %s", e)
-            err = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
-            yield f"data: {err}\n\n"
+                    yield encode_sse_event("done")
+        except asyncio.CancelledError:
+            logger.info("quick-ask 被取消")
+        except Exception:
+            logger.exception("quick-ask 出错")
+            yield encode_sse_event(
+                "error",
+                code="internal_error",
+                message="服务暂时不可用，请稍后重试。",
+                retryable=True,
+            )
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers=event_stream_headers(),
     )

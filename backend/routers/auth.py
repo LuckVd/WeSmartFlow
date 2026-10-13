@@ -15,12 +15,23 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
-import requests as http_requests
 from fastapi import APIRouter, HTTPException, status, Depends
-from pydantic import BaseModel
+from pydantic import Field
 
+from api.contracts import ApiRequest, ApiResponse, standard_error_responses
 from database import get_db, ensure_user_settings
 from dependencies import create_access_token, get_current_user
+from integrations.github import (
+    GitHubAuthorizationRejected,
+    GitHubProtocolError,
+    get_github_client,
+)
+from integrations.http import IntegrationHttpError
+from integrations.wechat import (
+    WeChatAuthorizationRejected,
+    WeChatProtocolError,
+    get_wechat_client,
+)
 from utils.log_safe import safe_log
 from config import (
     SMTP_HOST,
@@ -140,22 +151,22 @@ def _send_email(to_email: str, code: str) -> None:
 # --------------------------------------------------------------------------
 
 
-class SendCodeRequest(BaseModel):
-    email: str
+class SendCodeRequest(ApiRequest):
+    email: str = Field(min_length=3, max_length=320)
 
 
-class SendCodeResponse(BaseModel):
+class SendCodeResponse(ApiResponse):
     message: str
     cooldown: int = CODE_COOLDOWN_SECONDS  # 告诉前端倒计时秒数
 
 
-class VerifyCodeRequest(BaseModel):
-    email: str
-    code: str
-    name: str = ""  # 新用户可选昵称
+class VerifyCodeRequest(ApiRequest):
+    email: str = Field(min_length=3, max_length=320)
+    code: str = Field(min_length=1, max_length=16)
+    name: str = Field(default="", max_length=80)  # 新用户可选昵称
 
 
-class LoginResponse(BaseModel):
+class LoginResponse(ApiResponse):
     access_token: str
     token_type: str = "bearer"
     user_id: str
@@ -163,13 +174,14 @@ class LoginResponse(BaseModel):
     github_reward: dict | None = None
 
 
-class WechatMpLoginRequest(BaseModel):
-    code: str  # wx.login() 返回的 code
+class WechatMpLoginRequest(ApiRequest):
+    # wx.login() 返回的一次性 code，不允许异常大请求体占用认证工作线程。
+    code: str = Field(min_length=1, max_length=512)
 
 
-class GitHubCallbackRequest(BaseModel):
-    state: str
-    code: str  # GitHub OAuth 回调的 code
+class GitHubCallbackRequest(ApiRequest):
+    state: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    code: str = Field(min_length=1, max_length=512)  # GitHub OAuth 回调的 code
 
 
 # --------------------------------------------------------------------------
@@ -336,7 +348,12 @@ def github_reward_authorize(user_id: str = Depends(get_current_user)):
     return authorize(user_id, "reward")
 
 
-@router.post("/github/callback", response_model=LoginResponse)
+@router.post(
+    "/github/callback",
+    response_model=LoginResponse,
+    operation_id="complete_github_oauth_callback",
+    responses=standard_error_responses(400, 502, 503, 422),
+)
 def github_callback(body: GitHubCallbackRequest):
     """
     GitHub OAuth 回调：用 code 换取 access_token，获取用户信息，完成登录/注册。
@@ -348,56 +365,56 @@ def github_callback(body: GitHubCallbackRequest):
 
     oauth_state = consume_state(body.state)
 
-    # 1. 用 code 换取 access_token
-    try:
-        token_resp = http_requests.post(
-            "https://github.com/login/oauth/access_token",
-            json={
-                "client_id": GITHUB_CLIENT_ID,
-                "client_secret": GITHUB_CLIENT_SECRET,
-                "code": body.code,
-            },
-            headers={"Accept": "application/json"},
-            timeout=15,
-        ).json()
-    except Exception as e:
-        logger.error("GitHub token 交换失败: %s", e)
-        raise HTTPException(503, detail="GitHub 服务暂不可用")
+    github_client = get_github_client()
 
-    access_token = token_resp.get("access_token")
-    if not access_token:
-        error_desc = token_resp.get("error_description", "未知错误")
-        logger.error("GitHub token 交换错误: %s", token_resp)
-        raise HTTPException(400, detail=f"GitHub 授权失败: {error_desc}")
+    # 1. 用单次 code 换取 access_token。该调用禁止自动重试，避免首个
+    # 请求已被 GitHub 接受但响应丢失时重复使用一次性 code。
+    try:
+        access_token = github_client.exchange_code(
+            client_id=GITHUB_CLIENT_ID,
+            client_secret=GITHUB_CLIENT_SECRET,
+            code=body.code,
+        )
+    except GitHubAuthorizationRejected:
+        raise HTTPException(400, detail="GitHub 授权失败，请重新发起授权")
+    except GitHubProtocolError as exc:
+        logger.warning("GitHub OAuth 响应无效 error_type=%s", type(exc).__name__)
+        raise HTTPException(502, detail="GitHub 服务响应异常，请稍后重试")
+    except IntegrationHttpError as exc:
+        logger.warning(
+            "GitHub OAuth 交换未完成 error_type=%s retryable=%s",
+            type(exc).__name__,
+            exc.retryable,
+        )
+        raise HTTPException(503, detail="GitHub 服务暂不可用")
 
     # 2. 用 access_token 获取用户信息
     try:
-        user_resp = http_requests.get(
-            "https://api.github.com/user",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=10,
-        ).json()
-    except Exception as e:
-        logger.error("获取 GitHub 用户信息失败: %s", e)
+        user_resp = github_client.current_user(access_token)
+    except GitHubProtocolError as exc:
+        logger.warning("GitHub 用户响应无效 error_type=%s", type(exc).__name__)
+        raise HTTPException(502, detail="GitHub 服务响应异常，请稍后重试")
+    except IntegrationHttpError as exc:
+        logger.warning(
+            "获取 GitHub 用户信息未完成 error_type=%s retryable=%s",
+            type(exc).__name__,
+            exc.retryable,
+        )
         raise HTTPException(503, detail="获取 GitHub 用户信息失败")
 
-    github_id = str(user_resp.get("id", ""))
-    github_username = user_resp.get("login", "")
+    github_id = user_resp["id"]
+    github_username = user_resp["login"]
     github_name = user_resp.get("name") or github_username
     github_email = user_resp.get("email")  # 可能为 None
     github_avatar = user_resp.get("avatar_url")
-
-    if not github_id:
-        raise HTTPException(400, detail="GitHub 登录失败：未获取到用户标识")
 
     # 3. 如果邮箱为空，尝试从 /user/emails 获取
     if oauth_state["purpose"] == "reward":
         user_id = oauth_state["user_id"]
         user_name = bind_account(user_id, github_id, github_username, github_avatar)
-        reward = verify_and_grant(user_id, github_id, access_token)
+        reward = verify_and_grant(
+            user_id, github_id, access_token, client=github_client
+        )
         return LoginResponse(
             access_token=create_access_token(user_id),
             user_id=user_id,
@@ -407,27 +424,13 @@ def github_callback(body: GitHubCallbackRequest):
 
     if not github_email:
         try:
-            emails_resp = http_requests.get(
-                "https://api.github.com/user/emails",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Accept": "application/vnd.github+json",
-                },
-                timeout=10,
-            ).json()
-            # 优先取 primary 邮箱
-            for em in emails_resp:
-                if em.get("primary") and em.get("verified"):
-                    github_email = em["email"]
-                    break
-            # 没有 primary 就取第一个 verified
-            if not github_email:
-                for em in emails_resp:
-                    if em.get("verified"):
-                        github_email = em["email"]
-                        break
-        except Exception as e:
-            logger.warning("获取 GitHub 邮箱失败（非致命）: %s", e)
+            github_email = github_client.verified_email(access_token)
+        except IntegrationHttpError as exc:
+            logger.warning(
+                "获取 GitHub 邮箱失败（非致命） error_type=%s retryable=%s",
+                type(exc).__name__,
+                exc.retryable,
+            )
 
     # 4. 查找或创建用户
     with get_db() as conn:
@@ -457,7 +460,7 @@ def github_callback(body: GitHubCallbackRequest):
                     "UPDATE users SET github_id = ?, github_username = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?",
                     (github_id, github_username, github_avatar, user_id),
                 )
-            logger.info("已有用户 %s 绑定 GitHub: %s", user_id, github_username)
+            logger.info("已有用户 %s 已绑定 GitHub 账户", safe_log(user_id))
         else:
             # 全新用户，自动注册
             user_id = f"u_{uuid.uuid4().hex[:8]}"
@@ -483,12 +486,7 @@ def github_callback(body: GitHubCallbackRequest):
                 )
 
             ensure_user_settings(user_id)
-            logger.info(
-                "GitHub 用户 %s (%s) 自动注册为 %s",
-                github_username,
-                github_id,
-                user_id,
-            )
+            logger.info("GitHub OAuth 用户自动注册为 %s", safe_log(user_id))
 
     # 5. 签发 JWT
     from services.credit_wallet import balance
@@ -496,7 +494,7 @@ def github_callback(body: GitHubCallbackRequest):
     balance(user_id)
     token = create_access_token(user_id=user_id)
 
-    reward = verify_and_grant(user_id, github_id, access_token)
+    reward = verify_and_grant(user_id, github_id, access_token, client=github_client)
     return LoginResponse(
         access_token=token,
         user_id=user_id,
@@ -510,7 +508,12 @@ def github_callback(body: GitHubCallbackRequest):
 # --------------------------------------------------------------------------
 
 
-@router.post("/wechat/mp-login", response_model=LoginResponse)
+@router.post(
+    "/wechat/mp-login",
+    response_model=LoginResponse,
+    operation_id="login_with_wechat_mini_program",
+    responses=standard_error_responses(400, 502, 503, 422),
+)
 def wechat_mp_login(body: WechatMpLoginRequest):
     """
     小程序端调用：用 wx.login() 的 code 完成登录。
@@ -521,31 +524,25 @@ def wechat_mp_login(body: WechatMpLoginRequest):
     if not WECHAT_MP_APPID or not WECHAT_MP_SECRET:
         raise HTTPException(503, detail="微信登录未配置")
 
-    # 1. code 换 openid
+    # 1. code 换 openid。微信 js_code 为临时一次性凭据，禁止自动重试。
     try:
-        resp = http_requests.get(
-            "https://api.weixin.qq.com/sns/jscode2session",
-            params={
-                "appid": WECHAT_MP_APPID,
-                "secret": WECHAT_MP_SECRET,
-                "js_code": body.code,
-                "grant_type": "authorization_code",
-            },
-            timeout=10,
-        ).json()
-    except Exception as e:
-        logger.error("调用微信 jscode2session 失败: %s", e)
-        raise HTTPException(503, detail="微信服务暂不可用")
-
-    if "errcode" in resp and resp["errcode"] != 0:
-        logger.error("微信 jscode2session 错误: %s", resp)
-        raise HTTPException(
-            400, detail=f"微信登录失败: {resp.get('errmsg', '未知错误')}"
+        openid = get_wechat_client().exchange_code(
+            app_id=WECHAT_MP_APPID,
+            app_secret=WECHAT_MP_SECRET,
+            code=body.code,
         )
-
-    openid = resp.get("openid")
-    if not openid:
-        raise HTTPException(400, detail="微信登录失败：未获取到用户标识")
+    except WeChatAuthorizationRejected:
+        raise HTTPException(400, detail="微信登录失败，请重新获取登录凭据")
+    except WeChatProtocolError as exc:
+        logger.warning("微信登录响应无效 error_type=%s", type(exc).__name__)
+        raise HTTPException(502, detail="微信服务响应异常，请稍后重试")
+    except IntegrationHttpError as exc:
+        logger.warning(
+            "调用微信登录未完成 error_type=%s retryable=%s",
+            type(exc).__name__,
+            exc.retryable,
+        )
+        raise HTTPException(503, detail="微信服务暂不可用")
 
     # 2. 查找或创建用户
     with get_db() as conn:
@@ -570,7 +567,7 @@ def wechat_mp_login(body: WechatMpLoginRequest):
             )
 
         ensure_user_settings(user_id)
-        logger.info("微信用户 openid=%s 自动注册为 %s", openid, user_id)
+        logger.info("微信用户自动注册为 %s", safe_log(user_id))
 
     # 3. 签发 JWT
     from services.credit_wallet import balance

@@ -7,10 +7,20 @@
 const BASE_URL = import.meta.env.VITE_API_BASE || "";
 
 class ApiError extends Error {
-  constructor(status, message) {
+  constructor(status, message, details = {}) {
     super(message);
     this.status = status;
+    this.code = details.code || "request_failed";
+    this.requestId = details.request_id || "";
+    this.retryable = Boolean(details.retryable);
   }
+}
+
+function createRequestId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return `web_${crypto.randomUUID()}`;
+  }
+  return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**
@@ -40,6 +50,9 @@ function buildAuthHeaders(extra = {}) {
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
+  if (!headers["X-Request-ID"]) {
+    headers["X-Request-ID"] = createRequestId();
+  }
   return headers;
 }
 
@@ -65,8 +78,15 @@ async function request(method, path, body = null, options = {}) {
       handleUnauthorized();
       return;
     }
-    const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new ApiError(res.status, err.message || err.detail || res.statusText);
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new ApiError(
+      res.status,
+      err.detail || err.message || res.statusText,
+      {
+        ...err,
+        request_id: err.request_id || res.headers.get("X-Request-ID") || "",
+      },
+    );
   }
 
   if (res.status === 204) return null;
@@ -86,6 +106,9 @@ async function requestRaw(method, path, options = {}) {
   const token = localStorage.getItem("wesmartflow-token");
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+  if (!headers.has("X-Request-ID")) {
+    headers.set("X-Request-ID", createRequestId());
   }
   const res = await fetch(url, { ...options, method, headers });
   if (res.status === 401) {
@@ -121,11 +144,14 @@ async function fetchAsBlobUrl(path) {
  * 拼接主资源 URL：/api/documents/{docId}/raw。
  * 可传 ?token=xxx，用于 iframe / web-view 等无法注入 header 的场景。
  */
-function docRawUrl(docId, { withToken = false } = {}) {
+function docRawUrl(docId, { withToken = false, revision = "" } = {}) {
   const url = `${BASE_URL}/api/documents/${docId}/raw`;
-  if (!withToken) return url;
+  const params = new URLSearchParams();
+  if (revision) params.set("v", String(revision));
   const token = localStorage.getItem("wesmartflow-token") || "";
-  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
+  if (withToken && token) params.set("token", token);
+  const query = params.toString();
+  return query ? `${url}?${query}` : url;
 }
 
 /**
@@ -157,4 +183,5 @@ export {
   fetchAsBlobUrl,
   docRawUrl,
   docAssetUrl,
+  createRequestId,
 };

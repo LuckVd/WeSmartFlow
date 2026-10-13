@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Optional
+from urllib.parse import urljoin
 
+from integrations import IntegrationHttpClient, IntegrationPolicy
+from integrations.http import redact_url, validate_public_http_url
 from .base_source import BaseSource
 from ..models import SearchResult
 
@@ -18,6 +21,22 @@ class WebFetchSource(BaseSource):
     description = "抓取指定 URL 的完整内容（用于对搜索结果做深度获取）"
     modalities = ["text"]
     languages = ["zh", "en"]
+
+    def __init__(self, http_client: Any = None):
+        self._http = http_client or IntegrationHttpClient(
+            IntegrationPolicy(
+                name="web_fetch",
+                timeout_seconds=15.0,
+                max_retries=1,
+                retry_safe=True,
+                # Redirects are followed below, after each target passes the
+                # public-address guard. Delegating them to httpx would allow a
+                # public host to redirect a request to a private address.
+                follow_redirects=False,
+                max_redirects=0,
+                max_concurrency=4,
+            )
+        )
 
     async def search(
         self, query: str, max_results: int = 1, **kwargs
@@ -51,17 +70,9 @@ class WebFetchSource(BaseSource):
     async def _fetch_one(self, url: str) -> Optional[str]:
         """抓取单个 URL"""
         try:
-            import httpx
             import trafilatura
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    url,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; SmartSearch/1.0)"},
-                    follow_redirects=True,
-                )
-                resp.raise_for_status()
-                html = resp.text
+            html = await self._fetch_public_html(url)
 
             # trafilatura 提取正文
             text = await asyncio.to_thread(
@@ -74,8 +85,34 @@ class WebFetchSource(BaseSource):
             return text or ""
 
         except Exception as e:
-            logger.warning("[WebFetch] 抓取失败 %s: %s", url, e)
+            # A pasted URL can contain signed-query credentials. Keep diagnostics
+            # useful without allowing those credentials into application logs.
+            logger.warning("[WebFetch] 抓取失败 %s: %s", redact_url(url), e)
             return None
+
+    async def _fetch_public_html(self, url: str) -> str:
+        """Fetch a public page while validating every redirect destination."""
+
+        current_url = await validate_public_http_url(url)
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; SmartSearch/1.0)"}
+        for redirect_count in range(4):
+            response = await self._http.request("GET", current_url, headers=headers)
+            try:
+                if not response.is_redirect:
+                    return response.text
+                location = response.headers.get("location")
+                if not location:
+                    raise ValueError("重定向响应缺少目标地址")
+                if redirect_count >= 3:
+                    raise ValueError("重定向次数超过上限")
+                # urljoin correctly handles relative Location headers, then the
+                # result is checked before the next network request.
+                current_url = await validate_public_http_url(
+                    urljoin(str(response.url), location)
+                )
+            finally:
+                await response.aclose()
+        raise ValueError("重定向次数超过上限")  # pragma: no cover - loop guard
 
 
 def _detect_lang(text: str) -> str:

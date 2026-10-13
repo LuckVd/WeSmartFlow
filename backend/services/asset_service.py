@@ -230,8 +230,10 @@ def archive_immersive_chapter(
     sid_short = session_id[:8] if session_id else ""
     unique_chapter = f"{sid_short}_{chapter_id}" if sid_short else chapter_id
 
-    # 归档 PDF
-    for pdf in chapter_dir.glob("*.pdf"):
+    # A chapter can contain compile probes or debug PDFs.  Only the canonical
+    # chapter PDF is a learner-facing course artifact.
+    canonical_pdf = chapter_dir / f"{chapter_dir.name}.pdf"
+    for pdf in [canonical_pdf] if canonical_pdf.is_file() else []:
         if archive_pdf(
             pdf,
             source_type="immersive",
@@ -337,8 +339,10 @@ def pack_chapter_bundle(
     bundle_name = f"{safe_topic}_{safe_chapter}_{timestamp}.zip"
     bundle_path = ASSETS_FILES_DIR / bundle_name
 
-    # 收集文件：PDF、语音（整个 audio 目录）、习题 md
-    pdf_files = sorted(chapter_dir.glob("*.pdf"))
+    # 收集文件：仅课程主 PDF、语音（整个 audio 目录）、习题 md。不要把
+    # testimg.pdf 等调试产物带给学习者。
+    canonical_pdf = chapter_dir / f"{chapter_dir.name}.pdf"
+    pdf_files = [canonical_pdf] if canonical_pdf.is_file() else []
     audio_dir = chapter_dir / "audio"
     audio_files = (
         sorted(f for f in audio_dir.iterdir() if f.suffix.lower() in {".wav", ".mp3"})

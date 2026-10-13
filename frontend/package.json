@@ -10,7 +10,9 @@
     "dev": "vite",
     "prebuild": "npm run build:examples",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate:api-contract": "cd .. && conda run -n edu-agent python backend/export_api_contract.py",
+    "check:api-contract": "cd .. && conda run -n edu-agent python backend/check_api_contract.py"
   },
   "dependencies": {
     "3d-force-graph": "^1.80.0",

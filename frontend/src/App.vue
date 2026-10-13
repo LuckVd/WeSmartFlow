@@ -350,7 +350,7 @@ const favoriteItems = computed(() =>
   allNavPaths().filter((i) => favorites.value.includes(i.path)),
 );
 
-// 核心：知识图谱相关
+// 核心：知识大脑相关
 // 学习：主动学习行为
 const learnNav = [
   {

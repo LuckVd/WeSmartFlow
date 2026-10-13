@@ -239,10 +239,28 @@ examples/living_history/dist/
 backend/court/.assets/
 
 # 本地一键启动脚本（个人便利脚本，不入库）
-start.sh
+# start.sh is now part of the supported production-safe launch path.
+# Keep personal variants ignored instead of hiding the shared script.
+start.local.sh
 
 # 本地运行时日志与临时文件
 .runtime/
 
 # 知识之境预渲染音频资产（不入 git，体验时本地缺失则按需实时合成，音色已在 cast/音色池定好）
 examples/live_science/assets/audio/
+
+# Generated API contracts (the placeholder directory stays tracked)
+/frontend/src/api/generated/*.json
+
+# 内容安全审核本地配置（含敏感词库，按平台合规自行维护，不入 git）
+backend/config/content_rules.yaml
+backend/config/sensitive_words/
+
+# 本地构建/临时产物，不入 git
+.tmp/
+
+# 本地生成的报告/学习指南产物，不入 git
+/outputs/
+
+# 依赖目录，不入 git
+node_modules/

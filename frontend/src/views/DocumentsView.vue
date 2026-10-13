@@ -5,7 +5,7 @@
       <div>
         <h1 class="page-title">文档管理</h1>
         <p class="page-subtitle">
-          上传原始材料，Agent 自动提取知识节点，构建你的知识图谱
+          上传原始材料，Agent 自动提取知识节点，构建你的知识大脑
         </p>
       </div>
       <div class="header-right">
@@ -291,7 +291,7 @@
         <div class="empty-title">暂无文档</div>
         <div class="empty-desc">
           上传 PDF、Markdown 或其他学习材料<br />Agent
-          会自动提取知识节点，充实你的知识图谱
+          会自动提取知识节点，充实你的知识大脑
         </div>
         <button class="btn btn-primary" @click="showUpload = true">
           上传第一份文档
@@ -398,7 +398,7 @@
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
             上传后 Agent
-            将自动分析文档内容，提取知识节点并构建到你的知识图谱中。
+            将自动分析文档内容，提取知识节点并构建到你的知识大脑中。
           </div>
         </div>
         <div class="modal-footer">
@@ -876,7 +876,7 @@
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
             <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
           </svg>
-          在知识图谱中查看
+          在知识大脑中查看
         </button>
       </div>
     </div>

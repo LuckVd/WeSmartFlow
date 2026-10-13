@@ -10,7 +10,6 @@ import Weclaw from "./views/WeclawView.vue";
 import AdminLogin from "./views/AdminLoginView.vue";
 import AdminConsole from "./views/AdminConsoleView.vue";
 const Dashboard = () => import("./views/DashboardView.vue");
-const Graph = () => import("./views/GraphView.vue");
 const Brain = () => import("./views/BrainView.vue");
 const Chat = () => import("./views/ChatView.vue");
 const Immersive = () => import("./views/ImmersiveView.vue");
@@ -37,19 +36,24 @@ const routes = [
     meta: { public: true, admin: true },
   },
   {
-    path: "/admin/console",
-    component: AdminConsole,
+    path: "/admin",
+    component: () => import("./components/Admin/AdminLayout.vue"),
     meta: { public: true, admin: true },
-  },
-  {
-    path: "/admin/kg",
-    component: AdminKg,
-    meta: { public: true, admin: true },
+    children: [
+      { path: "", redirect: "/admin/users" },
+      { path: "console", redirect: "/admin/credit-cards" },
+      { path: "users", component: () => import("./views/AdminUsersView.vue") },
+      {
+        path: "users/:id",
+        component: () => import("./views/AdminUserDetailView.vue"),
+      },
+      { path: "credit-cards", component: AdminConsole },
+      { path: "kg", component: AdminKg },
+    ],
   },
   { path: "/", component: Landing, meta: { public: true, standalone: true } },
   { path: "/dashboard", component: Dashboard },
   { path: "/graph", component: Brain },
-  { path: "/graph-classic", component: Graph },
   // /knowledge 重定向到 /graph（列表视图），保持旧链接可用，保留 query 参数
   {
     path: "/knowledge",
@@ -93,7 +97,7 @@ router.beforeEach((to) => {
   if (to.meta.admin) {
     const adminToken = localStorage.getItem("wesmartflow-admin-token");
     if (to.path === "/admin/login") {
-      if (adminToken) return "/admin/console";
+      if (adminToken) return "/admin/users";
       return; // 未登录可访问登录页
     }
     // 其它 admin 子页必须有 admin token

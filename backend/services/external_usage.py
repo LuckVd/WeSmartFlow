@@ -70,7 +70,7 @@ class UsageThread(Thread):
 
 def before_raw(category: str, *, model: str = "", provider: str = ""):
     scope = current_usage()
-    if category != "llm":
+    if category not in {"llm", "embedding"}:
         calc_unit_credits(category, 1, model=model, provider=provider)
     # Raw demo clients explicitly use server credentials, even when the user
     # also has a personal key in settings.

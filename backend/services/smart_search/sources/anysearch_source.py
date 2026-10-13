@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import logging
-from typing import Optional
+from typing import Any, Optional
 
+from integrations import IntegrationHttpClient, IntegrationPolicy
 from .base_source import BaseSource
 from ..models import SearchResult
 
@@ -27,9 +28,24 @@ class AnySearchSource(BaseSource):
 
     API_URL = "https://api.anysearch.com/v1/search"
 
-    def __init__(self, api_key: Optional[str] = None, user_id: str = ""):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        user_id: str = "",
+        http_client: Any = None,
+    ):
         self._user_id = user_id
         self._api_key = api_key or os.getenv("ANYSEARCH_API_KEY", "")
+        # AnySearch exposes search as POST. It may be semantically read-only,
+        # but retrying an ambiguous POST response is unsafe without an upstream
+        # idempotency guarantee, so max_retries remains zero.
+        self._http = http_client or IntegrationHttpClient(
+            IntegrationPolicy(
+                name="anysearch",
+                timeout_seconds=15.0,
+                max_concurrency=4,
+            )
+        )
 
     def is_available(self) -> bool:
         return bool(self._api_key)
@@ -52,8 +68,6 @@ class AnySearchSource(BaseSource):
         if not is_system:
             assert_available(self._user_id, "search", platform_key=True)
         try:
-            import httpx
-
             # ⚠️ AnySearch API 是 POST，body 是 JSON
             # 不是 GET + params！（之前的 404 就是因为用了 GET）
             request_body = {
@@ -66,26 +80,23 @@ class AnySearchSource(BaseSource):
             if kwargs.get("language"):
                 request_body["language"] = kwargs["language"]
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    self.API_URL,
-                    json=request_body,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                record_usage(
-                    self._user_id,
-                    category="search",
-                    scene="search",
-                    provider="anysearch",
-                    units=1,
-                    counts_quota=not is_system,
-                    is_system=is_system,
-                )
+            data = await self._http.post_json(
+                self.API_URL,
+                json=request_body,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            record_usage(
+                self._user_id,
+                category="search",
+                scene="search",
+                provider="anysearch",
+                units=1,
+                counts_quota=not is_system,
+                is_system=is_system,
+            )
 
         except Exception as e:
             logger.error("[AnySearch] 搜索异常: %s", e)

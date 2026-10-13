@@ -14,9 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from agent_core.agent import ReActAgent
 from agent_core.context.static import StaticPromptBuilder
@@ -29,7 +30,10 @@ from agent_core.tool import (
 )
 
 from agent_core.layout import UserDataLayout, slugify as _slugify
-from agent_core.tool.pdf_compile import validate_pdf_file
+from agent_core.tool.pdf_compile import (
+    pdf_artifact_revision,
+    validate_chapter_pdf,
+)
 
 from services.asset_service import archive_immersive_chapter, pack_chapter_bundle
 from services.immersive.agents import build_sub_agents
@@ -62,15 +66,451 @@ from utils.log_safe import safe_log
 
 logger = logging.getLogger(__name__)
 
+MAX_PARALLEL_TEX_CHAPTERS = 3
+# Per generate/resume request local limit for post-PDF enrichment; do not use a
+# module-global semaphore because independent user requests must not block each other.
+MAX_PARALLEL_ENRICH_CHAPTERS = 3
+MAX_CHAPTER_PDF_ATTEMPTS = 2
 
-def _pdf_is_ready(pdf_path: Path) -> bool:
+
+# Only an explicit next-*chapter* cue is validated here.  Words such as
+# “接下来” can introduce another concept in the *same* chapter and must not
+# turn a correct lecture into a false negative.
+#
+# Important: Beamer/Latex often writes a structural title such as
+# ``\begin{block}{下一章}`` or ``\begin{frame}{下一章}``.  The old loose regex
+# matched only ``下一章}``, then incorrectly failed the already compiled PDF
+# during resume audit.  We therefore extract those environments as one semantic
+# cue and ignore standalone structural titles.
+_CHAPTER_NAVIGATION_RE = re.compile(r"(?:下一章|下章)(?!\s*[}\]])[^\n。；]{0,120}")
+_CHAPTER_NAVIGATION_ENV_RE = re.compile(
+    r"\\begin\{(?P<env>frame|block|alertblock|exampleblock)\}"
+    r"(?:\[[^\]]*\])?\{(?P<title>[^}]*(?:下一章|下章)[^}]*)\}"
+    r"(?P<body>[\s\S]{0,1200}?)\\end\{(?P=env)\}",
+    re.MULTILINE,
+)
+_LATEX_COMMAND_RE = re.compile(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?")
+
+
+def _plain_tex_text(text: str) -> str:
+    """Best-effort plain text extraction for short navigation snippets."""
+    text = re.sub(r"%.*", "", text)
+    text = _LATEX_COMMAND_RE.sub("", text)
+    text = re.sub(r"[{}]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _chapter_navigation_cues(source: str) -> list[str]:
+    """Extract explicit next-chapter cues without mistaking Beamer titles for text."""
+    cues: list[str] = []
+    occupied: list[tuple[int, int]] = []
+
+    for match in _CHAPTER_NAVIGATION_ENV_RE.finditer(source):
+        title = match.group("title") or ""
+        body = match.group("body") or ""
+        cue = _plain_tex_text(f"{title} {body}")
+        if cue:
+            cues.append(cue)
+            occupied.append(match.span())
+
+    def in_structural_env(pos: int) -> bool:
+        return any(start <= pos < end for start, end in occupied)
+
+    for match in _CHAPTER_NAVIGATION_RE.finditer(source):
+        if in_structural_env(match.start()):
+            continue
+        cue = _plain_tex_text(match.group(0))
+        if cue:
+            cues.append(cue)
+
+    return cues
+
+
+def _chapter_label(chapter: dict, fallback_index: int) -> str:
+    """Render one outline item as a stable label for prompts and diagnostics."""
+    chapter_id = chapter.get("chapter_id", fallback_index + 1)
+    return f"第{chapter_id}章「{chapter.get('title') or f'第{chapter_id}章'}」"
+
+
+def _chapter_navigation_context(chapters: list[dict], index: int) -> dict:
+    """Return the canonical previous/current/next outline context for a chapter."""
+    current = chapters[index]
+    return {
+        "previous": chapters[index - 1] if index > 0 else None,
+        "current": current,
+        "next": chapters[index + 1] if index + 1 < len(chapters) else None,
+        "index": index,
+        "total": len(chapters),
+    }
+
+
+def _build_tex_prompt(
+    *,
+    topic: str,
+    chapters: list[dict],
+    index: int,
+    research_path: Path,
+    tex_path: Path,
+    images_dir: Path,
+) -> str:
+    """Build a chapter prompt with authoritative outline continuity context."""
+    context = _chapter_navigation_context(chapters, index)
+    current = context["current"]
+    current_id = current.get("chapter_id", index + 1)
+    previous = context["previous"]
+    following = context["next"]
+    roadmap = " → ".join(
+        _chapter_label(chapter, position) for position, chapter in enumerate(chapters)
+    )
+    previous_text = (
+        _chapter_label(previous, index - 1) if previous else "无（这是第一章）"
+    )
+    next_text = (
+        _chapter_label(following, index + 1) if following else "无（这是最后一章）"
+    )
+    navigation_rule = (
+        f"不必强行预告下一章，可以独立收束；如需在结尾预告下一章，只能指向「{next_text}」；若明确写出下一章章号或标题，仍不得改写其章节号或主题，不得倒退到上一章或跳到其他章节。"
+        if following
+        else "这是最后一章：禁止写“下一章 / 下章 / 接下来进入某章”等课程导航语。"
+    )
+    return (
+        f"为课程「{topic}」{_chapter_label(current, index)}生成 Beamer 讲义。\n"
+        f"课程总进度：第 {index + 1}/{len(chapters)} 个位置；当前正式章节编号为 {current_id}。\n"
+        f"完整课程路线（唯一权威顺序）：{roadmap}\n"
+        f"上一章：{previous_text}\n"
+        f"下一章：{next_text}\n"
+        f"课程衔接规则：{navigation_rule}\n"
+        "不要根据学科常识猜测章节顺序；不要引用课程路线以外的章节作为“下一章”。\n"
+        f"参考资料文件：{research_path}\n"
+        f"TeX 输出路径：{tex_path}\n"
+        f"图片输出目录：{images_dir}\n"
+        f"知识点：{', '.join(current.get('knowledge_points', []))}\n"
+        f"难度：{current.get('difficulty', '基础')}"
+    )
+
+
+def _chapter_refs_in_cue(cue: str, chapters: list[dict]) -> dict[int, str]:
+    """Return outline chapters explicitly referenced by a navigation cue."""
+    refs: dict[int, str] = {}
+    for position, chapter in enumerate(chapters):
+        chapter_id = str(chapter.get("chapter_id", position + 1))
+        title = str(chapter.get("title") or "").strip()
+        has_id = bool(re.search(rf"第\s*{re.escape(chapter_id)}\s*章", cue))
+        has_title = bool(title and title in cue)
+        if has_id or has_title:
+            refs[position] = _chapter_label(chapter, position)
+    return refs
+
+
+def validate_chapter_navigation(
+    tex_path: Path, chapters: list[dict], index: int
+) -> str | None:
+    """Reject only explicit next-chapter cues that point to the wrong outline item."""
+    if not tex_path.is_file():
+        return f"TeX 文件不存在，无法校验章节衔接: {tex_path}"
+    try:
+        source = tex_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        return f"TeX 文件读取失败: {exc}"
+
+    context = _chapter_navigation_context(chapters, index)
+    cues = _chapter_navigation_cues(source)
+    if not cues:
+        return None
+    next_chapter = context["next"]
+    if next_chapter is None:
+        return f"最后一章不应出现课程导航语: {cues[0]}"
+
+    expected_index = index + 1
+    expected_label = _chapter_label(next_chapter, expected_index)
+    for cue in cues:
+        refs = _chapter_refs_in_cue(cue, chapters)
+        # A generic cue such as "下一章我们继续深化这个想法" is allowed.  The
+        # validator is only here to catch explicit wrong-direction references,
+        # e.g. chapter 3 pointing back to chapter 2 or skipping to chapter 5.
+        if not refs or expected_index in refs:
+            continue
+        wrong_label = next(iter(refs.values()))
+        return (
+            f"章节衔接错误：{_chapter_label(context['current'], index)} 的导航语"
+            f"「{cue}」显式指向 {wrong_label}，不是下一章 {expected_label}"
+        )
+    return None
+
+
+def _log_generation_timing(
+    session_id: str | None, milestone: str, started_at: float, **fields
+) -> int:
+    """Log an aggregate milestone without recording course content or prompts."""
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        "immersive_timing session=%s milestone=%s elapsed_ms=%d %s",
+        safe_log(session_id or ""),
+        milestone,
+        elapsed_ms,
+        " ".join(f"{key}={value}" for key, value in fields.items()),
+    )
+    return elapsed_ms
+
+
+def _replace_chapter_workspace_state(
+    session_id: str, chapter_id: int, patch: dict
+) -> list[dict]:
+    """Persist one chapter state without discarding the other chapters.
+
+    ``learning_ready`` means its verified PDF can be read now.  It is separate
+    from ``ready``, which still means every selected enrichment has completed.
+    """
+    current = update_workspace(session_id)
+    workspace = current.get("workspace", {}) or {}
+    chapters = list(workspace.get("chapters", []) or [])
+    for index, item in enumerate(chapters):
+        if item.get("chapter_id") == chapter_id:
+            chapters[index] = {**item, **patch}
+            break
+    else:
+        chapters.append(patch)
+    return chapters
+
+
+def _chapter_pdf_error(
+    pdf_path: Path,
+    tex_path: Path | None = None,
+    images_dir: Path | None = None,
+    chapters: list[dict] | None = None,
+    chapter_index: int | None = None,
+) -> str | None:
+    """Return the publication error for a PDF, including its visual assets."""
+    if tex_path is None:
+        tex_path = pdf_path.with_suffix(".tex")
+    if images_dir is None:
+        images_dir = tex_path.parent / "images"
+    artifact_error = validate_chapter_pdf(pdf_path, tex_path, images_dir)
+    if artifact_error:
+        return artifact_error
+    if chapters is not None and chapter_index is not None:
+        return validate_chapter_navigation(tex_path, chapters, chapter_index)
+    return None
+
+
+def _pdf_is_ready(
+    pdf_path: Path,
+    tex_path: Path | None = None,
+    images_dir: Path | None = None,
+    chapters: list[dict] | None = None,
+    chapter_index: int | None = None,
+) -> bool:
     """判断 PDF 是否真实可交付，而不是仅仅存在。"""
-    error = validate_pdf_file(pdf_path)
+    error = _chapter_pdf_error(pdf_path, tex_path, images_dir, chapters, chapter_index)
     if error:
         if pdf_path.exists():
             logger.warning("PDF 校验失败，将视为不可用: %s，原因: %s", pdf_path, error)
         return False
     return True
+
+
+def _published_pdf_doc_id(session_id: str, chapter_id: int) -> str:
+    """Return the already registered doc_id for a chapter PDF, if any."""
+    workspace = read_workspace(session_id)
+    for item in (workspace.get("workspace", {}) or {}).get("chapters", []) or []:
+        if item.get("chapter_id") == chapter_id and item.get("pdf_doc_id"):
+            return str(item.get("pdf_doc_id") or "")
+    for block in workspace.get("canvas_blocks", []) or []:
+        if block.get("id") == f"pdf_ch{chapter_id}":
+            data = block.get("data") or {}
+            if data.get("doc_id"):
+                return str(data.get("doc_id") or "")
+    return ""
+
+
+async def _publish_chapter_pdf_ready(
+    *,
+    session_id: str,
+    topic: str,
+    user_id: str,
+    course: "CourseLayout",
+    chapters: list[dict],
+    index: int,
+    ch_info: dict,
+    total_ch: int,
+    enable_audio: bool,
+    generation_started_at: float | None = None,
+    all_files_for_session: list[dict] | None = None,
+    set_current_chapter: bool = False,
+) -> dict | None:
+    """Publish a verified chapter PDF immediately, before optional enrichments.
+
+    The TeX stage can run in parallel, but user-visible publication must not wait
+    for an earlier chapter's quiz/audio/node extraction.  This helper performs
+    the complete publication transaction: document registration, pdf block upsert,
+    chapter ``learning_ready`` workspace state, and SSE payload preparation.
+    """
+    ch_id = ch_info.get("chapter_id", index + 1)
+    ch_title = ch_info.get("title", f"第{ch_id}章")
+    tex_path = course.tex_file(ch_id)
+    pdf_path = course.pdf_file(ch_id)
+    images_dir = course.chapter_images_dir(ch_id)
+    if not _pdf_is_ready(pdf_path, tex_path, images_dir, chapters, index):
+        return None
+
+    pdf_rel = to_rel_path(str(pdf_path))
+    pdf_revision = _pdf_revision(pdf_path)
+    num_frames = count_beamer_frames(tex_path)
+    pdf_doc_id = _published_pdf_doc_id(session_id, ch_id)
+    if not pdf_doc_id:
+        try:
+            pdf_doc_id = (
+                await asyncio.to_thread(
+                    lambda: register_chapter_pdf(
+                        session_id=session_id,
+                        topic=topic,
+                        chapter_id=ch_id,
+                        chapter_title=ch_title,
+                        pdf_path=pdf_path,
+                        num_pages=num_frames,
+                        user_id=user_id,
+                        node_ids=[],
+                    ),
+                )
+                or ""
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("单章 PDF 登记失败 ch=%s: %s", ch_id, exc)
+
+    if not pdf_doc_id:
+        logger.warning("跳过 PDF 即时发布：第%s章登记 doc_id 失败", ch_id)
+        return None
+
+    pdf_file = {
+        "file_id": pdf_doc_id,
+        "file_type": "chapter_pdf",
+        "title": f"第{ch_id}章 {ch_title}",
+    }
+    if all_files_for_session is not None and not any(
+        item.get("file_id") == pdf_doc_id for item in all_files_for_session
+    ):
+        all_files_for_session.append(pdf_file)
+    append_session_file(
+        session_id, pdf_doc_id, f"第{ch_id}章 {ch_title}", "chapter_pdf"
+    )
+
+    pdf_block = {
+        "id": f"pdf_ch{ch_id}",
+        "type": "pdf",
+        "title": f"第{ch_id}章 {ch_title}",
+        "status": "ready",
+        "chapter_id": ch_id,
+        "data": {
+            "url": f"/api/documents/{pdf_doc_id}/raw",
+            "pdf_path": pdf_rel,
+            "doc_id": pdf_doc_id,
+            "artifact_revision": pdf_revision,
+            "num_pages": num_frames,
+            "audio_enabled": enable_audio,
+            "audio_files": [],
+            "audio_doc_id": "",
+        },
+    }
+    upsert_canvas_block(session_id, pdf_block)
+
+    status_block = {
+        "id": f"chapter_{ch_id}_status",
+        "type": "chapter_status",
+        "title": f"第{ch_id}章 {ch_title}",
+        "status": "learning_ready",
+        "chapter_id": ch_id,
+        "data": {
+            "stage": "learning_ready",
+            "index": index,
+            "total": total_ch,
+            "block_ids": [f"chapter_{ch_id}_status", pdf_block["id"]],
+            "message": "PDF 已就绪，可先开始学习；其余资源继续补全。",
+        },
+    }
+    upsert_canvas_block(session_id, status_block)
+
+    learning_state = {
+        "chapter_id": ch_id,
+        "title": ch_title,
+        "status": "learning_ready",
+        "block_ids": [status_block["id"], pdf_block["id"]],
+        "files": [pdf_rel],
+        "pdf_doc_id": pdf_doc_id,
+        "pdf_revision": pdf_revision,
+        "audio_enabled": enable_audio,
+        "audio_files": [],
+        "speaker_notes_count": 0,
+        "learning_ready_at_ms": (
+            _log_generation_timing(
+                session_id,
+                "first_chapter_ready" if index == 0 else "chapter_pdf_ready",
+                generation_started_at,
+                chapter_id=ch_id,
+            )
+            if generation_started_at is not None
+            else 0
+        ),
+    }
+    chapters_state = _replace_chapter_workspace_state(session_id, ch_id, learning_state)
+    generated_chapters = len(
+        [item for item in chapters_state if _chapter_is_user_available(item)]
+    )
+    workspace_patch = {
+        "chapters": chapters_state,
+        "generated_chapters": generated_chapters,
+        "planned_chapters": total_ch,
+    }
+    if set_current_chapter:
+        workspace_patch["current_chapter_id"] = ch_id
+    update_workspace(
+        session_id,
+        stage="partial_ready",
+        next_actions=[
+            {"type": "start_learning", "label": "开始学习本章"},
+            {"type": "continue_generation", "label": "继续补全课程"},
+        ],
+        workspace=workspace_patch,
+    )
+
+    return {
+        "chapter_id": ch_id,
+        "title": ch_title,
+        "pdf_block": pdf_block,
+        "status_block": status_block,
+        "pdf_doc_id": pdf_doc_id,
+        "pdf_rel": pdf_rel,
+        "pdf_revision": pdf_revision,
+        "num_frames": num_frames,
+        "events": [
+            sse_event(
+                "workspace_update",
+                event="block_created",
+                session_id=session_id,
+                block=pdf_block,
+            ),
+            sse_event(
+                "workspace_update",
+                event="block_updated",
+                session_id=session_id,
+                block=status_block,
+            ),
+            sse_event(
+                "chapter_learning_ready",
+                index=index,
+                total=total_ch,
+                session_id=session_id,
+                data={
+                    "chapter_id": ch_id,
+                    "title": ch_title,
+                    "pdf_exists": True,
+                    "pdf_path": pdf_rel,
+                    "pdf_doc_id": pdf_doc_id,
+                    "pdf_revision": pdf_revision,
+                    "num_frames": num_frames,
+                },
+            ),
+        ],
+    }
 
 
 def _file_is_ready(path: Path, min_size: int = 50) -> bool:
@@ -81,10 +521,16 @@ def _file_is_ready(path: Path, min_size: int = 50) -> bool:
         return False
 
 
+def _chapter_is_user_available(chapter: dict) -> bool:
+    """章节已能被用户学习：完整 ready 或至少 PDF 已发布。"""
+    return chapter.get("status") in {"ready", "learning_ready"}
+
+
 def _chapter_artifact_status(
     course: CourseLayout,
     ch_info: dict,
     index: int,
+    chapters: list[dict] | None = None,
     enable_audio: bool = False,
     enable_exercises: bool = True,
 ) -> dict:
@@ -99,8 +545,10 @@ def _chapter_artifact_status(
     notes_path = chapter_dir / "speaker_notes.json"
     audio_dir = chapter_dir / "audio"
 
-    pdf_error = validate_pdf_file(pdf_path)
     tex_ready = _file_is_ready(tex_path)
+    pdf_error = _chapter_pdf_error(
+        pdf_path, tex_path, chapter_dir / "images", chapters, index
+    )
     num_frames = count_beamer_frames(tex_path) if tex_ready else 0
     audio_files = (
         sorted(f.name for f in audio_dir.iterdir() if f.suffix.lower() == ".wav")
@@ -117,7 +565,13 @@ def _chapter_artifact_status(
         "speaker_notes": _file_is_ready(notes_path, min_size=2),
         "audio": num_frames > 0 and len(audio_files) >= num_frames,
     }
-    required_keys = ["research", "tex", "pdf"]
+    # `research.json` is necessary before a chapter is generated, but it should
+    # not make resume regenerate a chapter whose user-facing artifacts already
+    # exist and pass validation. Older interrupted runs can have a valid PDF,
+    # exercises, and audio while the researcher failed to persist research.json.
+    required_keys = ["tex", "pdf"]
+    if not checks["pdf"]:
+        required_keys.insert(0, "research")
     if enable_exercises:
         required_keys.append("exercises")
     if enable_audio:
@@ -126,6 +580,8 @@ def _chapter_artifact_status(
     missing = [name for name, ready in required_checks.items() if not ready]
     optional_keys = ["overview_md"]
     optional_missing = [name for name in optional_keys if not checks[name]]
+    if checks["pdf"] and not checks["research"]:
+        optional_missing.append("research")
     if pdf_error and pdf_path.exists():
         missing.append(f"pdf_invalid: {pdf_error}")
 
@@ -159,10 +615,57 @@ def _chapter_artifact_status(
         "missing": missing,
         "optional_missing": optional_missing,
         "files": files,
+        "pdf_revision": _pdf_revision(pdf_path) if checks["pdf"] else "",
         "num_frames": num_frames,
         "audio_files_count": len(audio_files_data),
         "audio_files": audio_files_data,
     }
+
+
+def _read_speaker_notes(notes_path: Path) -> list[str]:
+    """Best-effort load of persisted speaker notes for audio re-registration."""
+    if not notes_path.exists() or notes_path.stat().st_size <= 0:
+        return []
+    try:
+        data = json.loads(notes_path.read_text(encoding="utf-8"))
+    except Exception:  # pylint: disable=broad-except
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(item) for item in data]
+
+
+def _with_audio_urls(audio_files: list[dict], audio_doc_id: str) -> list[dict]:
+    """Attach document asset URLs to audio frame metadata once doc_id exists."""
+    hydrated: list[dict] = []
+    for item in audio_files or []:
+        frame = dict(item or {})
+        filename = frame.get("filename") or ""
+        if audio_doc_id and filename and not frame.get("url"):
+            frame["url"] = f"/api/documents/{audio_doc_id}/asset/{filename}"
+        hydrated.append(frame)
+    return hydrated
+
+
+def _chapter_requires_followup(chapter: dict) -> bool:
+    """Whether a chapter still needs generation/resume work before final completion."""
+    if chapter.get("status") != "ready":
+        return True
+    if chapter.get("audio_enabled"):
+        if not chapter.get("audio_doc_id"):
+            return True
+        if not chapter.get("audio_files"):
+            return True
+    return False
+
+
+def _pdf_revision(pdf_path: Path) -> str:
+    """Return a revision only for a fully publishable PDF."""
+    try:
+        return pdf_artifact_revision(pdf_path)
+    except OSError as exc:
+        logger.warning("无法生成 PDF revision: %s", exc)
+        return ""
 
 
 def _audit_resume_chapters(
@@ -170,6 +673,9 @@ def _audit_resume_chapters(
     course: CourseLayout,
     chapters: list[dict],
     chapters_state: list[dict],
+    *,
+    topic: str = "",
+    user_id: str = "",
     enable_audio: bool = False,
     enable_exercises: bool = True,
 ) -> tuple[list[dict], set[int], int]:
@@ -190,10 +696,17 @@ def _audit_resume_chapters(
             course,
             ch_info,
             index,
+            chapters=chapters,
             enable_audio=enable_audio,
             enable_exercises=enable_exercises,
         )
-        status = "ready" if artifact_status["ready"] else "pending"
+        status = (
+            "ready"
+            if artifact_status["ready"]
+            else "learning_ready"
+            if artifact_status["checks"].get("pdf")
+            else "pending"
+        )
         if status != "ready":
             pending_ids.add(ch_id)
             logger.warning(
@@ -202,7 +715,176 @@ def _audit_resume_chapters(
                 artifact_status["missing"],
             )
 
-        block_ids = old_item.get("block_ids") or [f"chapter_{ch_id}_status"]
+        pdf_doc_id = old_item.get("pdf_doc_id", "") or ""
+        exercises_doc_id = old_item.get("exercises_doc_id", "") or ""
+        audio_doc_id = old_item.get("audio_doc_id", "") or ""
+        notes_doc_id = old_item.get("notes_doc_id", "") or ""
+        if topic and user_id:
+            if artifact_status["checks"].get("pdf") and not pdf_doc_id:
+                try:
+                    pdf_doc_id = (
+                        register_chapter_pdf(
+                            session_id=session_id,
+                            topic=topic,
+                            chapter_id=ch_id,
+                            chapter_title=title,
+                            pdf_path=course.pdf_file(ch_id),
+                            num_pages=artifact_status["num_frames"],
+                            user_id=user_id,
+                        )
+                        or ""
+                    )
+                    if pdf_doc_id:
+                        append_session_file(
+                            session_id,
+                            pdf_doc_id,
+                            f"第{ch_id}章 {title}",
+                            "chapter_pdf",
+                        )
+                        logger.info(
+                            "resume: 已补登记既有 PDF ch=%s doc_id=%s",
+                            ch_id,
+                            pdf_doc_id,
+                        )
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("resume: 补登记既有 PDF 失败 ch=%s: %s", ch_id, exc)
+            if (
+                enable_exercises
+                and artifact_status["checks"].get("exercises")
+                and not exercises_doc_id
+            ):
+                try:
+                    exercises_doc_id = (
+                        register_chapter_exercises(
+                            session_id=session_id,
+                            topic=topic,
+                            chapter_id=ch_id,
+                            chapter_title=title,
+                            exercises_path=course.exercises_file(ch_id),
+                            user_id=user_id,
+                        )
+                        or ""
+                    )
+                    if exercises_doc_id:
+                        append_session_file(
+                            session_id,
+                            exercises_doc_id,
+                            f"第{ch_id}章 {title} · 小测",
+                            "chapter_exercises",
+                        )
+                        logger.info(
+                            "resume: 已补登记既有习题 ch=%s doc_id=%s",
+                            ch_id,
+                            exercises_doc_id,
+                        )
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("resume: 补登记既有习题失败 ch=%s: %s", ch_id, exc)
+            if enable_audio and artifact_status["checks"].get("speaker_notes"):
+                notes_path = course.chapter_dir(ch_id) / "speaker_notes.json"
+                speaker_notes = _read_speaker_notes(notes_path)
+                if not notes_doc_id:
+                    try:
+                        notes_doc_id = (
+                            register_chapter_notes(
+                                session_id=session_id,
+                                topic=topic,
+                                chapter_id=ch_id,
+                                chapter_title=title,
+                                notes_path=notes_path,
+                                user_id=user_id,
+                            )
+                            or ""
+                        )
+                        if notes_doc_id:
+                            append_session_file(
+                                session_id,
+                                notes_doc_id,
+                                f"第{ch_id}章 {title} · 讲解稿",
+                                "chapter_notes",
+                            )
+                            logger.info(
+                                "resume: 已补登记既有讲解稿 ch=%s doc_id=%s",
+                                ch_id,
+                                notes_doc_id,
+                            )
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning(
+                            "resume: 补登记既有讲解稿失败 ch=%s: %s", ch_id, exc
+                        )
+                if artifact_status["checks"].get("audio") and not audio_doc_id:
+                    try:
+                        audio_results = [
+                            {
+                                "filename": item.get("filename", ""),
+                                "duration_seconds": item.get("duration_seconds", 0),
+                                "success": True,
+                            }
+                            for item in artifact_status["audio_files"]
+                            if item.get("filename")
+                        ]
+                        audio_doc_id = (
+                            register_chapter_audio(
+                                session_id=session_id,
+                                topic=topic,
+                                chapter_id=ch_id,
+                                chapter_title=title,
+                                audio_dir=course.chapter_dir(ch_id) / "audio",
+                                audio_results=audio_results,
+                                speaker_notes=speaker_notes,
+                                user_id=user_id,
+                            )
+                            or ""
+                        )
+                        if audio_doc_id:
+                            append_session_file(
+                                session_id,
+                                audio_doc_id,
+                                f"第{ch_id}章 {title} · 音频",
+                                "chapter_audio",
+                            )
+                            logger.info(
+                                "resume: 已补登记既有音频 ch=%s doc_id=%s",
+                                ch_id,
+                                audio_doc_id,
+                            )
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning(
+                            "resume: 补登记既有音频失败 ch=%s: %s", ch_id, exc
+                        )
+
+        audio_files = _with_audio_urls(artifact_status["audio_files"], audio_doc_id)
+        if enable_exercises and status == "ready" and not exercises_doc_id:
+            status = "learning_ready"
+            pending_ids.add(ch_id)
+            if "exercises_doc_id" not in artifact_status["missing"]:
+                artifact_status["missing"].append("exercises_doc_id")
+            logger.warning(
+                "resume: 章节习题未发布 ch=%s missing=%s",
+                ch_id,
+                artifact_status["missing"],
+            )
+        if enable_audio and status == "ready" and not audio_doc_id:
+            status = "learning_ready"
+            pending_ids.add(ch_id)
+            if "audio_doc_id" not in artifact_status["missing"]:
+                artifact_status["missing"].append("audio_doc_id")
+            logger.warning(
+                "resume: 章节音频未发布 ch=%s missing=%s",
+                ch_id,
+                artifact_status["missing"],
+            )
+
+        block_ids = [f"chapter_{ch_id}_status"]
+        if artifact_status["checks"].get("overview_md"):
+            block_ids.append(f"md_ch{ch_id}")
+        if artifact_status["checks"].get("pdf"):
+            block_ids.append(f"pdf_ch{ch_id}")
+        if enable_exercises and artifact_status["checks"].get("exercises"):
+            block_ids.append(f"quiz_ch{ch_id}_bank")
+        for block_id in old_item.get("block_ids") or []:
+            if block_id not in block_ids:
+                block_ids.append(block_id)
+
         audited_item = {
             **old_item,
             "chapter_id": ch_id,
@@ -210,13 +892,22 @@ def _audit_resume_chapters(
             "status": status,
             "block_ids": block_ids,
             "files": artifact_status["files"],
+            "pdf_revision": artifact_status["pdf_revision"],
             "audio_enabled": enable_audio,
-            "audio_files": artifact_status["audio_files"],
-            "speaker_notes_count": len(artifact_status["audio_files"]),
+            "audio_files": audio_files,
+            "speaker_notes_count": len(audio_files),
             "artifact_status": artifact_status["checks"],
             "artifact_missing": artifact_status["missing"],
             "artifact_optional_missing": artifact_status["optional_missing"],
         }
+        if pdf_doc_id:
+            audited_item["pdf_doc_id"] = pdf_doc_id
+        if exercises_doc_id:
+            audited_item["exercises_doc_id"] = exercises_doc_id
+        if audio_doc_id:
+            audited_item["audio_doc_id"] = audio_doc_id
+        if notes_doc_id:
+            audited_item["notes_doc_id"] = notes_doc_id
         audited_state.append(audited_item)
 
         if status != "ready":
@@ -226,10 +917,10 @@ def _audit_resume_chapters(
                     "id": f"chapter_{ch_id}_status",
                     "type": "chapter_status",
                     "title": f"第{ch_id}章 {title}",
-                    "status": "pending",
+                    "status": status,
                     "chapter_id": ch_id,
                     "data": {
-                        "stage": "pending",
+                        "stage": status,
                         "artifact_status": artifact_status["checks"],
                         "artifact_missing": artifact_status["missing"],
                         "artifact_optional_missing": artifact_status[
@@ -240,7 +931,7 @@ def _audit_resume_chapters(
             )
 
     generated_chapters = len(
-        [item for item in audited_state if item.get("status") == "ready"]
+        [item for item in audited_state if _chapter_is_user_available(item)]
     )
     return audited_state, pending_ids, generated_chapters
 
@@ -269,15 +960,29 @@ def _backfill_chapter_block_doc_ids(session_id: str, chapters_state: list[dict])
             changed = False
             if not data.get("doc_id") and st.get("pdf_doc_id"):
                 data["doc_id"] = st["pdf_doc_id"]
-                data.setdefault("url", f"/api/documents/{st['pdf_doc_id']}/raw")
                 changed = True
-            if not data.get("audio_doc_id") and st.get("audio_doc_id"):
-                data["audio_doc_id"] = st["audio_doc_id"]
+            if not data.get("url") and st.get("pdf_doc_id"):
+                data["url"] = f"/api/documents/{st['pdf_doc_id']}/raw"
                 changed = True
+            audio_doc_id = st.get("audio_doc_id") or data.get("audio_doc_id") or ""
+            if not data.get("audio_doc_id") and audio_doc_id:
+                data["audio_doc_id"] = audio_doc_id
+                changed = True
+            if st.get("audio_files"):
+                hydrated_audio = _with_audio_urls(
+                    st.get("audio_files") or [], audio_doc_id
+                )
+                current_audio = data.get("audio_files") or []
+                if len(current_audio) < len(hydrated_audio) or any(
+                    item.get("filename") and not item.get("url")
+                    for item in current_audio
+                ):
+                    data["audio_files"] = hydrated_audio
+                    changed = True
             if changed:
                 upsert_canvas_block(session_id, {**pdf_block, "data": data})
                 backfilled += 1
-                logger.info("回填 pdf_ch%s 的 doc_id=%s", ch_id, data.get("doc_id"))
+                logger.info("回填 pdf_ch%s 的文档/音频信息", ch_id)
 
         quiz_block = by_id.get(f"quiz_ch{ch_id}_bank")
         if quiz_block:
@@ -802,11 +1507,14 @@ def _normalize_math_in_text(text: str) -> str:
         #    LLM 段首装饰被翻倍后的字面残留（如 ``\na_{11}`` ``\nx_1+`` 等）。
         #    严格要求"字母后必须是非字母"，避免误伤 ``\nabla \neq \nu``
         #    ``\theta \times \top \tau`` 这种连续字母 LaTeX 命令。
-        s = _re.sub(
-            r"(?<!\\)\\[nrt](?=[A-Za-z][^A-Za-z])",
-            "",
-            s,
-        )
+        #    同时仅在多行环境内生效，且字母后必须紧跟下标/上标/数字/运算符，
+        #    否则 ``\to `` ``\nu$`` 会被误删成 ``o `` ``u$``。
+        if has_multiline_env:
+            s = _re.sub(
+                r"(?<!\\)\\[nrt](?=[A-Za-z](?:[_^{0-9=+\-]))",
+                "",
+                s,
+            )
         # ⑤ 公式 span 内紧跟在 ``\begin{<env>}`` 之后的 ``\n``/``\r``/``\t``
         #    严格要求后不接字母（避免 ``\begin{cases}\rho`` 被误删 ``\r``）
         s = _re.sub(
@@ -950,6 +1658,47 @@ def _build_chapter_summary_md(
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _build_research_fallback_payload(ch_id: int, ch_title: str, ch_info: dict) -> dict:
+    """Build a minimal research.json so resume never loops forever on search failure."""
+    desc = (ch_info.get("description") or "").strip()
+    knowledge_points = [
+        str(item).strip()
+        for item in ch_info.get("knowledge_points", [])
+        if str(item).strip()
+    ]
+    keywords = [
+        str(item).strip()
+        for item in ch_info.get("search_keywords", [])
+        if str(item).strip()
+    ]
+    lines = [
+        "### 本章定位",
+        desc or f"本章围绕「{ch_title}」建立核心概念与基本方法。",
+        "",
+    ]
+    if knowledge_points:
+        lines.extend(["### 核心知识点"])
+        lines.extend(f"- **{point}**" for point in knowledge_points)
+        lines.append("")
+    if keywords:
+        lines.extend(["### 后续检索关键词"])
+        lines.extend(f"- {keyword}" for keyword in keywords[:6])
+        lines.append("")
+    lines.extend(
+        [
+            "### 学习提示",
+            "资料检索暂时未完成，本节先依据课程大纲生成基础讲义；生成过程会继续保留章节目标、概念边界与必要例子，避免课程卡死在单章检索失败上。",
+        ]
+    )
+    return {
+        "chapter_id": ch_id,
+        "chapter_title": ch_title,
+        "sources": [],
+        "raw_text": "\n".join(lines),
+        "fallback": True,
+    }
+
+
 async def _run_single_chapter_research(
     agent: "ReActAgent",
     topic: str,
@@ -964,6 +1713,7 @@ async def _run_single_chapter_research(
     """
     events = []
     success = False
+    used_fallback = False
 
     try:
         researcher_prompt = (
@@ -983,8 +1733,28 @@ async def _run_single_chapter_research(
             events.append(ev)
 
         success = research_path.exists() and research_path.stat().st_size > 50
+        if not success:
+            fallback_payload = _build_research_fallback_payload(
+                ch_id, ch_title, ch_info
+            )
+            research_path.parent.mkdir(parents=True, exist_ok=True)
+            research_path.write_text(
+                json.dumps(fallback_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            success = True
+            used_fallback = True
+            logger.warning(
+                "并行 Researcher 未写入 research.json，已使用大纲 fallback: 第%d章 %s",
+                ch_id,
+                ch_title,
+            )
         logger.info(
-            "并行 Researcher 完成: 第%d章 %s (success=%s)", ch_id, ch_title, success
+            "并行 Researcher 完成: 第%d章 %s (success=%s, fallback=%s)",
+            ch_id,
+            ch_title,
+            success,
+            used_fallback,
         )
 
         # 规范化 research.raw_text
@@ -998,6 +1768,27 @@ async def _run_single_chapter_research(
 
     except Exception as exc:
         logger.error("并行 Researcher 异常: 第%d章 %s: %s", ch_id, ch_title, exc)
+        try:
+            fallback_payload = _build_research_fallback_payload(
+                ch_id, ch_title, ch_info
+            )
+            research_path.parent.mkdir(parents=True, exist_ok=True)
+            research_path.write_text(
+                json.dumps(fallback_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            success = True
+            used_fallback = True
+            logger.warning(
+                "并行 Researcher 异常后已使用大纲 fallback: 第%d章 %s", ch_id, ch_title
+            )
+        except Exception as fallback_exc:
+            logger.error(
+                "写入 fallback research.json 失败: 第%d章 %s: %s",
+                ch_id,
+                ch_title,
+                fallback_exc,
+            )
 
     return {
         "ch_id": ch_id,
@@ -1005,6 +1796,7 @@ async def _run_single_chapter_research(
         "ch_info": ch_info,
         "events": events,
         "success": success,
+        "used_fallback": used_fallback,
         "research_path": research_path,
     }
 
@@ -1046,8 +1838,1067 @@ def _build_researcher_agent(layout: "UserDataLayout", user_id: str) -> "ReActAge
                 WriteFileTool(),
             ]
         ),
-        max_steps=8,
+        max_steps=14,
     )
+
+
+def _build_agent_by_name(
+    spec_name: str, layout: "UserDataLayout", user_id: str
+) -> "ReActAgent":
+    """Build a fresh agent instance for one chapter pipeline.
+
+    Chapter-level parallelism must not share one ReActAgent across chapters,
+    because history/tool state can leak between concurrent runs.
+    """
+    from agents.registry import build_agent
+
+    return build_agent(spec_name, user_id=user_id, workspace_dir=layout.root)
+
+
+async def _run_tex_writer_with_retry(
+    *,
+    topic: str,
+    chapters: list[dict],
+    index: int,
+    course: "CourseLayout",
+    layout: "UserDataLayout",
+    user_id: str,
+    emit: Callable[[str], Awaitable[None]],
+    max_attempts: int = MAX_CHAPTER_PDF_ATTEMPTS,
+) -> dict:
+    """Generate one chapter PDF with immediate course-level retries.
+
+    The ReAct agent already has an internal tool-repair loop, but transient
+    network failures or an exhausted loop can still leave PDF invalid.  This
+    wrapper starts a fresh tex_writer agent per attempt and feeds the last
+    validation error back into the next attempt before exposing the chapter as
+    pending to the learner.
+    """
+    ch_info = chapters[index]
+    ch_id = ch_info.get("chapter_id", index + 1)
+    ch_title = ch_info.get("title", f"第{ch_id}章")
+    chapter_dir = course.chapter_dir(ch_id)
+    research_path = chapter_dir / "research.json"
+    tex_path = course.tex_file(ch_id)
+    pdf_path = course.pdf_file(ch_id)
+    images_dir = course.chapter_images_dir(ch_id)
+    last_error = ""
+
+    if _pdf_is_ready(pdf_path, tex_path, images_dir, chapters, index):
+        return {"ok": True, "attempts": 0, "error": ""}
+
+    for attempt in range(1, max_attempts + 1):
+        prompt = _build_tex_prompt(
+            topic=topic,
+            chapters=chapters,
+            index=index,
+            research_path=research_path,
+            tex_path=tex_path,
+            images_dir=images_dir,
+        )
+        if last_error:
+            prompt += (
+                "\n\n【自动重试上下文】\n"
+                f"上一轮第 {ch_id} 章 PDF 未通过发布校验，原因：{last_error}\n"
+                "请直接修复同一个 TeX 输出文件，优先保证可编译、图片完整、章节导航正确，"
+                "不要改变课程大纲里的章节编号和标题。"
+            )
+        if attempt > 1:
+            await emit(
+                sse_event(
+                    "progress",
+                    stage="tex_retry",
+                    pct=0,
+                    message=f"🔁 自动重试第 {ch_id} 章 PDF（第 {attempt}/{max_attempts} 次）: {ch_title}",
+                )
+            )
+        try:
+            tex_writer = _build_agent_by_name("course.tex_writer", layout, user_id)
+            async for ev in stream_agent_events(
+                tex_writer,
+                prompt,
+                "tex_writer",
+                skill_names=["tex_beamer_writing"],
+                start_msg=f"开始生成第{ch_id}章PDF",
+                finish_msg="PDF生成完成",
+            ):
+                await emit(ev)
+        except Exception as exc:  # pylint: disable=broad-except
+            last_error = f"tex_writer 异常: {exc}"
+            logger.warning(
+                "第%d章 tex_writer 第%d/%d次尝试异常: %s",
+                ch_id,
+                attempt,
+                max_attempts,
+                exc,
+            )
+        else:
+            last_error = (
+                _chapter_pdf_error(pdf_path, tex_path, images_dir, chapters, index)
+                or ""
+            )
+            if not last_error:
+                logger.info(
+                    "第%d章 PDF 生成成功（attempt=%d/%d）",
+                    ch_id,
+                    attempt,
+                    max_attempts,
+                )
+                return {"ok": True, "attempts": attempt, "error": ""}
+            logger.warning(
+                "第%d章 PDF 第%d/%d次尝试仍未通过校验: %s",
+                ch_id,
+                attempt,
+                max_attempts,
+                last_error,
+            )
+
+    return {"ok": False, "attempts": max_attempts, "error": last_error}
+
+
+async def _stream_parallel_tex_prefetch(
+    *,
+    topic: str,
+    chapters: list[dict],
+    chapter_items: list[tuple[int, dict]],
+    course: "CourseLayout",
+    layout: "UserDataLayout",
+    user_id: str,
+    max_concurrency: int = MAX_PARALLEL_TEX_CHAPTERS,
+    publish_ready: Callable[[int, dict], Awaitable[list[str]]] | None = None,
+) -> AsyncGenerator[str, None]:
+    """Prefetch chapter PDFs concurrently, streaming worker events through a queue.
+
+    This helper performs the expensive TeX/PDF writing work.  When
+    ``publish_ready`` is provided, the caller publishes a chapter as soon as that
+    worker validates its PDF, while the remaining workers continue running.
+
+    ``max_concurrency`` is intentionally scoped to this one generator invocation
+    (one immersive generate/resume request).  Do not replace the local semaphore
+    with a module-global semaphore: different immersive requests must keep their
+    own independent 3-chapter windows.
+    """
+    targets: list[tuple[int, dict]] = []
+    for index, ch_info in chapter_items:
+        ch_id = ch_info.get("chapter_id", index + 1)
+        tex_path = course.tex_file(ch_id)
+        pdf_path = course.pdf_file(ch_id)
+        images_dir = course.chapter_images_dir(ch_id)
+        if not _pdf_is_ready(pdf_path, tex_path, images_dir, chapters, index):
+            targets.append((index, ch_info))
+
+    if not targets:
+        return
+
+    concurrency = max(1, min(max_concurrency, len(targets)))
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _worker(item: tuple[int, dict]) -> None:
+        index, ch_info = item
+        ch_id = ch_info.get("chapter_id", index + 1)
+        ch_title = ch_info.get("title", f"第{ch_id}章")
+        try:
+            async with semaphore:
+                await queue.put(
+                    sse_event(
+                        "progress",
+                        stage="tex_parallel",
+                        pct=0,
+                        message=f"🚀 并行生成第 {ch_id} 章 PDF: {ch_title}",
+                    )
+                )
+                result = await _run_tex_writer_with_retry(
+                    topic=topic,
+                    chapters=chapters,
+                    index=index,
+                    course=course,
+                    layout=layout,
+                    user_id=user_id,
+                    emit=queue.put,
+                )
+                if result.get("ok"):
+                    await queue.put(
+                        sse_event(
+                            "progress",
+                            stage="tex_parallel",
+                            pct=0,
+                            message=f"✅ 第 {ch_id} 章 PDF 并行预生成完成",
+                        )
+                    )
+                    if publish_ready:
+                        try:
+                            for event in await publish_ready(index, ch_info):
+                                await queue.put(event)
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.exception("并行 PDF 即时发布失败 ch=%s", ch_id)
+                            await queue.put(
+                                sse_event(
+                                    "progress",
+                                    stage="tex_parallel",
+                                    pct=0,
+                                    message=f"⚠️ 第 {ch_id} 章 PDF 已生成但即时发布失败，将在有序阶段重试: {exc}",
+                                )
+                            )
+                else:
+                    await queue.put(
+                        sse_event(
+                            "progress",
+                            stage="tex_parallel",
+                            pct=0,
+                            message=f"⚠️ 第 {ch_id} 章 PDF 并行预生成未通过，后续将再做一次有序兜底: {result.get('error') or '未知错误'}",
+                        )
+                    )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("并行 PDF 预生成 worker 异常 ch=%s", ch_id)
+            await queue.put(
+                sse_event(
+                    "progress",
+                    stage="tex_parallel",
+                    pct=0,
+                    message=f"⚠️ 第 {ch_id} 章 PDF 并行预生成异常，后续将有序兜底: {exc}",
+                )
+            )
+        finally:
+            await queue.put(None)
+
+    tasks = [asyncio.create_task(_worker(item)) for item in targets]
+    finished = 0
+    try:
+        while finished < len(tasks):
+            item = await queue.get()
+            if item is None:
+                finished += 1
+                continue
+            yield item
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+
+async def _stream_parallel_chapter_enrichment(
+    *,
+    session_id: str,
+    topic: str,
+    chapters: list[dict],
+    chapter_items: list[tuple[int, dict]],
+    course: "CourseLayout",
+    layout: "UserDataLayout",
+    user_id: str,
+    enable_audio: bool,
+    enable_exercises: bool,
+    tts_llm,
+    total_ch: int,
+    pct_per_chapter: float,
+    published_pdf_by_chapter: dict[int, dict],
+    state_write_lock: asyncio.Lock,
+    all_files_for_session: list[dict] | None = None,
+    max_concurrency: int = MAX_PARALLEL_ENRICH_CHAPTERS,
+    incoming: "asyncio.Queue[tuple[int, dict] | None] | None" = None,
+) -> AsyncGenerator[str, None]:
+    """Enrich already published chapter PDFs with a request-local rolling window.
+
+    The concurrency limit is intentionally local to this generator invocation.
+    All workspace/canvas/session-file mutations are serialized by
+    ``state_write_lock``; long LLM/TTS/archive/node work is kept outside it.
+
+    ``incoming`` 为可选的流式入队通道：PDF 一就绪就把 ``(index, ch_info)`` 放入，
+    以 ``None`` 结束；这样习题/语音/讲解稿可与后续章节的 PDF 生成并行，
+    不必等全部 PDF 完成。未提供时仅处理 ``chapter_items``。
+    """
+    targets = list(chapter_items)
+    if not targets and incoming is None:
+        return
+
+    if incoming is None:
+        concurrency = max(1, min(max_concurrency, len(targets)))
+    else:
+        concurrency = max(1, max_concurrency)
+    semaphore = asyncio.Semaphore(concurrency)
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    results_by_chapter: dict[int, dict] = {}
+    nodes_by_chapter: dict[int, list[dict]] = {}
+    order_by_chapter = {
+        ch_info.get("chapter_id", index + 1): position
+        for position, (index, ch_info) in enumerate(targets)
+    }
+
+    async def _emit(event: str) -> None:
+        await queue.put(event)
+
+    async def _mark_step(ch_id: int, **steps: str) -> None:
+        """把章节补全子步骤（exercises/audio/kg）状态写入 workspace，供历史页展示进度。"""
+        try:
+            async with state_write_lock:
+                ws = read_workspace(session_id).get("workspace", {}) or {}
+                chapters_state = list(ws.get("chapters", []) or [])
+                for idx, item in enumerate(chapters_state):
+                    if item.get("chapter_id") == ch_id:
+                        chapters_state[idx] = {
+                            **item,
+                            "enrich_steps": {
+                                **(item.get("enrich_steps") or {}),
+                                **steps,
+                            },
+                        }
+                        break
+                else:
+                    return
+                update_workspace(session_id, workspace={"chapters": chapters_state})
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("第%s章补全步骤状态写入失败", ch_id, exc_info=True)
+
+    async def _register_existing_pdf_if_needed(
+        index: int, ch_info: dict
+    ) -> dict | None:
+        ch_id = ch_info.get("chapter_id", index + 1)
+        publication = published_pdf_by_chapter.get(ch_id)
+        if publication:
+            return publication
+        async with state_write_lock:
+            publication = await _publish_chapter_pdf_ready(
+                session_id=session_id,
+                topic=topic,
+                user_id=user_id,
+                course=course,
+                chapters=chapters,
+                index=index,
+                ch_info=ch_info,
+                total_ch=total_ch,
+                enable_audio=enable_audio,
+                generation_started_at=None,
+                all_files_for_session=all_files_for_session,
+                set_current_chapter=False,
+            )
+        if publication:
+            published_pdf_by_chapter[ch_id] = publication
+            for event in publication["events"]:
+                await _emit(event)
+        return publication
+
+    async def _worker(item: tuple[int, dict]) -> dict | None:
+        index, ch_info = item
+        ch_id = ch_info.get("chapter_id", index + 1)
+        ch_title = ch_info.get("title", f"第{ch_id}章")
+        ch_base_pct = int(15 + pct_per_chapter * order_by_chapter.get(ch_id, index))
+        tex_path = course.tex_file(ch_id)
+        pdf_path = course.pdf_file(ch_id)
+        images_dir = course.chapter_images_dir(ch_id)
+        exercises_path = course.exercises_file(ch_id)
+        chapter_dir = course.chapter_dir(ch_id)
+        pdf_block = None
+        pdf_doc_id = ""
+        pdf_rel = ""
+        pdf_revision = ""
+        num_frames = count_beamer_frames(tex_path)
+        ex_doc_id = ""
+        ex_rel = ""
+        quiz_block = None
+        speaker_notes: list[str] = []
+        audio_results: list[dict] = []
+        audio_files_data: list[dict] = []
+        audio_doc_id = ""
+        notes_doc_id = ""
+
+        try:
+            async with semaphore:
+                publication = await _register_existing_pdf_if_needed(index, ch_info)
+                if not publication:
+                    await _emit(
+                        sse_event(
+                            "progress",
+                            stage="enrichment",
+                            pct=min(int(ch_base_pct + pct_per_chapter), 90),
+                            message=f"第 {ch_id} 章 PDF 尚未就绪，跳过补全资源: {ch_title}",
+                        )
+                    )
+                    return None
+
+                pdf_block = publication["pdf_block"]
+                pdf_doc_id = publication["pdf_doc_id"]
+                pdf_rel = publication["pdf_rel"]
+                pdf_revision = publication["pdf_revision"]
+                num_frames = publication["num_frames"]
+                chapter_status_block = {
+                    **publication["status_block"],
+                    "status": "generating",
+                    "data": {
+                        **(publication["status_block"].get("data") or {}),
+                        "stage": "enriching",
+                        "message": "PDF 已发布，正在继续补全小测和语音。",
+                    },
+                }
+                async with state_write_lock:
+                    upsert_canvas_block(
+                        session_id,
+                        chapter_status_block,
+                        stage="generating",
+                        workspace_patch={"current_chapter_id": ch_id},
+                    )
+                await _emit(
+                    sse_event(
+                        "chapter_start",
+                        index=index,
+                        total=total_ch,
+                        chapter_id=ch_id,
+                        title=ch_title,
+                        stage="enriching",
+                    )
+                )
+                await _emit(
+                    sse_event(
+                        "workspace_update",
+                        event="block_updated",
+                        session_id=session_id,
+                        block=chapter_status_block,
+                    )
+                )
+
+                await _mark_step(
+                    ch_id,
+                    exercises="running" if enable_exercises else "skipped",
+                    audio="running" if enable_audio else "skipped",
+                    kg="pending",
+                )
+                async with state_write_lock:
+                    workspace_snapshot = read_workspace(session_id)
+                state_by_id = {
+                    item.get("chapter_id"): item
+                    for item in (workspace_snapshot.get("workspace", {}) or {}).get(
+                        "chapters", []
+                    )
+                    or []
+                    if item.get("chapter_id") is not None
+                }
+                existing_state = state_by_id.get(ch_id, {})
+                ex_doc_id = existing_state.get("exercises_doc_id", "") or ""
+                audio_doc_id = existing_state.get("audio_doc_id", "") or ""
+                notes_doc_id = existing_state.get("notes_doc_id", "") or ""
+
+                step_started = time.time()
+                if enable_exercises:
+                    exercises_pct = int(ch_base_pct + pct_per_chapter * 0.7)
+                    exercises_done = _file_is_ready(exercises_path)
+                    if exercises_done:
+                        await _emit(
+                            sse_event(
+                                "progress",
+                                stage="exercises",
+                                pct=exercises_pct,
+                                message=f"已有习题，跳过生成第 {ch_id} 章: {ch_title}",
+                            )
+                        )
+                    else:
+                        await _emit(
+                            sse_event(
+                                "progress",
+                                stage="exercises",
+                                pct=exercises_pct,
+                                message=f"生成习题: 第 {ch_id} 章 {ch_title}",
+                            )
+                        )
+                        exercises_prompt = (
+                            f"为课程「{topic}」第 {ch_id} 章「{ch_title}」生成配套习题。\n"
+                            f"TeX 讲义文件：{tex_path}\n"
+                            f"习题输出路径：{exercises_path}\n"
+                            f"知识点：{', '.join(ch_info.get('knowledge_points', []))}"
+                        )
+                        try:
+                            exercises_agent = _build_agent_by_name(
+                                "course.exercises", layout, user_id
+                            )
+                            async for ev in stream_agent_events(
+                                exercises_agent,
+                                exercises_prompt,
+                                "exercises",
+                                start_msg=f"开始生成第{ch_id}章习题",
+                                finish_msg="习题生成完成",
+                            ):
+                                await _emit(ev)
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning(
+                                "第%d章习题生成失败（不阻塞 PDF）: %s", ch_id, exc
+                            )
+                    ex_rel = (
+                        to_rel_path(str(exercises_path))
+                        if _file_is_ready(exercises_path)
+                        else ""
+                    )
+                    if ex_rel and not ex_doc_id:
+                        try:
+                            async with state_write_lock:
+                                ex_doc_id = (
+                                    await asyncio.to_thread(
+                                        lambda p=exercises_path, c=ch_id, t=ch_title: (
+                                            register_chapter_exercises(
+                                                session_id=session_id,
+                                                topic=topic,
+                                                chapter_id=c,
+                                                chapter_title=t,
+                                                exercises_path=p,
+                                                user_id=user_id,
+                                                node_ids=[],
+                                            )
+                                        ),
+                                    )
+                                    or ""
+                                )
+                                if ex_doc_id:
+                                    append_session_file(
+                                        session_id,
+                                        ex_doc_id,
+                                        f"第{ch_id}章 {ch_title} 习题",
+                                        "chapter_exercises",
+                                    )
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning(
+                                "第%d章习题登记失败（不阻塞 PDF）: %s", ch_id, exc
+                            )
+                    if ex_rel:
+                        quiz_block = {
+                            "id": f"quiz_ch{ch_id}_bank",
+                            "type": "quiz_batch",
+                            "title": f"第{ch_id}章小测",
+                            "status": "ready" if ex_doc_id else "learning_ready",
+                            "chapter_id": ch_id,
+                            "data": {
+                                "source": "exercises_md",
+                                "exercises_path": ex_rel,
+                                "doc_id": ex_doc_id,
+                                "exercises_doc_id": ex_doc_id,
+                                "display_limit": 3,
+                                "strategy": "show_2_to_3_questions_first",
+                            },
+                        }
+                        async with state_write_lock:
+                            upsert_canvas_block(session_id, quiz_block)
+                        await _emit(
+                            sse_event(
+                                "workspace_update",
+                                event="block_created",
+                                session_id=session_id,
+                                block=quiz_block,
+                            )
+                        )
+                else:
+                    logger.info("跳过习题生成: 第%d章（用户未启用习题）", ch_id)
+                if enable_exercises:
+                    logger.info(
+                        "第%d章习题阶段耗时 %.1fs ok=%s",
+                        ch_id,
+                        time.time() - step_started,
+                        bool(ex_rel),
+                    )
+                    await _mark_step(ch_id, exercises="done" if ex_rel else "failed")
+
+                step_started = time.time()
+                if enable_audio and tex_path.exists() and num_frames > 0:
+                    tts_pct = int(ch_base_pct + pct_per_chapter * 0.85)
+                    notes_path = chapter_dir / "speaker_notes.json"
+                    audio_dir = chapter_dir / "audio"
+                    existing_audio = (
+                        sorted(
+                            f.name
+                            for f in audio_dir.iterdir()
+                            if f.suffix.lower() == ".wav"
+                        )
+                        if audio_dir.exists()
+                        else []
+                    )
+                    tts_done = len(existing_audio) >= num_frames
+                    if tts_done:
+                        await _emit(
+                            sse_event(
+                                "progress",
+                                stage="tts",
+                                pct=tts_pct,
+                                message=f"已有语音，跳过第 {ch_id} 章 ({len(existing_audio)} 段): {ch_title}",
+                            )
+                        )
+                        speaker_notes = _read_speaker_notes(notes_path)
+                        audio_results = [
+                            {
+                                "filename": filename,
+                                "success": True,
+                                "duration_seconds": 0,
+                            }
+                            for filename in existing_audio
+                        ]
+                    else:
+                        await _emit(
+                            sse_event(
+                                "progress",
+                                stage="tts",
+                                pct=tts_pct,
+                                message=f"生成语音: 第 {ch_id} 章 {ch_title} ({num_frames}页)",
+                            )
+                        )
+                        try:
+                            speaker_notes = _read_speaker_notes(notes_path)
+                            if not speaker_notes:
+                                speaker_notes = await asyncio.to_thread(
+                                    generate_speaker_notes,
+                                    tts_llm,
+                                    tex_path,
+                                    num_frames,
+                                )
+                                if speaker_notes:
+                                    notes_path.write_text(
+                                        json.dumps(
+                                            speaker_notes, ensure_ascii=False, indent=2
+                                        ),
+                                        encoding="utf-8",
+                                    )
+                            if speaker_notes:
+                                audio_results = await asyncio.to_thread(
+                                    run_tts_for_chapter,
+                                    chapter_dir,
+                                    speaker_notes,
+                                    user_id,
+                                )
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning(
+                                "第%d章语音生成失败（不阻塞 PDF）: %s", ch_id, exc
+                            )
+                    if speaker_notes and not notes_doc_id and notes_path.exists():
+                        try:
+                            async with state_write_lock:
+                                notes_doc_id = (
+                                    await asyncio.to_thread(
+                                        lambda p=notes_path, c=ch_id, t=ch_title: (
+                                            register_chapter_notes(
+                                                session_id=session_id,
+                                                topic=topic,
+                                                chapter_id=c,
+                                                chapter_title=t,
+                                                notes_path=p,
+                                                user_id=user_id,
+                                            )
+                                        ),
+                                    )
+                                    or ""
+                                )
+                                if notes_doc_id:
+                                    append_session_file(
+                                        session_id,
+                                        notes_doc_id,
+                                        f"第{ch_id}章 {ch_title} · 讲解稿",
+                                        "chapter_notes",
+                                    )
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning(
+                                "第%d章讲解稿登记失败（不阻塞 PDF）: %s", ch_id, exc
+                            )
+                    if audio_results and not audio_doc_id:
+                        try:
+                            async with state_write_lock:
+                                audio_doc_id = (
+                                    await asyncio.to_thread(
+                                        lambda d=audio_dir, c=ch_id, t=ch_title, ar=audio_results, sn=speaker_notes: (
+                                            register_chapter_audio(
+                                                session_id=session_id,
+                                                topic=topic,
+                                                chapter_id=c,
+                                                chapter_title=t,
+                                                audio_dir=d,
+                                                audio_results=ar,
+                                                speaker_notes=sn,
+                                                user_id=user_id,
+                                            )
+                                        ),
+                                    )
+                                    or ""
+                                )
+                                if audio_doc_id:
+                                    append_session_file(
+                                        session_id,
+                                        audio_doc_id,
+                                        f"第{ch_id}章 {ch_title} · 音频",
+                                        "chapter_audio",
+                                    )
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning(
+                                "第%d章音频登记失败（不阻塞 PDF）: %s", ch_id, exc
+                            )
+                elif enable_audio:
+                    logger.info("跳过语音生成: 第%d章（TeX 不存在或页数为 0）", ch_id)
+                if enable_audio:
+                    audio_ok = any(r.get("success") for r in audio_results)
+                    logger.info(
+                        "第%d章语音阶段耗时 %.1fs ok=%s",
+                        ch_id,
+                        time.time() - step_started,
+                        audio_ok,
+                    )
+                    await _mark_step(ch_id, audio="done" if audio_ok else "failed")
+
+                if enable_audio:
+                    for result in audio_results:
+                        if result.get("success"):
+                            filename = result.get("filename", "")
+                            audio_files_data.append(
+                                {
+                                    "filename": filename,
+                                    "url": (
+                                        f"/api/documents/{audio_doc_id}/asset/{filename}"
+                                        if audio_doc_id
+                                        else ""
+                                    ),
+                                    "duration_seconds": result.get(
+                                        "duration_seconds", 0
+                                    ),
+                                    "success": True,
+                                }
+                            )
+
+                images = []
+                if images_dir.exists():
+                    images = [
+                        f.name
+                        for f in images_dir.iterdir()
+                        if f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                    ]
+
+                artifact_missing: list[str] = []
+                if enable_exercises:
+                    if not ex_rel:
+                        artifact_missing.append("exercises")
+                    elif not ex_doc_id:
+                        artifact_missing.append("exercises_doc_id")
+                if enable_audio:
+                    if not speaker_notes:
+                        artifact_missing.append("speaker_notes")
+                    if not audio_files_data:
+                        artifact_missing.append("audio")
+                    elif not audio_doc_id:
+                        artifact_missing.append("audio_doc_id")
+                    if speaker_notes and not notes_doc_id:
+                        artifact_missing.append("notes_doc_id")
+                chapter_ready_status = (
+                    "ready" if not artifact_missing else "learning_ready"
+                )
+
+                if audio_files_data and pdf_block:
+                    pdf_block = {
+                        **pdf_block,
+                        "data": {
+                            **(pdf_block.get("data") or {}),
+                            "audio_files": audio_files_data,
+                            "audio_doc_id": audio_doc_id,
+                        },
+                    }
+                    async with state_write_lock:
+                        upsert_canvas_block(session_id, pdf_block)
+                    await _emit(
+                        sse_event(
+                            "workspace_update",
+                            event="block_updated",
+                            session_id=session_id,
+                            block=pdf_block,
+                        )
+                    )
+
+                chapter_block_ids = [f"chapter_{ch_id}_status", f"pdf_ch{ch_id}"]
+                if quiz_block:
+                    chapter_block_ids.append(quiz_block["id"])
+                for block_id in existing_state.get("block_ids") or []:
+                    if block_id not in chapter_block_ids:
+                        chapter_block_ids.append(block_id)
+
+                completed_chapter = {
+                    "chapter_id": ch_id,
+                    "title": ch_title,
+                    "status": chapter_ready_status,
+                    "block_ids": chapter_block_ids,
+                    "files": [path for path in [pdf_rel, ex_rel] if path],
+                    "audio_enabled": enable_audio,
+                    "audio_files": audio_files_data,
+                    "speaker_notes_count": len(speaker_notes),
+                    "pdf_doc_id": pdf_doc_id,
+                    "pdf_revision": pdf_revision,
+                    "exercises_doc_id": ex_doc_id,
+                    "audio_doc_id": audio_doc_id,
+                    "notes_doc_id": notes_doc_id,
+                    "artifact_missing": artifact_missing,
+                    "artifact_status": {
+                        "pdf": True,
+                        "exercises": bool(ex_rel),
+                        "speaker_notes": bool(speaker_notes),
+                        "audio": bool(audio_files_data),
+                    },
+                }
+                ch_result = {
+                    **completed_chapter,
+                    "knowledge_points": ch_info.get("knowledge_points", []),
+                    "pdf_exists": True,
+                    "pdf_path": pdf_rel,
+                    "exercises_exists": bool(ex_rel),
+                    "exercises_path": ex_rel,
+                    "num_frames": num_frames,
+                    "images": images,
+                    "images_count": len(images),
+                }
+
+                async with state_write_lock:
+                    workspace_now = read_workspace(session_id)
+                    workspace_data = workspace_now.get("workspace", {}) or {}
+                    chapters_state = list(workspace_data.get("chapters", []) or [])
+                    for idx, existing in enumerate(chapters_state):
+                        if existing.get("chapter_id") == ch_id:
+                            chapters_state[idx] = {**existing, **completed_chapter}
+                            break
+                    else:
+                        chapters_state.append(completed_chapter)
+                    generated_chapters = len(
+                        [c for c in chapters_state if _chapter_is_user_available(c)]
+                    )
+                    pending_chapter_ids = [
+                        c.get("chapter_id")
+                        for c in chapters_state
+                        if _chapter_requires_followup(c)
+                    ]
+                    next_chapter_id = (
+                        pending_chapter_ids[0] if pending_chapter_ids else None
+                    )
+                    next_actions = [
+                        {"type": "start_learning", "label": "先学习已生成内容"}
+                    ]
+                    if next_chapter_id:
+                        next_actions.append(
+                            {
+                                "type": "continue_generation",
+                                "label": f"继续生成第{next_chapter_id}章",
+                            }
+                        )
+                    update_workspace(
+                        session_id,
+                        stage="partial_ready" if pending_chapter_ids else "ready",
+                        next_actions=next_actions,
+                        workspace={
+                            "chapters": chapters_state,
+                            "generated_chapters": generated_chapters,
+                            "planned_chapters": total_ch,
+                            "current_chapter_id": next_chapter_id,
+                            "pending_chapter_ids": pending_chapter_ids,
+                        },
+                    )
+                    chapter_status_block = {
+                        **chapter_status_block,
+                        "status": chapter_ready_status,
+                        "data": {
+                            **(chapter_status_block.get("data") or {}),
+                            "stage": chapter_ready_status,
+                            "block_ids": chapter_block_ids,
+                            "artifact_missing": artifact_missing,
+                        },
+                    }
+                    upsert_canvas_block(session_id, chapter_status_block)
+
+                results_by_chapter[ch_id] = ch_result
+                await _emit(
+                    sse_event(
+                        "progress",
+                        stage="enrichment",
+                        pct=min(int(ch_base_pct + pct_per_chapter), 90),
+                        message=f"第 {ch_id} 章补全完成: {ch_title}",
+                    )
+                )
+                await _emit(
+                    sse_event(
+                        "chapter_done", index=index, total=total_ch, data=ch_result
+                    )
+                )
+                await _emit(
+                    sse_event(
+                        "workspace_update",
+                        event="block_updated",
+                        session_id=session_id,
+                        block=chapter_status_block,
+                        next_actions=next_actions,
+                    )
+                )
+
+                try:
+                    await asyncio.to_thread(
+                        archive_immersive_chapter,
+                        chapter_dir,
+                        topic,
+                        chapter_dir.name,
+                        session_id,
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("章节 %d 资产归档失败: %s", ch_id, exc)
+                try:
+                    bundle_path = await asyncio.to_thread(
+                        pack_chapter_bundle,
+                        chapter_dir,
+                        topic,
+                        ch_title,
+                        str(ch_id),
+                        session_id,
+                    )
+                    if bundle_path:
+                        logger.info("第%d章打包完成: %s", ch_id, bundle_path.name)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("章节 %d 打包失败: %s", ch_id, exc)
+
+                kg_started = time.time()
+                kg_ok = False
+                try:
+                    single_ch = {
+                        "title": ch_title,
+                        "knowledge_points": ch_info.get("knowledge_points", []),
+                    }
+                    ch_nodes = await asyncio.to_thread(
+                        extract_and_persist_nodes,
+                        session_id,
+                        topic,
+                        [single_ch],
+                        tts_llm or get_llm(user_id, scene="immersive"),
+                        user_id,
+                    )
+                    if ch_nodes:
+                        kg_ok = True
+                        nodes_by_chapter[ch_id] = ch_nodes
+                        ch_new = sum(1 for node in ch_nodes if not node.get("existed"))
+                        await _emit(
+                            sse_event(
+                                "nodes_extracted",
+                                chapter_id=ch_id,
+                                nodes=[
+                                    {"id": node["id"], "title": node["title"]}
+                                    for node in ch_nodes
+                                ],
+                                new_count=ch_new,
+                            )
+                        )
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("第%d章知识图谱抽取失败（不阻塞）: %s", ch_id, exc)
+                logger.info(
+                    "第%d章图谱抽取耗时 %.1fs ok=%s",
+                    ch_id,
+                    time.time() - kg_started,
+                    kg_ok,
+                )
+                await _mark_step(ch_id, kg="done" if kg_ok else "failed")
+                return ch_result
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("第%d章补全 worker 异常（PDF 保持可学习）", ch_id)
+            try:
+                async with state_write_lock:
+                    workspace_now = read_workspace(session_id)
+                    workspace_data = workspace_now.get("workspace", {}) or {}
+                    chapters_state = list(workspace_data.get("chapters", []) or [])
+                    fallback_state = {
+                        "chapter_id": ch_id,
+                        "title": ch_title,
+                        "status": "learning_ready",
+                        "block_ids": [f"chapter_{ch_id}_status", f"pdf_ch{ch_id}"],
+                        "files": [to_rel_path(str(pdf_path))]
+                        if pdf_path.exists()
+                        else [],
+                        "audio_enabled": enable_audio,
+                        "artifact_missing": [f"enrichment_error: {exc}"],
+                    }
+                    for idx, existing in enumerate(chapters_state):
+                        if existing.get("chapter_id") == ch_id:
+                            settled_steps = {
+                                key: (val if val in {"done", "skipped"} else "failed")
+                                for key, val in (
+                                    existing.get("enrich_steps") or {}
+                                ).items()
+                            }
+                            chapters_state[idx] = {
+                                **existing,
+                                **fallback_state,
+                                "enrich_steps": settled_steps,
+                            }
+                            break
+                    else:
+                        chapters_state.append(fallback_state)
+                    update_workspace(
+                        session_id,
+                        stage="partial_ready",
+                        next_actions=[
+                            {"type": "start_learning", "label": "先学习已生成内容"},
+                            {"type": "continue_generation", "label": "继续补全课程"},
+                        ],
+                        workspace={
+                            "chapters": chapters_state,
+                            "planned_chapters": total_ch,
+                        },
+                    )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("第%d章补全失败后写入 learning_ready 状态失败", ch_id)
+            await _emit(
+                sse_event(
+                    "progress",
+                    stage="enrichment",
+                    pct=min(int(ch_base_pct + pct_per_chapter), 90),
+                    message=f"第 {ch_id} 章补全失败，PDF 已保留，可续传补齐: {exc}",
+                )
+            )
+            return None
+        finally:
+            await queue.put(None)
+
+    feed_done = incoming is None
+    feed_done_marker = object()
+    tasks = [asyncio.create_task(_worker(item)) for item in targets]
+    feeder_task: asyncio.Task | None = None
+
+    async def _feeder() -> None:
+        try:
+            while True:
+                item = await incoming.get()  # type: ignore[union-attr]
+                if item is None:
+                    break
+                idx, info = item
+                order_by_chapter.setdefault(info.get("chapter_id", idx + 1), idx)
+                tasks.append(asyncio.create_task(_worker(item)))
+        finally:
+            await queue.put(feed_done_marker)
+
+    if incoming is not None:
+        feeder_task = asyncio.create_task(_feeder())
+
+    finished = 0
+    try:
+        while not (feed_done and finished >= len(tasks)):
+            item = await queue.get()
+            if item is None:
+                finished += 1
+                continue
+            if item is feed_done_marker:
+                feed_done = True
+                continue
+            yield item
+        await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        if feeder_task is not None and not feeder_task.done():
+            feeder_task.cancel()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+    chapter_items_out = sorted(
+        results_by_chapter.items(), key=lambda pair: order_by_chapter.get(pair[0], 0)
+    )
+    if chapter_items_out:
+        published_pdf_by_chapter.setdefault("__chapter_results__", {})
+        published_pdf_by_chapter["__chapter_results__"] = {
+            ch_id: result for ch_id, result in chapter_items_out
+        }
+    node_items_out = sorted(
+        nodes_by_chapter.items(), key=lambda pair: order_by_chapter.get(pair[0], 0)
+    )
+    if node_items_out:
+        published_pdf_by_chapter.setdefault("__extracted_nodes__", {})
+        published_pdf_by_chapter["__extracted_nodes__"] = {
+            ch_id: nodes for ch_id, nodes in node_items_out
+        }
 
 
 async def _parallel_research_all_chapters(
@@ -1107,6 +2958,7 @@ async def _parallel_research_all_chapters(
                     "ch_info": ch_info,
                     "events": [],
                     "success": False,
+                    "used_fallback": False,
                     "research_path": course.chapter_dir(ch_id) / "research.json",
                 }
             )
@@ -1122,6 +2974,7 @@ async def immersive_generate(
     user_profile: str = "",
     enable_audio: bool = False,
     enable_exercises: bool = True,
+    session_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """AI 主导学习 - 显式逐步编排（SSE）。
 
@@ -1136,7 +2989,7 @@ async def immersive_generate(
       agent_event      { agent_type, event_type, content, step }
     """
     start_time = time.time()
-    session_id = None
+    generation_started_at = time.perf_counter()
 
     try:
         # ── 0. 初始化 ────────────────────────────────────────────
@@ -1144,7 +2997,8 @@ async def immersive_generate(
             "progress", stage="init", pct=2, message=f"正在初始化课程「{topic}」..."
         )
 
-        session_id = create_session(topic, user_id=user_id)
+        session_id = session_id or create_session(topic, user_id=user_id)
+        _log_generation_timing(session_id, "session_created", generation_started_at)
         # 在规划等长耗时操作前下发会话身份，前端可立即保存恢复地址。
         yield sse_event("session_created", session_id=session_id)
         logger.info(
@@ -1190,6 +3044,7 @@ async def immersive_generate(
             yield ev
 
         logger.info("Planner 完成")
+        _log_generation_timing(session_id, "outline_ready", generation_started_at)
 
         # 读取大纲（load_outline 内部会自动清洗 LLM 输出中的非法控制字符）
         outline = course.load_outline()
@@ -1328,6 +3183,9 @@ async def immersive_generate(
             block=outline_block,
             next_actions=next_actions,
         )
+        _log_generation_timing(
+            session_id, "learning_plan_ready", generation_started_at, chapters=total_ch
+        )
         yield sse_event(
             "workspace_update",
             event="block_created",
@@ -1358,17 +3216,46 @@ async def immersive_generate(
             course=course,
             layout=layout,
             user_id=user_id,
-            max_concurrency=total_ch,
+            # Keep retrieval below provider rate limits.  A large course used to
+            # launch every chapter at once, creating latency spikes and retries.
+            max_concurrency=min(3, total_ch),
+        )
+        _log_generation_timing(
+            session_id, "research_ready", generation_started_at, chapters=total_ch
         )
 
-        # ── 2a+. 逐章推送预习手册（Research 全部完成后统一推送）──
-        # 按章节顺序推送，让前端按序展示
+        # ── 2a+. 逐章推送预习手册（Research 阶段结束后统一推送）──
+        # 按章节顺序推送，让前端按序展示。这里区分“真实检索成功”和“大纲兜底”，
+        # 避免把 max_steps/工具异常后的 fallback 误报成资料检索完成。
         research_pct_done = 15 + int(pct_per_chapter * total_ch * 0.25)
+        real_research_count = sum(
+            1
+            for item in research_results
+            if item.get("success") and not item.get("used_fallback")
+        )
+        fallback_research_count = sum(
+            1 for item in research_results if item.get("used_fallback")
+        )
+        failed_research_count = total_ch - real_research_count - fallback_research_count
+        if failed_research_count:
+            research_done_message = (
+                f"⚠️ 资料检索阶段结束：{real_research_count} 章检索成功，"
+                f"{fallback_research_count} 章使用大纲兜底，{failed_research_count} 章仍未就绪，正在生成预习手册..."
+            )
+        elif fallback_research_count:
+            research_done_message = (
+                f"✅ 资料检索阶段结束：{real_research_count} 章检索成功，"
+                f"{fallback_research_count} 章使用大纲兜底，正在生成预习手册..."
+            )
+        else:
+            research_done_message = (
+                f"✅ 全部 {total_ch} 章资料检索完成，正在生成预习手册..."
+            )
         yield sse_event(
             "progress",
             stage="researcher",
             pct=min(research_pct_done, 40),
-            message=f"✅ 全部 {total_ch} 章资料检索完成，正在生成预习手册...",
+            message=research_done_message,
         )
 
         for i, res in enumerate(research_results):
@@ -1454,542 +3341,284 @@ async def immersive_generate(
                 )
                 logger.info("预习手册已推送: 第%d章 %s", ch_id, ch_title)
 
-        # ── 3. 逐章串行生成 TeX/Exercises/TTS ─────────────────────
+        # ── 3. 滚动并行预生成正文/PDF，发布与补充资源解耦 ───────────────
+        # 关键：最多保持 3 个 TeX/PDF worker 在跑；任一章节 PDF ready 后立即发布，
+        # 并释放并发槽补入下一章。因此第 2 章 ready 后可立即推前端，同时第 4 章
+        # 可以接力进入 PDF 生成，不再等待第 1 章小测/语音或固定批次结束。
+        published_pdf_by_chapter: dict[int, dict] = {}
+        state_write_lock = asyncio.Lock()
+        prefetch_queue: asyncio.Queue[Any] = asyncio.Queue()
+        prefetch_done = False
+        # PDF 一发布即入队，让习题/语音/讲解稿与后续章节的 PDF 生成并行。
+        enrich_in: asyncio.Queue[tuple[int, dict] | None] = asyncio.Queue()
+        enrich_enqueued: set[int] = set()
+        enrich_done_marker = object()
+
+        async def _publish_prefetched_pdf(
+            batch_index: int, batch_ch: dict
+        ) -> list[str]:
+            async with state_write_lock:
+                publication = await _publish_chapter_pdf_ready(
+                    session_id=session_id,
+                    topic=topic,
+                    user_id=user_id,
+                    course=course,
+                    chapters=chapters,
+                    index=batch_index,
+                    ch_info=batch_ch,
+                    total_ch=total_ch,
+                    enable_audio=enable_audio,
+                    generation_started_at=generation_started_at,
+                    all_files_for_session=all_files_for_session,
+                    set_current_chapter=False,
+                )
+                if publication:
+                    published_pdf_by_chapter[publication["chapter_id"]] = publication
+                    if publication["chapter_id"] not in enrich_enqueued:
+                        enrich_enqueued.add(publication["chapter_id"])
+                        enrich_in.put_nowait((batch_index, batch_ch))
+                    return publication["events"]
+                return []
+
+        async def _produce_pdf_prefetch_events() -> None:
+            try:
+                await prefetch_queue.put(
+                    sse_event(
+                        "progress",
+                        stage="tex_parallel",
+                        pct=40,
+                        message=f"🚀 滚动并行生成全课讲义（最多 {MAX_PARALLEL_TEX_CHAPTERS} 章同时进行，完成一个立即补入下一章）...",
+                    )
+                )
+                async for event in _stream_parallel_tex_prefetch(
+                    topic=topic,
+                    chapters=chapters,
+                    chapter_items=list(enumerate(chapters)),
+                    course=course,
+                    layout=layout,
+                    user_id=user_id,
+                    max_concurrency=MAX_PARALLEL_TEX_CHAPTERS,
+                    publish_ready=_publish_prefetched_pdf,
+                ):
+                    await prefetch_queue.put(event)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("滚动并行 PDF 预生成失败")
+                await prefetch_queue.put(
+                    sse_event(
+                        "progress",
+                        stage="tex_parallel",
+                        pct=0,
+                        message=f"⚠️ 滚动并行 PDF 预生成异常，将由有序阶段兜底: {exc}",
+                    )
+                )
+            finally:
+                await prefetch_queue.put(None)
+
+        async def _wait_for_pdf_prefetch_done() -> AsyncGenerator[str, None]:
+            nonlocal prefetch_done
+            while not prefetch_done:
+                event = await prefetch_queue.get()
+                if event is None:
+                    prefetch_done = True
+                    break
+                yield event
+
+        prefetch_task = asyncio.create_task(_produce_pdf_prefetch_events())
+
+        async def _pump_enrichment() -> None:
+            try:
+                async for ev in _stream_parallel_chapter_enrichment(
+                    session_id=session_id,
+                    topic=topic,
+                    chapters=chapters,
+                    chapter_items=[],
+                    course=course,
+                    layout=layout,
+                    user_id=user_id,
+                    enable_audio=enable_audio,
+                    enable_exercises=enable_exercises,
+                    tts_llm=tts_llm,
+                    total_ch=total_ch,
+                    pct_per_chapter=pct_per_chapter,
+                    published_pdf_by_chapter=published_pdf_by_chapter,
+                    state_write_lock=state_write_lock,
+                    all_files_for_session=all_files_for_session,
+                    max_concurrency=MAX_PARALLEL_ENRICH_CHAPTERS,
+                    incoming=enrich_in,
+                ):
+                    await prefetch_queue.put(ev)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("流式章节补全异常")
+            finally:
+                await prefetch_queue.put(enrich_done_marker)
+
+        enrich_task = asyncio.create_task(_pump_enrichment())
+
+        # 持续排空 PDF 预生成事件；某章 PDF 一发布就已入队 enrichment，
+        # 习题/语音/讲解稿与后续章节 PDF 生成并行，其事件也经此队列交错输出。
+        async for ev in _wait_for_pdf_prefetch_done():
+            yield ev
+        if not prefetch_task.done():
+            await prefetch_task
+
+        enrichment_items: list[tuple[int, dict]] = []
         for i, ch_info in enumerate(chapters):
             ch_id = ch_info.get("chapter_id", i + 1)
             ch_title = ch_info.get("title", f"第{ch_id}章")
             ch_base_pct = int(15 + pct_per_chapter * i)
-            research_path = course.chapter_dir(ch_id) / "research.json"
-
-            chapter_status_block = {
-                "id": f"chapter_{ch_id}_status",
-                "type": "chapter_status",
-                "title": f"第{ch_id}章 {ch_title}",
-                "status": "generating",
-                "chapter_id": ch_id,
-                "data": {"stage": "tex", "index": i, "total": total_ch},
-            }
-            upsert_canvas_block(
-                session_id,
-                chapter_status_block,
-                stage="generating",
-                workspace_patch={"current_chapter_id": ch_id},
-            )
-            yield sse_event(
-                "chapter_start",
-                index=i,
-                total=total_ch,
-                chapter_id=ch_id,
-                title=ch_title,
-                stage="tex",
-            )
-            yield sse_event(
-                "workspace_update",
-                event="block_created",
-                session_id=session_id,
-                block=chapter_status_block,
-            )
-
-            # ── 3a. TeX Writer ───────────────────────────────────
-            tex_pct = int(ch_base_pct + pct_per_chapter * 0.4)
-            yield sse_event(
-                "progress",
-                stage="tex",
-                pct=tex_pct,
-                message=f"📄 生成 PDF ({i + 1}/{total_ch}): {ch_title}",
-            )
-
             tex_path = course.tex_file(ch_id)
             pdf_path = course.pdf_file(ch_id)
             images_dir = course.chapter_images_dir(ch_id)
 
-            tex_prompt = (
-                f"为课程「{topic}」第 {ch_id} 章「{ch_title}」生成 Beamer 讲义。\n"
-                f"参考资料文件：{research_path}\n"
-                f"TeX 输出路径：{tex_path}\n"
-                f"图片输出目录：{images_dir}\n"
-                f"知识点：{', '.join(ch_info.get('knowledge_points', []))}\n"
-                f"难度：{ch_info.get('difficulty', '基础')}"
-            )
+            if not _pdf_is_ready(pdf_path, tex_path, images_dir, chapters, i):
+                yield sse_event(
+                    "progress",
+                    stage="tex",
+                    pct=int(ch_base_pct + pct_per_chapter * 0.4),
+                    message=f"并行预生成未完成，正在有序兜底第 {ch_id} 章 PDF: {ch_title}",
+                )
+                tex_events: list[str] = []
 
-            async for ev in stream_agent_events(
-                agents["tex_writer"],
-                tex_prompt,
-                "tex_writer",
-                skill_names=["tex_beamer_writing"],
-                start_msg=f"开始生成第{ch_id}章PDF",
-                finish_msg="PDF生成完成",
-            ):
-                yield ev
+                async def _emit_tex_event(event: str) -> None:
+                    tex_events.append(event)
 
-            logger.info(
-                "TeX Writer 完成: 第%d章 (PDF有效=%s)", ch_id, _pdf_is_ready(pdf_path)
-            )
+                await _run_tex_writer_with_retry(
+                    topic=topic,
+                    chapters=chapters,
+                    index=i,
+                    course=course,
+                    layout=layout,
+                    user_id=user_id,
+                    emit=_emit_tex_event,
+                    max_attempts=1,
+                )
+                for event in tex_events:
+                    yield event
 
-            # （预习手册已在 Researcher 完成后推送，此处不再重复生成）
-
-            # ── 2b++. PDF 完成后立即登记 documents + 推送给前端 ───
-            pdf_ready = _pdf_is_ready(pdf_path)
-            pdf_rel = to_rel_path(str(pdf_path)) if pdf_ready else ""
-            num_frames = count_beamer_frames(tex_path)
-            pdf_block = None
-            pdf_doc_id = ""
-            if pdf_ready:
-                try:
-                    pdf_doc_id = (
-                        await asyncio.to_thread(
-                            lambda: register_chapter_pdf(
-                                session_id=session_id,
-                                topic=topic,
-                                chapter_id=ch_id,
-                                chapter_title=ch_title,
-                                pdf_path=pdf_path,
-                                num_pages=num_frames,
-                                user_id=user_id,
-                                node_ids=[],
-                            ),
+            if _pdf_is_ready(pdf_path, tex_path, images_dir, chapters, i):
+                if ch_id not in published_pdf_by_chapter:
+                    async with state_write_lock:
+                        publication = await _publish_chapter_pdf_ready(
+                            session_id=session_id,
+                            topic=topic,
+                            user_id=user_id,
+                            course=course,
+                            chapters=chapters,
+                            index=i,
+                            ch_info=ch_info,
+                            total_ch=total_ch,
+                            enable_audio=enable_audio,
+                            generation_started_at=generation_started_at,
+                            all_files_for_session=all_files_for_session,
+                            set_current_chapter=False,
                         )
-                        or ""
-                    )
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.warning("单章 PDF 登记失败 ch=%s: %s", ch_id, exc)
+                    if publication:
+                        published_pdf_by_chapter[ch_id] = publication
+                        for event in publication["events"]:
+                            yield event
+                if ch_id in published_pdf_by_chapter:
+                    enrichment_items.append((i, ch_info))
+                continue
 
-                pdf_file = {
-                    "file_id": pdf_doc_id or pdf_rel,
-                    "file_type": "chapter_pdf",
+            pdf_error = _chapter_pdf_error(pdf_path, tex_path, images_dir, chapters, i)
+            failed_chapter = {
+                "chapter_id": ch_id,
+                "title": ch_title,
+                "status": "pending",
+                "block_ids": [f"chapter_{ch_id}_status"],
+                "files": [],
+                "audio_enabled": enable_audio,
+                "audio_files": [],
+                "speaker_notes_count": 0,
+                "artifact_status": {"pdf": False},
+                "artifact_missing": [f"pdf_invalid: {pdf_error}"],
+            }
+            async with state_write_lock:
+                workspace_now = read_workspace(session_id)
+                workspace_data = workspace_now.get("workspace", {}) or {}
+                chapters_state = list(workspace_data.get("chapters", []) or [])
+                for idx, item in enumerate(chapters_state):
+                    if item.get("chapter_id") == ch_id:
+                        chapters_state[idx] = {**item, **failed_chapter}
+                        break
+                else:
+                    chapters_state.append(failed_chapter)
+                update_workspace(
+                    session_id,
+                    stage="partial_ready",
+                    next_actions=[
+                        {"type": "start_learning", "label": "先学习已生成内容"},
+                        {"type": "continue_generation", "label": "重新生成缺失章节"},
+                    ],
+                    workspace={
+                        "chapters": chapters_state,
+                        "generated_chapters": len(
+                            [
+                                item
+                                for item in chapters_state
+                                if _chapter_is_user_available(item)
+                            ]
+                        ),
+                        "planned_chapters": total_ch,
+                        "current_chapter_id": ch_id,
+                    },
+                )
+                failed_status_block = {
+                    "id": f"chapter_{ch_id}_status",
+                    "type": "chapter_status",
                     "title": f"第{ch_id}章 {ch_title}",
-                }
-                all_files_for_session.append(pdf_file)
-                if pdf_doc_id:
-                    append_session_file(
-                        session_id, pdf_doc_id, f"第{ch_id}章 {ch_title}", "chapter_pdf"
-                    )
-                pdf_block = {
-                    "id": f"pdf_ch{ch_id}",
-                    "type": "pdf",
-                    "title": f"第{ch_id}章 {ch_title}",
-                    "status": "ready",
+                    "status": "failed",
                     "chapter_id": ch_id,
                     "data": {
-                        "url": f"/api/documents/{pdf_doc_id}/raw" if pdf_doc_id else "",
-                        "pdf_path": pdf_rel,
-                        "doc_id": pdf_doc_id,
-                        "num_pages": num_frames,
-                        "audio_enabled": enable_audio,
-                        "audio_files": [],  # TTS 尚未完成，后续补充
-                        "audio_doc_id": "",
+                        "stage": "failed",
+                        "artifact_missing": failed_chapter["artifact_missing"],
                     },
                 }
-                upsert_canvas_block(session_id, pdf_block)
-                yield sse_event(
-                    "workspace_update",
-                    event="block_created",
-                    session_id=session_id,
-                    block=pdf_block,
-                )
-                logger.info("PDF block 已推送: 第%d章 %s", ch_id, ch_title)
-
-            # ── 2c. Exercises ────────────────────────────────────
-            exercises_path = course.exercises_file(ch_id)
-            ex_rel = ""
-            quiz_block = None
-
-            if enable_exercises:
-                exercises_pct = int(ch_base_pct + pct_per_chapter * 0.7)
-                yield sse_event(
-                    "progress",
-                    stage="exercises",
-                    pct=exercises_pct,
-                    message=f"✏️ 生成习题 ({i + 1}/{total_ch}): {ch_title}",
-                )
-
-                exercises_prompt = (
-                    f"为课程「{topic}」第 {ch_id} 章「{ch_title}」生成配套习题。\n"
-                    f"TeX 讲义文件：{tex_path}\n"
-                    f"习题输出路径：{exercises_path}\n"
-                    f"知识点：{', '.join(ch_info.get('knowledge_points', []))}"
-                )
-
-                async for ev in stream_agent_events(
-                    agents["exercises"],
-                    exercises_prompt,
-                    "exercises",
-                    start_msg=f"开始生成第{ch_id}章习题",
-                    finish_msg="习题生成完成",
-                ):
-                    yield ev
-
-                logger.info(
-                    "Exercises 完成: 第%d章 (存在=%s)", ch_id, exercises_path.exists()
-                )
-
-                # ── 2c+. 习题完成后立即登记 documents + 推送给前端 ───
-                ex_rel = (
-                    to_rel_path(str(exercises_path)) if exercises_path.exists() else ""
-                )
-                ex_doc_id = ""
-                if exercises_path.exists() and ex_rel:
-                    try:
-                        ex_doc_id = (
-                            await asyncio.to_thread(
-                                lambda p=exercises_path, c=ch_id, t=ch_title: (
-                                    register_chapter_exercises(
-                                        session_id=session_id,
-                                        topic=topic,
-                                        chapter_id=c,
-                                        chapter_title=t,
-                                        exercises_path=p,
-                                        user_id=user_id,
-                                        node_ids=[],
-                                    )
-                                ),
-                            )
-                            or ""
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.warning("单章习题登记失败 ch=%s: %s", ch_id, exc)
-
-                    if ex_doc_id:
-                        append_session_file(
-                            session_id,
-                            ex_doc_id,
-                            f"第{ch_id}章 {ch_title} 习题",
-                            "chapter_exercises",
-                        )
-                    quiz_block = {
-                        "id": f"quiz_ch{ch_id}_bank",
-                        "type": "quiz_batch",
-                        "title": f"第{ch_id}章小测",
-                        "status": "ready",
-                        "chapter_id": ch_id,
-                        "data": {
-                            "source": "exercises_md",
-                            "exercises_path": ex_rel,
-                            "doc_id": ex_doc_id,
-                            "display_limit": 3,
-                            "strategy": "show_2_to_3_questions_first",
-                        },
-                    }
-                    upsert_canvas_block(session_id, quiz_block)
-                    yield sse_event(
-                        "workspace_update",
-                        event="block_created",
-                        session_id=session_id,
-                        block=quiz_block,
-                    )
-                    logger.info("Quiz block 已推送: 第%d章 %s", ch_id, ch_title)
-            else:
-                logger.info("跳过习题生成: 第%d章（用户未启用习题）", ch_id)
-
-            # ── 2d. Speaker Notes + TTS ──────────────────────────
-            tts_pct = int(ch_base_pct + pct_per_chapter * 0.85)
-            speaker_notes = []
-            audio_results = []
-            audio_doc_id = ""
-            notes_doc_id = ""
-
-            if enable_audio and tex_path.exists() and num_frames > 0:
-                yield sse_event(
-                    "progress",
-                    stage="tts",
-                    pct=tts_pct,
-                    message=f"🔊 生成语音 ({i + 1}/{total_ch}): {ch_title} ({num_frames}页)",
-                )
-
-                speaker_notes = await asyncio.to_thread(
-                    generate_speaker_notes, tts_llm, tex_path, num_frames
-                )
-
-                if speaker_notes:
-                    notes_path = course.chapter_dir(ch_id) / "speaker_notes.json"
-                    notes_path.write_text(
-                        json.dumps(speaker_notes, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-
-                    audio_results = await asyncio.to_thread(
-                        run_tts_for_chapter,
-                        course.chapter_dir(ch_id),
-                        speaker_notes,
-                        user_id,
-                    )
-                    logger.info(
-                        "TTS 完成: 第%d章, %d 段语音", ch_id, len(audio_results)
-                    )
-
-                    # 登记讲解稿 / 音频包到 documents
-                    try:
-                        notes_doc_id = (
-                            await asyncio.to_thread(
-                                lambda p=notes_path, c=ch_id, t=ch_title: (
-                                    register_chapter_notes(
-                                        session_id=session_id,
-                                        topic=topic,
-                                        chapter_id=c,
-                                        chapter_title=t,
-                                        notes_path=p,
-                                        user_id=user_id,
-                                    )
-                                ),
-                            )
-                            or ""
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.warning("speaker_notes 登记失败 ch=%s: %s", ch_id, exc)
-
-                    try:
-                        audio_doc_id = (
-                            await asyncio.to_thread(
-                                lambda d=course.chapter_dir(ch_id) / "audio", c=ch_id, t=ch_title, ar=audio_results, sn=speaker_notes: (
-                                    register_chapter_audio(
-                                        session_id=session_id,
-                                        topic=topic,
-                                        chapter_id=c,
-                                        chapter_title=t,
-                                        audio_dir=d,
-                                        audio_results=ar,
-                                        speaker_notes=sn,
-                                        user_id=user_id,
-                                    )
-                                ),
-                            )
-                            or ""
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.warning("audio manifest 登记失败 ch=%s: %s", ch_id, exc)
-            elif not enable_audio:
-                logger.info("跳过语音生成: 第%d章（用户未启用语音）", ch_id)
-
-            # ── 收集产物，发送 chapter_done ────────────────────────
-            images = []
-            if images_dir.exists():
-                images = [
-                    f.name
-                    for f in images_dir.iterdir()
-                    if f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-                ]
-
-            audio_files_data = []
-            for r in audio_results:
-                if r.get("success"):
-                    filename = r.get("filename", "")
-                    audio_files_data.append(
-                        {
-                            "filename": filename,
-                            "url": (
-                                f"/api/documents/{audio_doc_id}/asset/{filename}"
-                                if audio_doc_id
-                                else ""
-                            ),
-                            "duration_seconds": r.get("duration_seconds", 0),
-                            "success": True,
-                        }
-                    )
-
-            # 如果 TTS 生成了音频，更新已推送的 pdf_block 的 audio_files
-            if audio_files_data and pdf_block:
-                pdf_block["data"]["audio_files"] = audio_files_data
-                pdf_block["data"]["audio_doc_id"] = audio_doc_id
-                upsert_canvas_block(session_id, pdf_block)
-                yield sse_event(
-                    "workspace_update",
-                    event="block_updated",
-                    session_id=session_id,
-                    block=pdf_block,
-                )
-            if audio_doc_id:
-                append_session_file(
-                    session_id,
-                    audio_doc_id,
-                    f"第{ch_id}章 {ch_title} · 音频",
-                    "chapter_audio",
-                )
-            if notes_doc_id:
-                append_session_file(
-                    session_id,
-                    notes_doc_id,
-                    f"第{ch_id}章 {ch_title} · 讲解稿",
-                    "chapter_notes",
-                )
-
-            ch_result = {
-                "chapter_id": ch_id,
-                "title": ch_title,
-                "knowledge_points": ch_info.get("knowledge_points", []),
-                "pdf_exists": pdf_ready,
-                "pdf_path": pdf_rel,
-                "pdf_doc_id": pdf_doc_id,
-                "exercises_exists": exercises_path.exists(),
-                "exercises_path": ex_rel,
-                "exercises_doc_id": ex_doc_id,
-                "num_frames": num_frames,
-                "speaker_notes_count": len(speaker_notes),
-                "audio_files": audio_files_data,
-                "audio_doc_id": audio_doc_id,
-                "notes_doc_id": notes_doc_id,
-                "images": images,
-                "images_count": len(images),
-            }
-
-            chapter_results.append(ch_result)
-
-            chapter_block_ids = [f"chapter_{ch_id}_status"]
-            if pdf_block:
-                chapter_block_ids.append(pdf_block["id"])
-            if quiz_block:
-                chapter_block_ids.append(quiz_block["id"])
-
-            completed_chapter = {
-                "chapter_id": ch_id,
-                "title": ch_title,
-                "status": "ready",
-                "block_ids": chapter_block_ids,
-                "files": [b for b in [pdf_rel, ex_rel] if b],
-                "audio_enabled": enable_audio,
-                "audio_files": audio_files_data,
-                "speaker_notes_count": len(speaker_notes),
-                "pdf_doc_id": pdf_doc_id,
-                "exercises_doc_id": ex_doc_id,
-                "audio_doc_id": audio_doc_id,
-                "notes_doc_id": notes_doc_id,
-            }
-            workspace_now = update_workspace(session_id)
-            workspace_data = workspace_now.get("workspace", {}) or {}
-            chapters_state = workspace_data.get("chapters", []) or []
-            replaced_state = False
-            for idx, item in enumerate(chapters_state):
-                if item.get("chapter_id") == ch_id:
-                    chapters_state[idx] = {**item, **completed_chapter}
-                    replaced_state = True
-                    break
-            if not replaced_state:
-                chapters_state.append(completed_chapter)
-            generated_chapters = len(
-                [c for c in chapters_state if c.get("status") == "ready"]
-            )
-            next_chapter_id = None
-            for item in chapters_state:
-                if item.get("status") in {"pending", "generating", "failed"}:
-                    next_chapter_id = item.get("chapter_id")
-                    break
-            next_actions = [
-                {"type": "start_learning", "label": "先学习已生成内容"},
-            ]
-            if next_chapter_id:
-                next_actions.append(
-                    {
-                        "type": "continue_generation",
-                        "label": f"继续生成第{next_chapter_id}章",
-                    }
-                )
-            update_workspace(
-                session_id,
-                stage="partial_ready" if generated_chapters < total_ch else "ready",
-                next_actions=next_actions,
-                workspace={
-                    "chapters": chapters_state,
-                    "generated_chapters": generated_chapters,
-                    "planned_chapters": total_ch,
-                    "current_chapter_id": next_chapter_id,
-                },
-            )
-            chapter_status_block.update(
-                {
-                    "status": "ready",
-                    "data": {
-                        **chapter_status_block.get("data", {}),
-                        "stage": "ready",
-                        "block_ids": chapter_block_ids,
-                    },
-                }
-            )
-            upsert_canvas_block(session_id, chapter_status_block)
-
-            # ★ 推送 chapter_done —— 通知前端本章全部产物已就绪
-            ch_done_pct = int(ch_base_pct + pct_per_chapter)
-            yield sse_event(
-                "progress",
-                stage="tex",
-                pct=min(ch_done_pct, 90),
-                message=f"✅ 第 {ch_id} 章完成: {ch_title}",
-            )
-            yield sse_event(
-                "chapter_done",
-                index=i,
-                total=total_ch,
-                data=ch_result,
-            )
+                upsert_canvas_block(session_id, failed_status_block)
             yield sse_event(
                 "workspace_update",
                 event="block_updated",
                 session_id=session_id,
-                block=chapter_status_block,
-                next_actions=next_actions,
+                block=failed_status_block,
+            )
+            yield sse_event(
+                "progress",
+                stage="tex",
+                pct=min(int(ch_base_pct + pct_per_chapter), 90),
+                message=f"第 {ch_id} 章 PDF 未通过发布校验，将在续传时重新生成",
             )
 
-            # ★ 异步归档本章产物到 data/assets/
-            try:
-                ch_dir = course.chapter_dir(ch_id)
-                await asyncio.to_thread(
-                    archive_immersive_chapter,
-                    ch_dir,
-                    topic,
-                    ch_dir.name,  # 使用目录名 chapter_XX，与 archive_existing_assets 保持一致
-                    session_id,
-                )
-            except Exception as e:  # pylint: disable=broad-except
-                logger.warning("章节 %d 资产归档失败: %s", ch_id, e)
+        # 兜底阶段发布的章节也送入 enrichment；随后关闭入队通道并排空剩余补全事件。
+        for item in enrichment_items:
+            ch_key = item[1].get("chapter_id", item[0] + 1)
+            if ch_key not in enrich_enqueued:
+                enrich_enqueued.add(ch_key)
+                enrich_in.put_nowait(item)
+        enrich_in.put_nowait(None)
+        while True:
+            ev = await prefetch_queue.get()
+            if ev is enrich_done_marker:
+                break
+            yield ev
+        await enrich_task
 
-            # ★ 打包本章产物 (PDF + 语音 + 习题) 到 data/assets/files/
-            try:
-                bundle_path = await asyncio.to_thread(
-                    pack_chapter_bundle,
-                    course.chapter_dir(ch_id),
-                    topic,
-                    ch_title,
-                    str(ch_id),
-                    session_id,
-                )
-                if bundle_path:
-                    logger.info("第%d章打包完成: %s", ch_id, bundle_path.name)
-            except Exception as e:  # pylint: disable=broad-except
-                logger.warning("章节 %d 打包失败: %s", ch_id, e)
-
-            # ★ 每章完成后立即增量抽取知识图谱节点（生成一章更新一些）
-            try:
-                single_ch = {
-                    "title": ch_title,
-                    "knowledge_points": ch_info.get("knowledge_points", []),
-                }
-                ch_nodes = await asyncio.to_thread(
-                    extract_and_persist_nodes,
-                    session_id,
-                    topic,
-                    [single_ch],
-                    tts_llm or get_llm(user_id, scene="immersive"),
-                    user_id,
-                )
-                if ch_nodes:
-                    all_extracted_nodes.extend(ch_nodes)
-                    ch_new = sum(1 for n in ch_nodes if not n.get("existed"))
-                    logger.info(
-                        "第%d章知识图谱抽取: %d 个节点（新 %d）",
-                        ch_id,
-                        len(ch_nodes),
-                        ch_new,
-                    )
-                    yield sse_event(
-                        "nodes_extracted",
-                        chapter_id=ch_id,
-                        nodes=[{"id": n["id"], "title": n["title"]} for n in ch_nodes],
-                        new_count=ch_new,
-                    )
-            except Exception as e:  # pylint: disable=broad-except
-                logger.warning("第%d章知识图谱抽取失败（不阻塞）: %s", ch_id, e)
+        chapter_results.extend(
+            (published_pdf_by_chapter.get("__chapter_results__") or {}).values()
+        )
+        for node_list in (
+            published_pdf_by_chapter.get("__extracted_nodes__") or {}
+        ).values():
+            all_extracted_nodes.extend(node_list)
+        order_by_chapter = {
+            ch.get("chapter_id", idx + 1): idx for idx, ch in enumerate(chapters)
+        }
+        chapter_results.sort(
+            key=lambda item: order_by_chapter.get(item.get("chapter_id"), 0)
+        )
 
         # ── 3. 知识图谱节点汇总（每章已增量抽取）──────────────
         yield sse_event(
-            "progress", stage="nodes", pct=92, message="🧠 正在汇总知识图谱节点..."
+            "progress", stage="nodes", pct=92, message="🧠 正在汇总知识大脑节点..."
         )
 
         # 每章已增量抽取，这里按 id 去重汇总；若增量全失败则全量兜底补抽一次
@@ -2023,6 +3652,13 @@ async def immersive_generate(
 
         # ── 4. 生成结束（不自动 complete，等用户确认） ──────────
         duration_minutes = max(1, int((time.time() - start_time) / 60))
+        final_workspace = read_workspace(session_id).get("workspace", {}) or {}
+        final_chapters = final_workspace.get("chapters", []) or []
+        pending_chapter_ids = [
+            item.get("chapter_id")
+            for item in final_chapters
+            if _chapter_requires_followup(item)
+        ]
 
         # 知识节点抽取完成后，回填 node_ids 到本课程已登记的所有章节 doc
         if node_ids:
@@ -2044,31 +3680,56 @@ async def immersive_generate(
 
             await asyncio.to_thread(_backfill_node_ids)
 
-        # 更新 workspace 为 ready 状态（但不标记 session 为 completed）
+        # Only a fully audited set may be presented as complete.  A failed
+        # compilation remains resumable instead of being masked by a final done
+        # event after other chapters happen to finish.
+        is_complete = not pending_chapter_ids
         update_workspace(
             session_id,
-            stage="ready",
-            next_actions=[
-                {"type": "start_learning", "label": "开始学习"},
-                {"type": "complete_session", "label": "确认完成学习"},
-            ],
+            stage="ready" if is_complete else "partial_ready",
+            next_actions=(
+                [
+                    {"type": "start_learning", "label": "开始学习"},
+                    {"type": "complete_session", "label": "确认完成学习"},
+                ]
+                if is_complete
+                else [
+                    {"type": "start_learning", "label": "先学习已生成内容"},
+                    {"type": "continue_generation", "label": "重新生成缺失章节"},
+                ]
+            ),
             workspace={
-                "generated_chapters": total_ch,
+                "generated_chapters": len(
+                    [
+                        item
+                        for item in final_chapters
+                        if _chapter_is_user_available(item)
+                    ]
+                ),
+                "pending_chapter_ids": pending_chapter_ids,
                 "generation_duration_minutes": duration_minutes,
                 "nodes_extracted": len(created_nodes),
             },
         )
 
-        yield sse_event("progress", stage="done", pct=100, message="🎉 全部完成！")
-        yield sse_event(
-            "done",
-            topic=topic,
-            session_id=session_id,
-            course_dir=str(course.course_dir),
-            chapters=chapter_results,
-            nodes_extracted=len(created_nodes),
-            duration_minutes=duration_minutes,
-        )
+        if is_complete:
+            yield sse_event("progress", stage="done", pct=100, message="🎉 全部完成！")
+            yield sse_event(
+                "done",
+                topic=topic,
+                session_id=session_id,
+                course_dir=str(course.course_dir),
+                chapters=chapter_results,
+                nodes_extracted=len(created_nodes),
+                duration_minutes=duration_minutes,
+            )
+        else:
+            yield sse_event(
+                "progress",
+                stage="partial_ready",
+                pct=90,
+                message="部分章节仍有产物未发布完整（PDF/习题/语音），可先学习已就绪内容并在之后继续生成。",
+            )
 
     except Exception as e:  # pylint: disable=broad-except
         logger.exception("沉浸式学习生成失败")
@@ -2083,7 +3744,8 @@ async def immersive_generate(
                     "chapters", []
                 ) or []
                 _has_any_ready = any(
-                    c.get("status") == "ready" for c in _chapters_state
+                    c.get("status") in {"ready", "learning_ready"}
+                    for c in _chapters_state
                 )
 
                 if not _has_any_ready:
@@ -2190,6 +3852,8 @@ async def immersive_resume(
             course,
             chapters,
             chapters_state,
+            topic=topic,
+            user_id=user_id,
             enable_audio=enable_audio,
             enable_exercises=enable_exercises,
         )
@@ -2216,7 +3880,7 @@ async def immersive_resume(
                 }
             )
 
-        update_workspace(
+        audited_workspace = update_workspace(
             session_id,
             stage="partial_ready" if pending_chapters else "ready",
             next_actions=next_actions,
@@ -2239,6 +3903,7 @@ async def immersive_resume(
                 "planned_chapters": total_ch,
                 "pending_chapter_ids": sorted(pending_ids),
             },
+            canvas_blocks=audited_workspace.get("canvas_blocks", []),
             next_actions=next_actions,
         )
 
@@ -2274,6 +3939,7 @@ async def immersive_resume(
                 course,
                 ch_done,
                 idx_done,
+                chapters=chapters,
                 enable_audio=enable_audio,
                 enable_exercises=enable_exercises,
             )
@@ -2323,6 +3989,7 @@ async def immersive_resume(
                         ),
                         "pdf_path": pdf_rel_done,
                         "doc_id": pdf_doc_id_done,
+                        "artifact_revision": artifact["pdf_revision"],
                         "num_pages": artifact["num_frames"],
                         "audio_enabled": enable_audio,
                         "audio_files": artifact["audio_files"],
@@ -2389,9 +4056,8 @@ async def immersive_resume(
             total_ch - len(pending_chapters),
         )
 
-        # 重建 agents
+        # 重建 layout；并发 enrichment 会为每章单独创建 exercises agent。
         layout = UserDataLayout(root=DOCUMENTS_DIR, user_id=user_id)
-        agents = build_sub_agents(layout, user_id=user_id)
 
         tts_llm = get_llm(user_id, scene="immersive") if enable_audio else None
         chapter_results = []
@@ -2432,9 +4098,22 @@ async def immersive_resume(
                 user_id=user_id,
                 max_concurrency=len(research_chapters_list),
             )
+            real_research_count = sum(
+                1
+                for item in research_results
+                if item.get("success") and not item.get("used_fallback")
+            )
+            fallback_research_count = sum(
+                1 for item in research_results if item.get("used_fallback")
+            )
+            failed_research_count = (
+                len(research_results) - real_research_count - fallback_research_count
+            )
             logger.info(
-                "resume: 并行 research 完成，%d 章成功",
-                sum(1 for r in research_results if r["success"]),
+                "resume: 并行 research 阶段结束，真实检索成功=%d，fallback=%d，失败=%d",
+                real_research_count,
+                fallback_research_count,
+                failed_research_count,
             )
         else:
             yield sse_event(
@@ -2537,538 +4216,319 @@ async def immersive_resume(
                 )
                 logger.info("resume: 预习手册已推送 ch=%s", ch_id)
 
-        # ── 逐章串行生成 TeX/Exercises/TTS ────────────────────────
+        # ── 滚动并行预生成缺失 PDF，发布与补齐资源解耦 ───────────────
+        published_pdf_by_chapter: dict[int, dict] = {}
+        state_write_lock = asyncio.Lock()
+        prefetch_queue: asyncio.Queue[Any] = asyncio.Queue()
+        prefetch_done = False
+        # PDF 一发布即入队，让习题/语音/讲解稿与后续章节的 PDF 生成并行。
+        enrich_in: asyncio.Queue[tuple[int, dict] | None] = asyncio.Queue()
+        enrich_enqueued: set[int] = set()
+        enrich_done_marker = object()
+
+        async def _publish_prefetched_pdf(
+            batch_index: int, batch_ch: dict
+        ) -> list[str]:
+            async with state_write_lock:
+                publication = await _publish_chapter_pdf_ready(
+                    session_id=session_id,
+                    topic=topic,
+                    user_id=user_id,
+                    course=course,
+                    chapters=chapters,
+                    index=batch_index,
+                    ch_info=batch_ch,
+                    total_ch=total_ch,
+                    enable_audio=enable_audio,
+                    generation_started_at=None,
+                    all_files_for_session=all_files_for_session,
+                    set_current_chapter=False,
+                )
+                if publication:
+                    published_pdf_by_chapter[publication["chapter_id"]] = publication
+                    if publication["chapter_id"] not in enrich_enqueued:
+                        enrich_enqueued.add(publication["chapter_id"])
+                        enrich_in.put_nowait((batch_index, batch_ch))
+                    return publication["events"]
+                return []
+
+        async def _produce_pdf_prefetch_events() -> None:
+            try:
+                await prefetch_queue.put(
+                    sse_event(
+                        "progress",
+                        stage="tex_parallel",
+                        pct=35,
+                        message=f"🚀 续传滚动并行生成缺失讲义（最多 {MAX_PARALLEL_TEX_CHAPTERS} 章同时进行，完成一个立即补入下一章）...",
+                    )
+                )
+                async for event in _stream_parallel_tex_prefetch(
+                    topic=topic,
+                    chapters=chapters,
+                    chapter_items=pending_chapters,
+                    course=course,
+                    layout=layout,
+                    user_id=user_id,
+                    max_concurrency=MAX_PARALLEL_TEX_CHAPTERS,
+                    publish_ready=_publish_prefetched_pdf,
+                ):
+                    await prefetch_queue.put(event)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("resume: 滚动并行 PDF 预生成失败")
+                await prefetch_queue.put(
+                    sse_event(
+                        "progress",
+                        stage="tex_parallel",
+                        pct=0,
+                        message=f"⚠️ 续传滚动并行 PDF 预生成异常，将由有序阶段兜底: {exc}",
+                    )
+                )
+            finally:
+                await prefetch_queue.put(None)
+
+        async def _wait_for_pdf_prefetch_done() -> AsyncGenerator[str, None]:
+            nonlocal prefetch_done
+            while not prefetch_done:
+                event = await prefetch_queue.get()
+                if event is None:
+                    prefetch_done = True
+                    break
+                yield event
+
+        prefetch_task = asyncio.create_task(_produce_pdf_prefetch_events())
+
+        async def _pump_enrichment() -> None:
+            try:
+                async for ev in _stream_parallel_chapter_enrichment(
+                    session_id=session_id,
+                    topic=topic,
+                    chapters=chapters,
+                    chapter_items=[],
+                    course=course,
+                    layout=layout,
+                    user_id=user_id,
+                    enable_audio=enable_audio,
+                    enable_exercises=enable_exercises,
+                    tts_llm=tts_llm,
+                    total_ch=total_ch,
+                    pct_per_chapter=pct_per_chapter,
+                    published_pdf_by_chapter=published_pdf_by_chapter,
+                    state_write_lock=state_write_lock,
+                    all_files_for_session=all_files_for_session,
+                    max_concurrency=MAX_PARALLEL_ENRICH_CHAPTERS,
+                    incoming=enrich_in,
+                ):
+                    await prefetch_queue.put(ev)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("resume: 流式章节补全异常")
+            finally:
+                await prefetch_queue.put(enrich_done_marker)
+
+        enrich_task = asyncio.create_task(_pump_enrichment())
+
+        # 已有 PDF 但缺小测/音频的章节无需等待预生成，立即入队补全。
+        for early_idx, early_ch in pending_chapters:
+            early_id = early_ch.get("chapter_id", early_idx + 1)
+            if early_id in enrich_enqueued:
+                continue
+            if _pdf_is_ready(
+                course.pdf_file(early_id),
+                course.tex_file(early_id),
+                course.chapter_images_dir(early_id),
+                chapters,
+                early_idx,
+            ):
+                enrich_enqueued.add(early_id)
+                enrich_in.put_nowait((early_idx, early_ch))
+
+        # 持续排空 PDF 预生成/发布事件；补全事件也经同一队列交错输出。
+        async for ev in _wait_for_pdf_prefetch_done():
+            yield ev
+        if not prefetch_task.done():
+            await prefetch_task
+
+        enrichment_items: list[tuple[int, dict]] = []
         for progress_idx, (orig_idx, ch_info) in enumerate(pending_chapters):
             ch_id = ch_info.get("chapter_id", orig_idx + 1)
             ch_title = ch_info.get("title", f"第{ch_id}章")
             ch_base_pct = int(15 + pct_per_chapter * progress_idx)
-            research_path = course.chapter_dir(ch_id) / "research.json"
-
-            chapter_status_block = {
-                "id": f"chapter_{ch_id}_status",
-                "type": "chapter_status",
-                "title": f"第{ch_id}章 {ch_title}",
-                "status": "generating",
-                "chapter_id": ch_id,
-                "data": {"stage": "tex", "index": orig_idx, "total": total_ch},
-            }
-            upsert_canvas_block(
-                session_id,
-                chapter_status_block,
-                stage="generating",
-                workspace_patch={"current_chapter_id": ch_id},
-            )
-            yield sse_event(
-                "chapter_start",
-                index=orig_idx,
-                total=total_ch,
-                chapter_id=ch_id,
-                title=ch_title,
-                stage="tex",
-            )
-            yield sse_event(
-                "workspace_update",
-                event="block_created",
-                session_id=session_id,
-                block=chapter_status_block,
-            )
-
-            # ── TeX Writer（PDF 已存在则跳过）──
-            tex_pct = int(ch_base_pct + pct_per_chapter * 0.4)
             tex_path = course.tex_file(ch_id)
             pdf_path = course.pdf_file(ch_id)
             images_dir = course.chapter_images_dir(ch_id)
-            tex_done = _pdf_is_ready(pdf_path)
-            if tex_done:
+
+            if not _pdf_is_ready(pdf_path, tex_path, images_dir, chapters, orig_idx):
                 yield sse_event(
                     "progress",
                     stage="tex",
-                    pct=tex_pct,
-                    message=f"⏭️ 已有 PDF，跳过 ({progress_idx + 1}/{len(pending_chapters)}): {ch_title}",
+                    pct=int(ch_base_pct + pct_per_chapter * 0.4),
+                    message=f"并行预生成未完成，正在有序兜底第 {ch_id} 章 PDF: {ch_title}",
                 )
-                logger.info("resume: 复用已有 PDF ch=%s", ch_id)
-            else:
-                yield sse_event(
-                    "progress",
-                    stage="tex",
-                    pct=tex_pct,
-                    message=f"📄 生成 PDF ({progress_idx + 1}/{len(pending_chapters)}): {ch_title}",
+                tex_events: list[str] = []
+
+                async def _emit_tex_event(event: str) -> None:
+                    tex_events.append(event)
+
+                await _run_tex_writer_with_retry(
+                    topic=topic,
+                    chapters=chapters,
+                    index=orig_idx,
+                    course=course,
+                    layout=layout,
+                    user_id=user_id,
+                    emit=_emit_tex_event,
+                    max_attempts=1,
                 )
-                tex_prompt = (
-                    f"为课程「{topic}」第 {ch_id} 章「{ch_title}」生成 Beamer 讲义。\n"
-                    f"参考资料文件：{research_path}\n"
-                    f"TeX 输出路径：{tex_path}\n"
-                    f"图片输出目录：{images_dir}\n"
-                    f"知识点：{', '.join(ch_info.get('knowledge_points', []))}\n"
-                    f"难度：{ch_info.get('difficulty', '基础')}"
-                )
-                async for ev in stream_agent_events(
-                    agents["tex_writer"],
-                    tex_prompt,
-                    "tex_writer",
-                    skill_names=["tex_beamer_writing"],
-                    start_msg=f"开始生成第{ch_id}章PDF",
-                    finish_msg="PDF生成完成",
+                for event in tex_events:
+                    yield event
+
+            if _pdf_is_ready(pdf_path, tex_path, images_dir, chapters, orig_idx):
+                if (
+                    ch_id not in published_pdf_by_chapter
+                    and ch_id not in enrich_enqueued
                 ):
-                    yield ev
+                    async with state_write_lock:
+                        publication = await _publish_chapter_pdf_ready(
+                            session_id=session_id,
+                            topic=topic,
+                            user_id=user_id,
+                            course=course,
+                            chapters=chapters,
+                            index=orig_idx,
+                            ch_info=ch_info,
+                            total_ch=total_ch,
+                            enable_audio=enable_audio,
+                            generation_started_at=None,
+                            all_files_for_session=all_files_for_session,
+                            set_current_chapter=False,
+                        )
+                    if publication:
+                        published_pdf_by_chapter[ch_id] = publication
+                        for event in publication["events"]:
+                            yield event
+                if ch_id in published_pdf_by_chapter or ch_id in enrich_enqueued:
+                    enrichment_items.append((orig_idx, ch_info))
+                continue
 
-            # ── Exercises（已存在则跳过，未启用则跳过）──
-            exercises_pct = int(ch_base_pct + pct_per_chapter * 0.7)
-            exercises_path = course.exercises_file(ch_id)
-            if enable_exercises:
-                exercises_done = (
-                    exercises_path.exists() and exercises_path.stat().st_size > 50
-                )
-                if exercises_done:
-                    yield sse_event(
-                        "progress",
-                        stage="exercises",
-                        pct=exercises_pct,
-                        message=f"⏭️ 已有习题，跳过 ({progress_idx + 1}/{len(pending_chapters)}): {ch_title}",
-                    )
-                    logger.info("resume: 复用已有 exercises ch=%s", ch_id)
-                else:
-                    yield sse_event(
-                        "progress",
-                        stage="exercises",
-                        pct=exercises_pct,
-                        message=f"✏️ 生成习题 ({progress_idx + 1}/{len(pending_chapters)}): {ch_title}",
-                    )
-                    exercises_prompt = (
-                        f"为课程「{topic}」第 {ch_id} 章「{ch_title}」生成配套习题。\n"
-                        f"TeX 讲义文件：{tex_path}\n"
-                        f"习题输出路径：{exercises_path}\n"
-                        f"知识点：{', '.join(ch_info.get('knowledge_points', []))}"
-                    )
-                    async for ev in stream_agent_events(
-                        agents["exercises"],
-                        exercises_prompt,
-                        "exercises",
-                        start_msg=f"开始生成第{ch_id}章习题",
-                        finish_msg="习题生成完成",
-                    ):
-                        yield ev
-            else:
-                logger.info("resume: 用户未启用习题生成，跳过 ch=%s", ch_id)
-
-            # ── Speaker Notes + TTS（音频已齐则跳过）──
-            from services.immersive.tts import (
-                count_beamer_frames,
-                generate_speaker_notes,
-                run_tts_for_chapter,
+            pdf_error = _chapter_pdf_error(
+                pdf_path, tex_path, images_dir, chapters, orig_idx
             )
-
-            num_frames = count_beamer_frames(tex_path)
-            speaker_notes = []
-            audio_results = []
-            audio_doc_id = ""
-            notes_doc_id = ""
-            audio_dir = course.chapter_dir(ch_id) / "audio"
-            existing_audio = (
-                sorted(
-                    [f.name for f in audio_dir.iterdir() if f.suffix.lower() == ".wav"]
-                )
-                if audio_dir.exists()
-                else []
-            )
-            tts_done = num_frames > 0 and len(existing_audio) >= num_frames
-
-            if not enable_audio:
-                logger.info("resume: 跳过语音生成 ch=%s（用户未启用语音）", ch_id)
-            elif tts_done:
-                # 仅复用磁盘上已有的音频，不再重跑 TTS
-                yield sse_event(
-                    "progress",
-                    stage="tts",
-                    pct=int(ch_base_pct + pct_per_chapter * 0.85),
-                    message=f"⏭️ 已有语音，跳过 ({len(existing_audio)} 段): {ch_title}",
-                )
-                logger.info(
-                    "resume: 复用已有 TTS ch=%s (%d 段)", ch_id, len(existing_audio)
-                )
-                audio_results = [
-                    {"filename": fn, "success": True, "duration_seconds": 0}
-                    for fn in existing_audio
-                ]
-                # speaker_notes 若已落盘也读回来
-                notes_path = course.chapter_dir(ch_id) / "speaker_notes.json"
-                if notes_path.exists():
-                    try:
-                        speaker_notes = json.loads(
-                            notes_path.read_text(encoding="utf-8")
-                        )
-                    except Exception:
-                        speaker_notes = []
-            elif tex_path.exists() and num_frames > 0:
-                yield sse_event(
-                    "progress",
-                    stage="tts",
-                    pct=int(ch_base_pct + pct_per_chapter * 0.85),
-                    message=f"🔊 生成语音: {ch_title} ({num_frames}页)",
-                )
-                speaker_notes = await asyncio.to_thread(
-                    generate_speaker_notes, tts_llm, tex_path, num_frames
-                )
-                if speaker_notes:
-                    notes_path = course.chapter_dir(ch_id) / "speaker_notes.json"
-                    notes_path.write_text(
-                        json.dumps(speaker_notes, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                    audio_results = await asyncio.to_thread(
-                        run_tts_for_chapter,
-                        course.chapter_dir(ch_id),
-                        speaker_notes,
-                        user_id,
-                    )
-
-            # 登记 讲解稿 / 音频包 到 documents（跳过 / 复用 / 新生成都会走进这里）
-            if enable_audio and audio_results:
-                notes_path = course.chapter_dir(ch_id) / "speaker_notes.json"
-                if notes_path.exists() and notes_path.stat().st_size > 0:
-                    try:
-                        notes_doc_id = (
-                            await asyncio.to_thread(
-                                lambda p=notes_path, c=ch_id, t=ch_title: (
-                                    register_chapter_notes(
-                                        session_id=session_id,
-                                        topic=topic,
-                                        chapter_id=c,
-                                        chapter_title=t,
-                                        notes_path=p,
-                                        user_id=user_id,
-                                    )
-                                ),
-                            )
-                            or ""
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.warning(
-                            "resume: speaker_notes 登记失败 ch=%s: %s", ch_id, exc
-                        )
-                try:
-                    audio_doc_id = (
-                        await asyncio.to_thread(
-                            lambda d=audio_dir, c=ch_id, t=ch_title, ar=audio_results, sn=speaker_notes: (
-                                register_chapter_audio(
-                                    session_id=session_id,
-                                    topic=topic,
-                                    chapter_id=c,
-                                    chapter_title=t,
-                                    audio_dir=d,
-                                    audio_results=ar,
-                                    speaker_notes=sn,
-                                    user_id=user_id,
-                                )
-                            ),
-                        )
-                        or ""
-                    )
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.warning(
-                        "resume: audio manifest 登记失败 ch=%s: %s", ch_id, exc
-                    )
-
-            # ── 收集产物 ──
-            images = []
-            if images_dir.exists():
-                images = [
-                    f.name
-                    for f in images_dir.iterdir()
-                    if f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-                ]
-            pdf_ready = _pdf_is_ready(pdf_path)
-            pdf_rel = to_rel_path(str(pdf_path)) if pdf_ready else ""
-            ex_rel = to_rel_path(str(exercises_path)) if exercises_path.exists() else ""
-            audio_files_data = []
-            for r in audio_results:
-                if r.get("success"):
-                    filename = r.get("filename", "")
-                    audio_files_data.append(
-                        {
-                            "filename": filename,
-                            "url": (
-                                f"/api/documents/{audio_doc_id}/asset/{filename}"
-                                if audio_doc_id
-                                else ""
-                            ),
-                            "duration_seconds": r.get("duration_seconds", 0),
-                            "success": True,
-                        }
-                    )
-
-            ch_result = {
+            failed_chapter = {
                 "chapter_id": ch_id,
                 "title": ch_title,
-                "knowledge_points": ch_info.get("knowledge_points", []),
-                "pdf_exists": pdf_ready,
-                "pdf_path": pdf_rel,
-                "pdf_doc_id": "",
-                "exercises_exists": exercises_path.exists(),
-                "exercises_path": ex_rel,
-                "exercises_doc_id": "",
-                "num_frames": num_frames,
-                "speaker_notes_count": len(speaker_notes),
-                "audio_files": audio_files_data,
-                "audio_doc_id": audio_doc_id,
-                "notes_doc_id": notes_doc_id,
-                "images": images,
-                "images_count": len(images),
-            }
-
-            # 立刻把这一章 PDF 登记到 documents 表（即使后续章节失败也能在文档管理看到）
-            try:
-                pdf_doc_id = await asyncio.to_thread(
-                    lambda: register_chapter_pdf(
-                        session_id=session_id,
-                        topic=topic,
-                        chapter_id=ch_id,
-                        chapter_title=ch_title,
-                        pdf_path=pdf_path,
-                        num_pages=num_frames,
-                        user_id=user_id,
-                        node_ids=[],
-                    ),
-                )
-                if pdf_doc_id:
-                    ch_result["pdf_doc_id"] = pdf_doc_id
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("单章 PDF 登记失败 ch=%s: %s", ch_id, exc)
-
-            # 同步登记习题到 documents 表
-            ex_doc_id = ""
-            if exercises_path.exists() and ex_rel:
-                try:
-                    ex_doc_id = (
-                        await asyncio.to_thread(
-                            lambda p=exercises_path, c=ch_id, t=ch_title: (
-                                register_chapter_exercises(
-                                    session_id=session_id,
-                                    topic=topic,
-                                    chapter_id=c,
-                                    chapter_title=t,
-                                    exercises_path=p,
-                                    user_id=user_id,
-                                    node_ids=[],
-                                )
-                            ),
-                        )
-                        or ""
-                    )
-                    if ex_doc_id:
-                        ch_result["exercises_doc_id"] = ex_doc_id
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.warning("单章习题登记失败 ch=%s: %s", ch_id, exc)
-
-            chapter_results.append(ch_result)
-
-            # （预习手册已在 Researcher 完成后推送，此处不再重复生成）
-
-            # 更新 canvas blocks
-            ready_blocks = []
-            chapter_block_ids = [f"chapter_{ch_id}_status"]
-            if pdf_ready:
-                pdf_file = {
-                    "file_id": pdf_doc_id or pdf_rel,
-                    "file_type": "chapter_pdf",
-                    "title": f"第{ch_id}章 {ch_title}",
-                }
-                all_files_for_session.append(pdf_file)
-                if pdf_doc_id:
-                    append_session_file(
-                        session_id, pdf_doc_id, f"第{ch_id}章 {ch_title}", "chapter_pdf"
-                    )
-                if audio_doc_id:
-                    append_session_file(
-                        session_id,
-                        audio_doc_id,
-                        f"第{ch_id}章 {ch_title} · 音频",
-                        "chapter_audio",
-                    )
-                if notes_doc_id:
-                    append_session_file(
-                        session_id,
-                        notes_doc_id,
-                        f"第{ch_id}章 {ch_title} · 讲解稿",
-                        "chapter_notes",
-                    )
-                pdf_block = {
-                    "id": f"pdf_ch{ch_id}",
-                    "type": "pdf",
-                    "title": f"第{ch_id}章 {ch_title}",
-                    "status": "ready",
-                    "chapter_id": ch_id,
-                    "data": {
-                        "url": f"/api/documents/{pdf_doc_id}/raw" if pdf_doc_id else "",
-                        "pdf_path": pdf_rel,
-                        "doc_id": pdf_doc_id,
-                        "num_pages": num_frames,
-                        "audio_enabled": enable_audio,
-                        "audio_files": audio_files_data,
-                        "audio_doc_id": audio_doc_id,
-                    },
-                }
-                upsert_canvas_block(session_id, pdf_block)
-                ready_blocks.append(pdf_block)
-                chapter_block_ids.append(pdf_block["id"])
-
-            if exercises_path.exists() and ex_rel:
-                if ex_doc_id:
-                    append_session_file(
-                        session_id,
-                        ex_doc_id,
-                        f"第{ch_id}章 {ch_title} 习题",
-                        "chapter_exercises",
-                    )
-                quiz_block = {
-                    "id": f"quiz_ch{ch_id}_bank",
-                    "type": "quiz_batch",
-                    "title": f"第{ch_id}章小测",
-                    "status": "ready",
-                    "chapter_id": ch_id,
-                    "data": {
-                        "source": "exercises_md",
-                        "exercises_path": ex_rel,
-                        "doc_id": ex_doc_id,
-                        "display_limit": 3,
-                        "strategy": "show_2_to_3_questions_first",
-                    },
-                }
-                upsert_canvas_block(session_id, quiz_block)
-                ready_blocks.append(quiz_block)
-                chapter_block_ids.append(quiz_block["id"])
-
-            # 更新 chapters_state
-            completed_chapter = {
-                "chapter_id": ch_id,
-                "title": ch_title,
-                "status": "ready",
-                "block_ids": chapter_block_ids,
-                "files": [b for b in [pdf_rel, ex_rel] if b],
+                "status": "pending",
+                "block_ids": [f"chapter_{ch_id}_status"],
+                "files": [],
                 "audio_enabled": enable_audio,
-                "audio_files": audio_files_data,
-                "speaker_notes_count": len(speaker_notes),
-                "pdf_doc_id": pdf_doc_id,
-                "exercises_doc_id": ex_doc_id,
-                "audio_doc_id": audio_doc_id,
-                "notes_doc_id": notes_doc_id,
+                "audio_files": [],
+                "speaker_notes_count": 0,
+                "artifact_status": {"pdf": False},
+                "artifact_missing": [f"pdf_invalid: {pdf_error}"],
             }
-            for idx2, item in enumerate(chapters_state):
-                if item.get("chapter_id") == ch_id:
-                    chapters_state[idx2] = {**item, **completed_chapter}
-                    break
-            else:
-                chapters_state.append(completed_chapter)
-
-            generated_chapters = len(
-                [c for c in chapters_state if c.get("status") == "ready"]
-            )
-            next_chapter_id = None
-            for item in chapters_state:
-                if item.get("status") in {"pending", "generating", "failed"}:
-                    next_chapter_id = item.get("chapter_id")
-                    break
-            next_actions = [{"type": "start_learning", "label": "先学习已生成内容"}]
-            if next_chapter_id:
-                next_actions.append(
-                    {
-                        "type": "continue_generation",
-                        "label": f"继续生成第{next_chapter_id}章",
-                    }
+            async with state_write_lock:
+                workspace_now = read_workspace(session_id)
+                workspace_data = workspace_now.get("workspace", {}) or {}
+                chapters_state = list(workspace_data.get("chapters", []) or [])
+                for idx2, item in enumerate(chapters_state):
+                    if item.get("chapter_id") == ch_id:
+                        chapters_state[idx2] = {**item, **failed_chapter}
+                        break
+                else:
+                    chapters_state.append(failed_chapter)
+                update_workspace(
+                    session_id,
+                    stage="partial_ready",
+                    next_actions=[
+                        {"type": "start_learning", "label": "先学习已生成内容"},
+                        {"type": "continue_generation", "label": "重新生成缺失章节"},
+                    ],
+                    workspace={
+                        "chapters": chapters_state,
+                        "generated_chapters": len(
+                            [
+                                item
+                                for item in chapters_state
+                                if _chapter_is_user_available(item)
+                            ]
+                        ),
+                        "planned_chapters": total_ch,
+                        "current_chapter_id": ch_id,
+                    },
                 )
-
-            update_workspace(
-                session_id,
-                stage="partial_ready" if generated_chapters < total_ch else "ready",
-                next_actions=next_actions,
-                workspace={
-                    "chapters": chapters_state,
-                    "generated_chapters": generated_chapters,
-                    "planned_chapters": total_ch,
-                    "current_chapter_id": next_chapter_id,
-                },
-            )
-            chapter_status_block.update(
-                {
-                    "status": "ready",
+                failed_status_block = {
+                    "id": f"chapter_{ch_id}_status",
+                    "type": "chapter_status",
+                    "title": f"第{ch_id}章 {ch_title}",
+                    "status": "failed",
+                    "chapter_id": ch_id,
                     "data": {
-                        **chapter_status_block.get("data", {}),
-                        "stage": "ready",
-                        "block_ids": chapter_block_ids,
+                        "stage": "failed",
+                        "artifact_missing": failed_chapter["artifact_missing"],
                     },
                 }
-            )
-            upsert_canvas_block(session_id, chapter_status_block)
-
-            yield sse_event(
-                "progress",
-                stage="tex",
-                pct=min(int(ch_base_pct + pct_per_chapter), 90),
-                message=f"✅ 第 {ch_id} 章完成: {ch_title}",
-            )
-            yield sse_event(
-                "chapter_done", index=orig_idx, total=total_ch, data=ch_result
-            )
+                upsert_canvas_block(session_id, failed_status_block)
             yield sse_event(
                 "workspace_update",
                 event="block_updated",
                 session_id=session_id,
-                block=chapter_status_block,
-                next_actions=next_actions,
+                block=failed_status_block,
             )
-            for block in ready_blocks:
-                yield sse_event(
-                    "workspace_update",
-                    event="block_created",
-                    session_id=session_id,
-                    block=block,
-                    next_actions=next_actions,
-                )
+            yield sse_event(
+                "progress",
+                stage="tex",
+                pct=min(int(ch_base_pct + pct_per_chapter), 90),
+                message=f"第 {ch_id} 章 PDF 未通过发布校验，将在下次续传时重试",
+            )
 
-            # 归档
-            try:
-                from services.asset_service import (
-                    archive_immersive_chapter,
-                    pack_chapter_bundle,
-                )
+        # 兜底阶段发布的章节也送入 enrichment；随后关闭入队通道并排空剩余补全事件。
+        for item in enrichment_items:
+            ch_key = item[1].get("chapter_id", item[0] + 1)
+            if ch_key not in enrich_enqueued:
+                enrich_enqueued.add(ch_key)
+                enrich_in.put_nowait(item)
+        enrich_in.put_nowait(None)
+        while True:
+            ev = await prefetch_queue.get()
+            if ev is enrich_done_marker:
+                break
+            yield ev
+        await enrich_task
 
-                ch_dir = course.chapter_dir(ch_id)
-                await asyncio.to_thread(
-                    archive_immersive_chapter, ch_dir, topic, ch_dir.name, session_id
-                )
-            except Exception as e:
-                logger.warning("章节 %d 资产归档失败: %s", ch_id, e)
-            try:
-                bundle_path = await asyncio.to_thread(
-                    pack_chapter_bundle,
-                    course.chapter_dir(ch_id),
-                    topic,
-                    ch_title,
-                    str(ch_id),
-                    session_id,
-                )
-                if bundle_path:
-                    logger.info("第%d章打包完成: %s", ch_id, bundle_path.name)
-            except Exception as e:
-                logger.warning("章节 %d 打包失败: %s", ch_id, e)
+        chapter_results.extend(
+            (published_pdf_by_chapter.get("__chapter_results__") or {}).values()
+        )
+        all_extracted_nodes = []
+        for node_list in (
+            published_pdf_by_chapter.get("__extracted_nodes__") or {}
+        ).values():
+            all_extracted_nodes.extend(node_list)
+        order_by_chapter = {
+            ch.get("chapter_id", idx + 1): idx for idx, ch in enumerate(chapters)
+        }
+        chapter_results.sort(
+            key=lambda item: order_by_chapter.get(item.get("chapter_id"), 0)
+        )
 
-        # 知识图谱抽取（仅对新生成的章节）
+        # 知识图谱节点汇总（每章已在 enrichment worker 中增量抽取）
         yield sse_event(
-            "progress", stage="nodes", pct=92, message="🧠 正在抽取知识图谱节点..."
+            "progress", stage="nodes", pct=92, message="🧠 正在汇总知识大脑节点..."
         )
-        from services.immersive.node_extractor import extract_and_persist_nodes
-
-        # 知识图谱抽取与音频开关解耦，保证 LLM 实例始终可用
-        extractor_llm = tts_llm or get_llm(user_id, scene="immersive")
-        new_chapters_info = [chapters[i] for i, _ in pending_chapters]
-        created_nodes = await asyncio.to_thread(
-            extract_and_persist_nodes,
-            session_id,
-            topic,
-            new_chapters_info,
-            extractor_llm,
-            user_id,
-        )
+        created_nodes = []
+        seen_node_ids = set()
+        for node in all_extracted_nodes:
+            if node.get("id") and node["id"] not in seen_node_ids:
+                seen_node_ids.add(node["id"])
+                created_nodes.append(node)
+        if not created_nodes and enrichment_items:
+            extractor_llm = tts_llm or get_llm(user_id, scene="immersive")
+            new_chapters_info = [ch for _, ch in enrichment_items]
+            created_nodes = await asyncio.to_thread(
+                extract_and_persist_nodes,
+                session_id,
+                topic,
+                new_chapters_info,
+                extractor_llm,
+                user_id,
+            )
         if created_nodes:
             yield sse_event(
                 "nodes_extracted",
@@ -3076,17 +4536,86 @@ async def immersive_resume(
                 new_count=sum(1 for n in created_nodes if not n.get("existed")),
             )
 
-        yield sse_event("progress", stage="done", pct=100, message="🎉 恢复生成完成！")
-        yield sse_event(
-            "done",
-            topic=topic,
-            session_id=session_id,
-            course_dir=str(course.course_dir),
-            chapters=chapter_results,
-            nodes_extracted=len(created_nodes),
-            duration_minutes=max(1, int((time.time() - start_time) / 60)),
-        )
+        final_workspace = read_workspace(session_id).get("workspace", {}) or {}
+        final_chapters = final_workspace.get("chapters", []) or []
+        pending_chapter_ids = [
+            item.get("chapter_id")
+            for item in final_chapters
+            if _chapter_requires_followup(item)
+        ]
+        if pending_chapter_ids:
+            update_workspace(
+                session_id,
+                stage="partial_ready",
+                next_actions=[
+                    {"type": "start_learning", "label": "先学习已生成内容"},
+                    {"type": "continue_generation", "label": "重新生成缺失章节"},
+                ],
+                workspace={
+                    "generated_chapters": len(
+                        [
+                            item
+                            for item in final_chapters
+                            if _chapter_is_user_available(item)
+                        ]
+                    ),
+                    "planned_chapters": total_ch,
+                    "pending_chapter_ids": pending_chapter_ids,
+                },
+            )
+            yield sse_event(
+                "progress",
+                stage="partial_ready",
+                pct=90,
+                message="仍有章节产物未发布完整（PDF/习题/语音），可先学习并在之后继续生成。",
+            )
+        else:
+            update_workspace(
+                session_id,
+                stage="ready",
+                next_actions=[
+                    {"type": "start_learning", "label": "开始学习"},
+                    {"type": "complete_session", "label": "确认完成学习"},
+                ],
+                workspace={
+                    "generated_chapters": len(
+                        [
+                            item
+                            for item in final_chapters
+                            if _chapter_is_user_available(item)
+                        ]
+                    ),
+                    "planned_chapters": total_ch,
+                    "pending_chapter_ids": [],
+                },
+            )
+            yield sse_event(
+                "progress", stage="done", pct=100, message="🎉 恢复生成完成！"
+            )
+            yield sse_event(
+                "done",
+                topic=topic,
+                session_id=session_id,
+                course_dir=str(course.course_dir),
+                chapters=chapter_results,
+                nodes_extracted=len(created_nodes),
+                duration_minutes=max(1, int((time.time() - start_time) / 60)),
+            )
 
     except Exception as e:
         logger.exception("沉浸式学习恢复生成失败")
-        yield sse_event("error", message=str(e))
+        try:
+            current = read_workspace(session_id)
+            if current.get("stage") not in {"ready", "completed"}:
+                update_workspace(
+                    session_id,
+                    stage="failed",
+                    next_actions=[
+                        {"type": "resume_generation", "label": "继续生成"},
+                        {"type": "start_learning", "label": "先学习已生成内容"},
+                    ],
+                    workspace={"generation_status": "failed", "last_error": str(e)},
+                )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("写入恢复失败 workspace 状态失败")
+        yield sse_event("error", session_id=session_id, message=str(e))

@@ -10,10 +10,9 @@ import os
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
 
 from config import BACKEND_HOST, BACKEND_PORT, CORS_ORIGINS, DATA_DIR, LOG_DIR
 from database import init_db
@@ -32,20 +31,26 @@ from routers.usage import router as usage_router
 from routers.viz import router as viz_router
 from routers.llm import router as llm_router
 from routers.admin import router as admin_router
+from routers.admin_users import router as admin_users_router
 from routers.weclaw import router as weclaw_router
 from routers.court import router as court_router
 from routers.examples import router as examples_router
 from routers.backup import router as backup_router
 from routers.graph import router as graph_router
 from routers.learning_map import router as learning_map_router
+from routers.v1.jobs import router as jobs_v1_router
 
 from services.credit_quota import CreditsExceeded
+from api import install_api_foundation, problem_response
+from api.request_context import RequestContextLogFilter
 
 # --------------------------------------------------------------------------
 # 日志配置：控制台 + 按天轮转文件
 # --------------------------------------------------------------------------
 
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+_LOG_FORMAT = (
+    "%(asctime)s [%(levelname)s] %(name)s request_id=%(request_id)s - %(message)s"
+)
 _LOG_LEVEL = logging.INFO
 
 # 根 logger（防止 reload 模式下重复添加 handler）
@@ -56,6 +61,7 @@ if not _root_logger.handlers:
     # 控制台 Handler
     _console_handler = logging.StreamHandler()
     _console_handler.setLevel(_LOG_LEVEL)
+    _console_handler.addFilter(RequestContextLogFilter())
     _console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     _root_logger.addHandler(_console_handler)
 
@@ -69,6 +75,7 @@ if not _root_logger.handlers:
     )
     _file_handler.suffix = "%Y-%m-%d"  # 轮转后文件名后缀：app.log.2026-06-01
     _file_handler.setLevel(_LOG_LEVEL)
+    _file_handler.addFilter(RequestContextLogFilter())
     _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     _root_logger.addHandler(_file_handler)
 
@@ -80,6 +87,7 @@ if not _root_logger.handlers:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     on_startup()
+    await on_startup_weclaw()
     try:
         yield
     finally:
@@ -99,7 +107,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
+
+# HTTP 的 request ID、统一错误结构和 OpenAPI 契约从这里集中装配。
+# 必须在 CORS 之后注册，使它成为最外层 middleware，连 OPTIONS 预检
+# 响应也能携带关联 ID。
+install_api_foundation(app)
 
 
 # demo 路径强制 no-cache（迭代频繁，避免浏览器缓存住旧版本）
@@ -134,29 +148,30 @@ app.include_router(usage_router)
 app.include_router(viz_router)
 app.include_router(llm_router)
 app.include_router(admin_router)
+app.include_router(admin_users_router)
 app.include_router(weclaw_router)
 app.include_router(court_router)
 app.include_router(examples_router)
 app.include_router(backup_router)
 app.include_router(graph_router)
 app.include_router(learning_map_router)
+app.include_router(jobs_v1_router)
 
 
 # --------------------------------------------------------------------------
-# 全局异常处理：额度超限返回 429
+# 全局异常处理：额度超限统一为标准 ProblemDetails
 # --------------------------------------------------------------------------
 
 
 @app.exception_handler(CreditsExceeded)
-async def credits_exceeded_handler(request: Request, exc: CreditsExceeded):
-    return JSONResponse(
-        status_code=429,
-        content={
-            "detail": str(exc),
-            "code": "credits_exceeded",
-            "quota": exc.quota,
-            "used": exc.used,
-        },
+async def credits_exceeded_handler(_request, exc: CreditsExceeded):
+    return problem_response(
+        status=429,
+        code="credits_exceeded",
+        title="可用积分不足",
+        detail=str(exc),
+        retryable=False,
+        extensions={"quota": exc.quota, "used": exc.used},
     )
 
 
@@ -212,7 +227,6 @@ def on_startup():
         log.warning("启动时清理孤儿课程目录失败: %s", exc)
 
 
-@app.on_event("startup")
 async def on_startup_weclaw():
     """启动 weclaw 微信通道（多租户长轮询协程）。默认关闭，由 WECLAW_ENABLED 控制。"""
     from config import WECLAW_ENABLED
@@ -229,7 +243,6 @@ async def on_startup_weclaw():
         log.warning("启动 weclaw 微信通道失败: %s", exc)
 
 
-@app.on_event("shutdown")
 async def on_shutdown():
     log = logging.getLogger(__name__)
 
@@ -291,10 +304,17 @@ if os.path.isdir(_FRONTEND_DIST):
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Long-running generation must not be killed by WatchFiles in deployment.
+    # Local contributors can opt in with WESMARTFLOW_RELOAD=true.
+    reload_enabled = os.environ.get("WESMARTFLOW_RELOAD", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     uvicorn.run(
         "main:app",
         host=BACKEND_HOST,
         port=BACKEND_PORT,
-        reload=True,
+        reload=reload_enabled,
         log_level="info",
     )

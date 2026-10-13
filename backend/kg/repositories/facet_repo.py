@@ -335,11 +335,15 @@ class FacetRepository(KGBaseRepo):
         kinds: Optional[list[str]] = None,
         top_k: int = 10,
         per_concept_cap: Optional[int] = None,
+        query_vec: Optional[list[float]] = None,
     ) -> list[FacetBrief]:
         """子图内 facet 检索：concept 范围限定 + 向量召回 + 按 concept 公平配额。
 
         必须有 concept_ids 范围（来自 Graph RAG 的子图）；否则返回空。
         embedder 不可用时退化为按 confidence/support_count 排序的 list_by_concept。
+
+        query_vec：调用方已算好的 query 向量。传入则直接用它检索，不再对 ``query``
+        重新 embed（一次远程 embedding 往返 ~2s，同一次检索里不应重复付）。
 
         per_concept_cap：每个 concept 最多召回多少条 facet。默认 None 表示不限制
         （沿用旧的"先到先得 top_k"语义）。retrieve_service 会传入明确的配额，
@@ -352,12 +356,17 @@ class FacetRepository(KGBaseRepo):
 
         store = get_vector_store()
         # 向量路径
-        if store.enabled and query:
+        if store.enabled and (query_vec or query):
             # 候选池适当放大：cap > 0 时按 cap × N concepts × 2 取上限
             candidate_k = top_k * 3
             if cap > 0:
                 candidate_k = max(candidate_k, cap * len(concept_ids) * 2)
-            hits = store.search(COLLECTION_FACET, query, top_k=candidate_k)
+            if query_vec:
+                hits = store.search_by_vector(
+                    COLLECTION_FACET, query_vec, top_k=candidate_k
+                )
+            else:
+                hits = store.search(COLLECTION_FACET, query, top_k=candidate_k)
 
             results: list[FacetBrief] = []
             per_concept_count: dict[str, int] = {}

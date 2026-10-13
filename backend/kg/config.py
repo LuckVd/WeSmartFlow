@@ -54,14 +54,29 @@ KG_VEC_DB_PATH = os.getenv("KG_VEC_DB_PATH", "").strip() or str(
 KG_EMBEDDING_API_KEY = os.getenv("KG_EMBEDDING_API_KEY", "").strip()
 KG_EMBEDDING_BASE_URL = os.getenv("KG_EMBEDDING_BASE_URL", "").strip()
 KG_EMBEDDING_MODEL = os.getenv("KG_EMBEDDING_MODEL", "text-embedding-v4").strip()
-try:
-    KG_EMBEDDING_DIM = int(os.getenv("KG_EMBEDDING_DIM", "1024"))
-except ValueError:
-    KG_EMBEDDING_DIM = 1024
-try:
-    KG_EMBEDDING_BATCH = int(os.getenv("KG_EMBEDDING_BATCH", "10"))
-except ValueError:
-    KG_EMBEDDING_BATCH = 10
+
+
+def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Read a bounded positive setting so malformed deployment config is safe."""
+
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if minimum <= value <= maximum else default
+
+
+# sqlite-vec schema is created from ``DIM`` and cannot safely represent zero or a
+# negative value.  The upper bound prevents a mistaken environment variable from
+# allocating pathological vectors; current public embedding models are well below it.
+KG_EMBEDDING_DIM = _bounded_env_int("KG_EMBEDDING_DIM", 1024, minimum=1, maximum=32_768)
+# Keep a deployment typo from sending an unbounded payload to an upstream endpoint.
+KG_EMBEDDING_BATCH = _bounded_env_int("KG_EMBEDDING_BATCH", 10, minimum=1, maximum=100)
+# 是否随请求下发 dimensions。仅当供应商支持该参数时开启：不开启时部分模型
+# （如 text-embedding-3-large）会按自身默认维度（3072）返回，与 KG_EMBEDDING_DIM 不符。
+KG_EMBEDDING_SEND_DIMENSIONS = (
+    os.getenv("KG_EMBEDDING_SEND_DIMENSIONS", "0").strip() == "1"
+)
 
 
 # ---- Retrieve / Graph RAG 调参 ----
@@ -107,7 +122,9 @@ KG_EXPAND_TOP_P = _f("KG_EXPAND_TOP_P", 0.95)
 
 # 入口前置 RAG（在 chat 调 LLM 前自动检索一次 KG 注入 system prompt）
 KG_CHAT_PRERAG_ENABLED = os.getenv("KG_CHAT_PRERAG_ENABLED", "1").strip() != "0"
-KG_CHAT_PRERAG_TIMEOUT_MS = _i("KG_CHAT_PRERAG_TIMEOUT_MS", 800)
+# 前置检索含一次远程 embedding 往返（p6n 实测 1.8~2.8s），预算需覆盖之；
+# 超时会跳过本轮 KG 注入并记 info 日志。
+KG_CHAT_PRERAG_TIMEOUT_MS = _i("KG_CHAT_PRERAG_TIMEOUT_MS", 5000)
 KG_CHAT_PRERAG_TOP_CONCEPTS = _i("KG_CHAT_PRERAG_TOP_CONCEPTS", 3)
 KG_CHAT_PRERAG_TOP_FACETS_PER_CONCEPT = _i("KG_CHAT_PRERAG_TOP_FACETS_PER_CONCEPT", 3)
 

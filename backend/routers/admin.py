@@ -20,8 +20,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from kg import (
     ConceptRepository,
@@ -89,15 +89,24 @@ class CreditCardCreateRequest(BaseModel):
     max_redemptions: int = 1
     expires_at: str | None = None
     note: str = ""
+    recipient_user_id: str | None = Field(default=None, max_length=100)
+    email_request_id: str | None = Field(default=None, min_length=8, max_length=100)
 
 
 class CreditCardStatusRequest(BaseModel):
     disabled: bool = True
 
 
+class CreditCardGiftRequest(BaseModel):
+    recipient_user_id: str = Field(min_length=1, max_length=100)
+    email_request_id: str = Field(min_length=8, max_length=100)
+
+
 @router.post("/credit-cards")
 def create_credit_card(
-    body: CreditCardCreateRequest, admin_id: str = Depends(require_admin)
+    body: CreditCardCreateRequest,
+    background_tasks: BackgroundTasks,
+    admin_id: str = Depends(require_admin),
 ):
     """管理员生成积分卡。普通用户只能拿卡码去兑换，看不到该管理接口。"""
     from services.credit_wallet import (
@@ -105,17 +114,67 @@ def create_credit_card(
         create_credit_card as create_card,
     )
 
+    from services.credit_card_mail import CardMailError, send_card_email
+
     try:
-        return create_card(
+        result = create_card(
             mode=body.mode,
             amount=body.amount,
             max_redemptions=body.max_redemptions,
             expires_at=body.expires_at,
             note=body.note,
             created_by=admin_id,
+            recipient_user_id=body.recipient_user_id,
+            email_request_id=body.email_request_id,
         )
-    except CreditCardError as exc:
+        if result.get("delivery"):
+            background_tasks.add_task(
+                send_card_email, result["card_id"], body.email_request_id
+            )
+        return result
+    except (CreditCardError, CardMailError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/credit-cards/{card_id}/email")
+def card_email_status(card_id: str, _: str = Depends(require_admin)):
+    from services.credit_card_mail import CardMailError, get_delivery
+
+    try:
+        return get_delivery(card_id)
+    except CardMailError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post("/credit-cards/{card_id}/gift")
+def gift_credit_card(
+    card_id: str,
+    body: CreditCardGiftRequest,
+    background_tasks: BackgroundTasks,
+    _: str = Depends(require_admin),
+):
+    from services.credit_card_mail import CardMailError, gift_card, send_card_email
+
+    try:
+        result = gift_card(card_id, body.recipient_user_id, body.email_request_id)
+        background_tasks.add_task(send_card_email, card_id, body.email_request_id)
+        return result
+    except CardMailError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/credit-cards/{card_id}/email/retry")
+def retry_card_email(
+    card_id: str, background_tasks: BackgroundTasks, _: str = Depends(require_admin)
+):
+    from services.credit_card_mail import CardMailError, retry_delivery, send_card_email
+
+    try:
+        result = retry_delivery(card_id)
+        background_tasks.add_task(send_card_email, card_id, result["request_id"])
+        return result
+    except CardMailError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/credit-cards")
@@ -251,7 +310,19 @@ def list_credit_cards(
                 code_hash = item.pop("code_hash")
                 redemption_map.setdefault(code_hash, []).append(item)
 
+        from services.credit_card_mail import public_delivery
+
+        deliveries = {}
+        if hashes:
+            deliveries = {
+                row["card_id"]: public_delivery(row)
+                for row in conn.execute(
+                    f"SELECT * FROM credit_card_email_deliveries WHERE card_id IN ({','.join('?' for _ in hashes)})",
+                    tuple(hashes),
+                )
+            }
         for card in cards:
+            card["delivery"] = deliveries.get(card["code_hash"])
             card["redemptions"] = redemption_map.get(card["code_hash"], [])
             card["card_id"] = card["code_hash"]
             card["code_hash_tail"] = card["code_hash"][-8:]

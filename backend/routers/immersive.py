@@ -16,13 +16,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import Optional
+import re
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import Field
+
+from api.contracts import ApiRequest, ApiResponse, standard_error_responses
+from api.streaming import encode_sse_event, event_stream_headers
 
 from services.immersive import (
     immersive_generate,
@@ -30,6 +35,10 @@ from services.immersive import (
     get_exercises_for_chapter,
     complete_immersive_session,
 )
+from services.immersive.persistence import create_session, update_workspace
+from services.immersive.job_manager import manager as immersive_jobs
+from services.immersive.sse import sse_event
+from repositories import SessionRepository
 from config import COURSES_DIR
 from dependencies import get_current_user
 from services.credit_quota import CreditsExceeded
@@ -41,20 +50,103 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/immersive", tags=["immersive"])
 
+_GENERATE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _normalize_topic_for_lock(topic: str) -> str:
+    return re.sub(r"\s+", "", (topic or "").strip().lower())
+
+
+def _generate_lock_for(user_id: str, topic: str) -> asyncio.Lock:
+    key = f"{user_id}:{_normalize_topic_for_lock(topic)}"
+    lock = _GENERATE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _GENERATE_LOCKS[key] = lock
+    return lock
+
+
 # ── 请求模型 ─────────────────────────────────────────────────────
 
 
-class GenerateRequest(BaseModel):
-    topic: str
-    user_profile: Optional[str] = ""
+class GenerateRequest(ApiRequest):
+    topic: str = Field(min_length=1, max_length=200, description="要学习的主题")
+    user_profile: str = Field(default="", max_length=8_000)
     enable_audio: bool = False
     enable_exercises: bool = True
+
+
+class JobRequest(ApiRequest):
+    session_id: SessionIdField
+
+
+class JobControlResponse(ApiResponse):
+    ok: bool
+    session_id: str
+    mode: Literal["background", "cancelled"]
+
+
+class ResumeRequest(ApiRequest):
+    session_id: SessionIdField
+
+
+class QuizAnswerItem(ApiRequest):
+    question: str = Field(default="", max_length=8_000)
+    user_answer: str = Field(default="", max_length=2_000)
+    correct_answer: str = Field(default="", max_length=2_000)
+    correct: bool = False
+    difficulty: str = Field(default="", max_length=32)
+
+
+class QuizResultRequest(ApiRequest):
+    session_id: SessionIdField
+    chapter_id: int = Field(ge=1, le=200)
+    chapter_title: str = Field(default="", max_length=500)
+    results: list[QuizAnswerItem] = Field(default_factory=list, max_length=100)
+
+
+class QuizResultResponse(ApiResponse):
+    status: Literal["ok", "partial"]
+    message: str = ""
+    accuracy: float | None = None
+    mastery_level: str | None = None
+    details: dict[str, dict[str, float]] = Field(default_factory=dict)
+    learning_map_evidence: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CompleteRequest(ApiRequest):
+    session_id: SessionIdField
+    feedback: str = Field(default="", max_length=4_000)
+
+
+class CourseSummary(ApiResponse):
+    slug: str
+    topic: str
+    overview: str = ""
+    total_chapters: int = Field(ge=0)
+    completed_chapters: int = Field(ge=0)
+    # Legacy clients currently receive this server path.  Keep it in the
+    # contract until the next API version can replace it with a course ID.
+    path: str = ""
+
+
+class CourseListResponse(ApiResponse):
+    courses: list[CourseSummary] = Field(default_factory=list)
+
+
+class SuggestionsResponse(ApiResponse):
+    suggestions: list[dict] = Field(default_factory=list)
+    source: str = "default"
 
 
 # ── SSE 生成接口 ─────────────────────────────────────────────────
 
 
-@router.post("/generate")
+@router.post(
+    "/generate",
+    operation_id="start_immersive_generation",
+    responses=standard_error_responses(400, 401, 422, 429, 503),
+)
 async def generate_immersive(
     req: GenerateRequest, request: Request, user_id: str = Depends(get_current_user)
 ):
@@ -73,52 +165,151 @@ async def generate_immersive(
                 detail=guard_result.reason,
             )
 
+    topic = req.topic.strip()
+    reused_session = False
+    lock = _generate_lock_for(user_id, topic)
+    async with lock:
+        repo = SessionRepository()
+        reusable = repo.find_active_immersive_by_topic(user_id, topic)
+        if reusable:
+            session_id = reusable.id
+            reused_session = True
+            logger.info(
+                "复用同 topic 沉浸式生成会话: user=%s topic=%s session=%s running=%s",
+                safe_log(user_id),
+                safe_log(topic),
+                safe_log(session_id),
+                immersive_jobs.is_running(session_id),
+            )
+            if not immersive_jobs.is_running(session_id):
+                update_workspace(session_id, workspace={"generation_status": "running"})
+                immersive_jobs.start(
+                    session_id,
+                    user_id,
+                    immersive_resume(session_id=session_id, user_id=user_id),
+                )
+        else:
+            session_id = create_session(topic, user_id=user_id)
+            update_workspace(
+                session_id,
+                workspace={
+                    "generation_status": "running",
+                    "topic": topic,
+                    "enable_audio": req.enable_audio,
+                    "enable_exercises": req.enable_exercises,
+                },
+            )
+            immersive_jobs.start(
+                session_id,
+                user_id,
+                immersive_generate(
+                    topic=topic,
+                    user_profile=req.user_profile or "",
+                    user_id=user_id,
+                    enable_audio=req.enable_audio,
+                    enable_exercises=req.enable_exercises,
+                    session_id=session_id,
+                ),
+            )
+
     async def event_stream():
         try:
-            async for event in immersive_generate(
-                topic=req.topic.strip(),
-                user_profile=req.user_profile or "",
-                user_id=user_id,
-                enable_audio=req.enable_audio,
-                enable_exercises=req.enable_exercises,
-            ):
-                # 检查客户端是否断开
+            if reused_session:
+                yield sse_event(
+                    "session_reused",
+                    session_id=session_id,
+                    topic=topic,
+                    message=f"已接回正在生成的课程「{topic}」",
+                )
+            async for event in immersive_jobs.subscribe(session_id):
                 if await request.is_disconnected():
-                    logger.info("客户端断开，停止生成")
+                    # A lost browser is treated as “continue in background”.
+                    # The explicit stop endpoint is the only destructive path.
+                    immersive_jobs.detach(session_id)
+                    logger.info(
+                        "客户端断开，沉浸式任务转入后台: %s", safe_log(session_id)
+                    )
                     break
                 yield event
         except CreditsExceeded as e:
-            err = json.dumps(
-                {
-                    "type": "error",
-                    "message": str(e),
-                    "code": "credits_exceeded",
-                    "quota": e.quota,
-                    "used": e.used,
-                },
-                ensure_ascii=False,
+            yield encode_sse_event(
+                "error",
+                message=str(e),
+                code="credits_exceeded",
+                quota=e.quota,
+                used=e.used,
             )
-            yield f"data: {err}\n\n"
+        finally:
+            # Disconnects are background-detach by default.  An explicit cancel
+            # request has already cancelled the job and is therefore a no-op.
+            immersive_jobs.detach(session_id)
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=event_stream_headers(),
     )
+
+
+@router.post(
+    "/jobs/detach",
+    operation_id="detach_immersive_job",
+    response_model=JobControlResponse,
+    responses=standard_error_responses(401, 404, 422),
+)
+async def detach_immersive_job(
+    body: JobRequest, user_id: str = Depends(get_current_user)
+):
+    session_id = sanitize_uuid(body.session_id, field_name="session_id")
+    session = SessionRepository().get_by_id(session_id)
+    if not session or session.user_id != user_id:
+        raise HTTPException(404, "课程不存在")
+    detached = immersive_jobs.detach(session_id)
+    return {"ok": detached, "session_id": session_id, "mode": "background"}
+
+
+@router.post(
+    "/jobs/cancel",
+    operation_id="cancel_immersive_job",
+    response_model=JobControlResponse,
+    responses=standard_error_responses(401, 404, 409, 422),
+)
+async def cancel_immersive_job(
+    body: JobRequest, user_id: str = Depends(get_current_user)
+):
+    session_id = sanitize_uuid(body.session_id, field_name="session_id")
+    session = SessionRepository().get_by_id(session_id)
+    if not session or session.user_id != user_id:
+        raise HTTPException(404, "课程不存在")
+    cancelled = immersive_jobs.cancel(session_id)
+    # Persist immediately as well as from the task's CancelledError handler.
+    # This also makes cancellation useful after a process restart, when the
+    # in-memory job is no longer present but the session is still resumable.
+    current = SessionRepository().read_workspace(session_id)
+    if (
+        current.get("stage") not in {"ready", "completed"}
+        and session.status != "completed"
+    ):
+        update_workspace(
+            session_id,
+            stage="cancelled",
+            next_actions=[
+                {"type": "resume_generation", "label": "继续生成"},
+                {"type": "start_learning", "label": "先学习已生成内容"},
+            ],
+            workspace={"generation_status": "cancelled"},
+        )
+    return {"ok": cancelled, "session_id": session_id, "mode": "cancelled"}
 
 
 # ── 断点续传 ───────────────────────────────────────────────────
 
 
-class ResumeRequest(BaseModel):
-    session_id: SessionIdField
-
-
-@router.post("/resume")
+@router.post(
+    "/resume",
+    operation_id="resume_immersive_generation",
+    responses=standard_error_responses(400, 401, 404, 422, 429, 503),
+)
 async def resume_immersive(
     req: ResumeRequest, request: Request, user_id: str = Depends(get_current_user)
 ):
@@ -131,45 +322,52 @@ async def resume_immersive(
 
     # ── 入口显式净化（SAST sanitizer）──
     session_id = sanitize_uuid(req.session_id.strip(), field_name="session_id")
+    session = SessionRepository().get_by_id(session_id)
+    if not session or session.user_id != user_id:
+        raise HTTPException(404, "课程不存在")
 
     async def event_stream():
         try:
-            async for event in immersive_resume(
-                session_id=session_id,
-                user_id=user_id,
-            ):
+            update_workspace(session_id, workspace={"generation_status": "running"})
+            immersive_jobs.start(
+                session_id,
+                user_id,
+                immersive_resume(session_id=session_id, user_id=user_id),
+            )
+            async for event in immersive_jobs.subscribe(session_id):
                 if await request.is_disconnected():
-                    logger.info("客户端断开，停止恢复生成")
+                    immersive_jobs.detach(session_id)
+                    logger.info(
+                        "客户端断开，恢复任务转入后台: %s", safe_log(session_id)
+                    )
                     break
                 yield event
         except CreditsExceeded as e:
-            err = json.dumps(
-                {
-                    "type": "error",
-                    "message": str(e),
-                    "code": "credits_exceeded",
-                    "quota": e.quota,
-                    "used": e.used,
-                },
-                ensure_ascii=False,
+            yield encode_sse_event(
+                "error",
+                message=str(e),
+                code="credits_exceeded",
+                quota=e.quota,
+                used=e.used,
             )
-            yield f"data: {err}\n\n"
+        finally:
+            immersive_jobs.detach(session_id)
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=event_stream_headers(),
     )
 
 
 # ── 习题 API ──────────────────────────────────────────────────
 
 
-@router.get("/exercises/{session_id}/{chapter_id}")
+@router.get(
+    "/exercises/{session_id}/{chapter_id}",
+    operation_id="get_immersive_chapter_exercises",
+    responses=standard_error_responses(401, 404, 422),
+)
 async def get_exercises(
     session_id: SessionIdPath,
     chapter_id: int,
@@ -209,22 +407,12 @@ async def get_exercises(
 # ── 习题作答结果上报 ──────────────────────────────────────────
 
 
-class QuizAnswerItem(BaseModel):
-    question: str = ""
-    user_answer: str = ""
-    correct_answer: str = ""
-    correct: bool = False
-    difficulty: str = ""  # 简单 | 中等 | 困难
-
-
-class QuizResultRequest(BaseModel):
-    session_id: SessionIdField
-    chapter_id: int
-    chapter_title: str = ""
-    results: list[QuizAnswerItem] = []
-
-
-@router.post("/quiz-result")
+@router.post(
+    "/quiz-result",
+    operation_id="submit_immersive_quiz_result",
+    response_model=QuizResultResponse,
+    responses=standard_error_responses(401, 404, 422),
+)
 async def submit_quiz_result(
     req: QuizResultRequest,
     user_id: str = Depends(get_current_user),
@@ -233,7 +421,7 @@ async def submit_quiz_result(
     from services.immersive.profile_updater import update_profile_from_quiz
 
     if not req.results:
-        return {"status": "ok", "message": "无答题数据"}
+        return QuizResultResponse(status="ok", message="无答题数据")
 
     # ── 入口显式净化（SAST sanitizer）──
     session_id = sanitize_uuid(req.session_id, field_name="session_id")
@@ -246,7 +434,7 @@ async def submit_quiz_result(
             chapter_title=req.chapter_title,
             results=[r.model_dump() for r in req.results],
         )
-        return result
+        return QuizResultResponse(**result)
     except Exception:
         # 不向前端暴露异常详情；详细堆栈仅记到服务端日志
         logger.exception(
@@ -255,18 +443,17 @@ async def submit_quiz_result(
             safe_log(session_id),
             safe_log(req.chapter_id),
         )
-        return {"status": "partial", "message": "处理失败，请稍后重试"}
+        return QuizResultResponse(status="partial", message="处理失败，请稍后重试")
 
 
 # ── 用户确认完成 ──────────────────────────────────────────────
 
 
-class CompleteRequest(BaseModel):
-    session_id: SessionIdField
-    feedback: Optional[str] = ""
-
-
-@router.post("/complete")
+@router.post(
+    "/complete",
+    operation_id="complete_immersive_session",
+    responses=standard_error_responses(400, 401, 404, 409, 422),
+)
 async def complete_session(
     req: CompleteRequest,
     user_id: str = Depends(get_current_user),
@@ -299,7 +486,12 @@ async def complete_session(
 # ── 课程列表 ─────────────────────────────────────────────────────
 
 
-@router.get("/courses")
+@router.get(
+    "/courses",
+    operation_id="list_immersive_courses",
+    response_model=CourseListResponse,
+    responses=standard_error_responses(401),
+)
 async def list_courses(
     user_id: str = Depends(get_current_user),
 ):
@@ -311,7 +503,7 @@ async def list_courses(
     """
     courses_dir = COURSES_DIR
     if not courses_dir.exists():
-        return {"courses": []}
+        return CourseListResponse()
 
     from database import get_db
 
@@ -352,25 +544,30 @@ async def list_courses(
         )
 
         courses.append(
-            {
-                "slug": d.name,
-                "topic": outline.get("topic", d.name) if outline else d.name,
-                "overview": outline.get("overview", "") if outline else "",
-                "total_chapters": len(outline.get("chapters", []))
+            CourseSummary(
+                slug=d.name,
+                topic=outline.get("topic", d.name) if outline else d.name,
+                overview=outline.get("overview", "") if outline else "",
+                total_chapters=len(outline.get("chapters", []))
                 if outline
                 else len(chapter_dirs),
-                "completed_chapters": chapters_with_pdf,
-                "path": str(d),
-            }
+                completed_chapters=chapters_with_pdf,
+                path=str(d),
+            )
         )
 
-    return {"courses": courses}
+    return CourseListResponse(courses=courses)
 
 
 # ── 个性化推荐云朵 ─────────────────────────────────────────────────
 
 
-@router.get("/suggestions")
+@router.get(
+    "/suggestions",
+    operation_id="get_immersive_suggestions",
+    response_model=SuggestionsResponse,
+    responses=standard_error_responses(401, 429, 503),
+)
 async def get_suggestions(
     user_id: str = Depends(get_current_user),
 ):
@@ -379,7 +576,7 @@ async def get_suggestions(
 
     try:
         result = await generate_suggestions(user_id)
-        return result
+        return SuggestionsResponse(**result)
     except Exception as e:
         logger.warning("生成个性化推荐失败: %s", e)
-        return {"suggestions": [], "source": "default"}
+        return SuggestionsResponse()

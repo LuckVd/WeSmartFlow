@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict
 from pathlib import Path
@@ -43,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 # agents 专属 skills 目录
 _AGENTS_SKILLS_DIR = Path(__file__).parent.parent / "agents" / "prompts" / "skills"
+
+# KG 前置检索专用线程池：有界并发。远程 embedding 变慢时，线程不会无限堆积，
+# 也不会挤占事件循环默认线程池（LLM / 工具的 to_thread 共用那一个）。
+# 线程按需创建，空闲时零开销；池满时新请求排队并在超时后跳过 KG 注入。
+_KG_PRERAG_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="kg-prerag")
 
 
 class TutorService:
@@ -133,7 +139,7 @@ class TutorService:
         # KG 前置检索（钩子①）：文本经 provider 注入 system 段。
         # （历史遗留：曾作为 system 消息插入 chat_history，会被装配层
         #  按「记忆只应产出 history」剔除而失效；provider 是正确通路。）
-        kg_pre_msg = self._build_kg_pre_context(user_message)
+        kg_pre_msg = await self._build_kg_pre_context(user_message)
         if kg_pre_msg:
             providers.append(StaticProvider("kg_pre_rag", kg_pre_msg.content))
 
@@ -410,11 +416,14 @@ class TutorService:
 
     # ── KG 前置检索（钩子①）────────────────────────────────────
 
-    def _build_kg_pre_context(self, user_message: str):
-        """同步检索 KG，把命中结果作为一条 system 消息返回（用于预置到 chat_history 最前）。
+    async def _build_kg_pre_context(self, user_message: str):
+        """检索 KG，把命中结果作为一条 system 消息返回（经 provider 注入 system 段）。
 
         - 失败 / 超时 / 命中不足 → 返回 None，不插入任何上下文。
         - 设计为在主对话开始前给 LLM 提供"集体潜意识"参考。
+        - 检索本身是同步阻塞 IO（远程 embedding + sqlite），因此放到专用线程池，
+          在事件循环里只 ``await`` 它；绝不能直接在协程里同步调用，否则整个
+          服务（所有用户的请求）会在等待期间被一起卡住。
         """
         try:
             from kg.config import (
@@ -431,10 +440,7 @@ class TutorService:
             return None
 
         try:
-            from concurrent.futures import (
-                ThreadPoolExecutor,
-                TimeoutError as FTTimeoutError,
-            )
+            import contextvars
 
             from kg import RetrieveRequest
             from services import kg_facade
@@ -447,14 +453,24 @@ class TutorService:
                 anchor_max_entries=KG_CHAT_PRERAG_TOP_CONCEPTS,
                 max_subgraph_size=KG_CHAT_PRERAG_TOP_CONCEPTS + 4,
             )
-            # 用线程池跑 + 超时；KG 检索本身是同步阻塞 IO（向量库 + sqlite）
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(kg_facade.retrieve, req)
-                try:
-                    resp = fut.result(timeout=KG_CHAT_PRERAG_TIMEOUT_MS / 1000.0)
-                except FTTimeoutError:
-                    logger.info("KG 前置检索超时 (>%d ms)", KG_CHAT_PRERAG_TIMEOUT_MS)
-                    return None
+            # 复制当前上下文进工作线程，使 request_id 等 contextvar 在
+            # provider_call 日志里不丢（run_in_executor 默认不带上下文）。
+            ctx = contextvars.copy_context()
+            fut = asyncio.get_running_loop().run_in_executor(
+                _KG_PRERAG_EXECUTOR, ctx.run, kg_facade.retrieve, req
+            )
+            try:
+                resp = await asyncio.wait_for(
+                    fut, timeout=KG_CHAT_PRERAG_TIMEOUT_MS / 1000.0
+                )
+            except asyncio.TimeoutError:
+                # 超时只放弃“等待”：工作线程会自行跑完（顺带把关系 probe 等
+                # lru_cache 预热好，下一轮就能命中），请求不再被它拖住。
+                logger.info(
+                    "KG 前置检索超时 (>%d ms)，本轮跳过 KG 注入",
+                    KG_CHAT_PRERAG_TIMEOUT_MS,
+                )
+                return None
         except Exception:  # pylint: disable=broad-except
             logger.exception("KG 前置检索异常")
             return None

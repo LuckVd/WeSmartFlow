@@ -3,18 +3,6 @@
     <!-- 顶栏 -->
     <header class="kg-header">
       <div class="kg-header-left">
-        <button class="ctrl-btn" title="返回审核台" @click="goConsole">
-          <svg
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-        </button>
         <h1 class="page-title">KG 全景图</h1>
         <span v-if="stats" class="page-subtitle">
           {{ stats.concept_count }} 个概念 · {{ stats.edge_count }} 条关系
@@ -354,12 +342,10 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick } from "vue";
-import { useRouter } from "vue-router";
 import { adminApi } from "@/api/admin";
 import { useTheme } from "@/composables/useTheme";
 import { renderMd } from "@/composables/useMarkdown";
 
-const router = useRouter();
 const { isDark } = useTheme();
 
 // ── 状态 ────────────────────────────────────────────
@@ -396,7 +382,7 @@ const relationColors = {
   equivalent_to: "#f97316",
 };
 
-// 学科 → 颜色（同 GraphView 风格）
+// 学科 → 颜色（与知识大脑配色一致）
 const SUBJECT_COLORS = {
   算法: "#6366f1",
   数据结构: "#10b981",
@@ -530,7 +516,7 @@ function reload() {
   loadGraph();
 }
 
-// 力导向布局：簇内 + 簇间双层，与 GraphView 同思路（简化版）
+// 力导向布局：簇内 + 簇间双层（简化版）
 function layoutNodes(rawNodes) {
   const N = rawNodes.length;
   if (N === 0) return;
@@ -893,10 +879,6 @@ function searchAndSelect() {
   }
 }
 
-function goConsole() {
-  router.push("/admin/console");
-}
-
 // ── 生命周期 ─────────────────────────────────────────
 let _resizeObserver = null;
 onMounted(async () => {
@@ -919,8 +901,8 @@ onUnmounted(() => {
 .admin-kg {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
+  height: calc(100dvh - 64px);
+  width: 100%;
   overflow: hidden;
   background: var(--bg-page, #f8fafc);
   color: var(--text-primary, #1e293b);
@@ -1421,5 +1403,19 @@ onUnmounted(() => {
 .admin-kg.dark {
   background: var(--bg-page, #0f172a);
   color: var(--text-primary, #e2e8f0);
+}
+@media (max-width: 800px) {
+  .kg-header {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+  }
+  .kg-header-right {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .search-bar {
+    flex: 1;
+    min-width: 160px;
+  }
 }
 </style>

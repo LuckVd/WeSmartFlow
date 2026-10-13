@@ -154,6 +154,16 @@ These use fixed fixtures and mocked model responses, not paid model calls or pro
 | `WECHAT_MP_APPID` | WeChat Mini Program AppID | No | — |
 | `WECHAT_MP_SECRET` | WeChat Mini Program secret | No | — |
 
+### Credit card emails
+
+In Admin → Credit cards → Generate, enable email delivery, search for a user, and choose Generate and send. The recipient address comes from the user's profile; users without an email cannot be selected. The message includes the redemption code, credit amount, and instructions. The recipient still needs to redeem the card.
+
+Use Gift in an existing card's action column to select a recipient and send its code. Gifting preserves the card's amount and redemption limit; it does not create a card, redeem it, or reserve a redemption slot. Disabled, expired, or exhausted cards cannot be gifted, nor can a user receive a gift they have already redeemed. The list shows the latest delivery, while earlier recipient records remain in the database. Retry sends to the latest recipient address.
+
+Delivery reuses `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, and `SMTP_PASSWORD` above. Set `SMTP_FROM_NAME` to customize the sender name. Optionally set `PUBLIC_BASE_URL` to the public website URL to include a settings-page redemption link. Restart the backend after updating; startup creates the delivery-record table automatically.
+
+Admins can inspect delivery status and retry the same code without creating another card. SMTP acceptance does not guarantee inbox delivery. Tasks run within the application process; interrupted tasks show an unknown status after approximately three minutes and can be retried manually after checking the inbox.
+
 ## Database
 
 Uses SQLite (WAL mode). The default database is `<repository>/data/wesmartflow.db`, initialized at startup. Setting `ROOT_DIR` changes the database path to `ROOT_DIR/data/wesmartflow.db`; documents live in `data/documents/` and logs in `data/logs/`.

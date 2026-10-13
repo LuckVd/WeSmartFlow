@@ -19,6 +19,7 @@ import os
 from agent_core.hooks import hookwrapper, observe
 from agent_core.tool.search.base import BaseSearchClient
 from agent_core.tool.search.tavily import TavilySearchClient
+from services.provider_gateway import get_provider_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,24 @@ def _attach_hooks(
 
     is_system = user_id == "__system__"
     platform_key = not is_system and is_using_platform_key(user_id, "search")
+
+    # Search is read-only, so the provider profile explicitly allows one
+    # transient transport retry.  The compatibility client still owns the SDK
+    # details; the gateway only provides policy and observability.
+    gateway = get_provider_gateway()
+    profile = gateway.resolve(
+        category="search",
+        backend=client.backend,
+        endpoint=getattr(client, "base_url", "") or "https://api.tavily.com",
+    )
+    client.search = gateway.instrument_sync(  # type: ignore[method-assign]
+        profile,
+        "search.query",
+        client.search,
+        scene=scene,
+        success=lambda result: bool(getattr(result, "ok", False)),
+    )
+    client.provider_profile = profile  # type: ignore[attr-defined]
 
     def _pre(*_args, **_kwargs):
         from services.credit_quota import assert_available
@@ -72,25 +91,30 @@ def get_search_client(
     优先级：
       1. 用户在设置页配置了 tavily_api_key → 自配 Key
          （``assert_available`` 内部判定平台不承担成本，放行不拦截，记账照常）；
-      2. 环境变量 TAVILY_API_KEY → 平台 Key（受额度限制）。
+      2. 环境变量 TAVILY_API_KEY → 平台 Key（受额度限制）；
+         平台 Key 可配合 TAVILY_BASE_URL 指向 Tavily 兼容服务。
+         用户自配 Key 始终发往 Tavily 官方地址，不会发给平台的兼容服务。
 
     Args:
         user_id:    用户 ID，用于读配置与额度归属。
         with_quota: 是否启用事前拦截（默认 True）；系统级调用传 False。
         scene:      用量归因场景（见 usage_meter.VALID_SCENES）。
     """
-    api_key = ""
+    user_key = ""
     try:
         from database import get_setting
 
-        api_key = get_setting(user_id, "tavily_api_key") or os.getenv(
-            "TAVILY_API_KEY", ""
-        )
+        user_key = (get_setting(user_id, "tavily_api_key") or "").strip()
     except Exception:  # pylint: disable=broad-except
         logger.warning("搜索配置读取失败，回退环境变量", exc_info=True)
-        api_key = os.getenv("TAVILY_API_KEY", "")
 
-    client = TavilySearchClient(api_key=api_key)
+    if user_key:
+        client = TavilySearchClient(api_key=user_key)
+    else:
+        client = TavilySearchClient(
+            api_key=os.getenv("TAVILY_API_KEY", "").strip(),
+            base_url=os.getenv("TAVILY_BASE_URL", ""),
+        )
     return _attach_hooks(client, user_id=user_id, scene=scene, with_quota=with_quota)
 
 

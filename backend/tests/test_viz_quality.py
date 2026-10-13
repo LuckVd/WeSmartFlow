@@ -1,5 +1,6 @@
 """Offline regressions for visualization contracts, retries and publication."""
 
+import asyncio
 import json
 import sys
 import tempfile
@@ -230,6 +231,38 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(llm.stream_think.call_count, 1)
 
+    async def test_runtime_task_finishing_during_review_is_collected(self):
+        llm = fake_llm(CODE)
+        runtime_gate = None
+
+        async def runtime_finishes_during_review(*args, **kwargs):
+            await runtime_gate.wait()
+            return {"ok": True, "errors": []}
+
+        async def review_releases_runtime(*args, **kwargs):
+            runtime_gate.set()
+            await asyncio.sleep(0)
+            yield viz._StageResult(parse_contract(PASS, VizReview))
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(viz, "get_llm", return_value=llm),
+            patch.object(ValidateVizCodeTool, "environment_error", return_value=None),
+            patch.object(ValidateVizCodeTool, "run", return_value="ok"),
+            patch.object(
+                viz,
+                "async_check_viz_runtime",
+                side_effect=runtime_finishes_during_review,
+            ),
+            patch.object(viz, "_review_code", side_effect=review_releases_runtime),
+        ):
+            runtime_gate = asyncio.Event()
+            code, quality = await collect_stage(
+                viz._run_code_loop(Path(tmp), SPEC, "user", "SDK", "")
+            )
+        self.assertEqual(code, CODE)
+        self.assertTrue(quality["runtime"]["ok"])
+
     async def test_parent_budget_and_cancel_prevent_further_calls(self):
         ctx = new_context(budget=Budget(max_steps=1))
         llm = fake_llm("{}")
@@ -277,6 +310,11 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
                     "runtime"
                 ]["ok"]
             )
+            timings = json.loads((Path(tmp) / viz_id / "meta.json").read_text())[
+                "quality"
+            ]["timings_ms"]
+            self.assertIn("design_total", timings)
+            self.assertIn("code_total", timings)
 
 
 class StaticValidatorTests(unittest.TestCase):

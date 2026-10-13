@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +16,15 @@ from typing import Any, Dict, Optional
 from .base import BaseTool
 
 logger = logging.getLogger(__name__)
+
+
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".pdf")
+_INCLUDE_GRAPHICS_RE = re.compile(
+    r"\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^{}]+)\}", re.DOTALL
+)
+_TEX_MACRO_RE = re.compile(
+    r"\\(?:newcommand|renewcommand)\s*\{\\([A-Za-z@]+)\}\s*\{([^{}]*)\}"
+)
 
 
 def _cjk_font_chain() -> str:
@@ -87,6 +98,145 @@ def validate_pdf_file(pdf_path: Path, min_size: int = 1024) -> Optional[str]:
         return None
     except OSError as exc:
         return f"PDF 文件读取失败: {exc}"
+
+
+def pdf_artifact_revision(pdf_path: Path) -> str:
+    """Return a content revision suitable for invalidating a rendered PDF cache."""
+    digest = hashlib.sha256()
+    with pdf_path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:16]
+
+
+def _resolve_tex_image_reference(
+    raw_reference: str,
+    *,
+    tex_path: Path,
+    images_dir: Path,
+    macros: dict[str, str],
+) -> Optional[Path]:
+    """Resolve the straightforward image paths emitted by the courseware writer."""
+    reference = raw_reference.strip()
+    for name, value in macros.items():
+        reference = reference.replace(f"\\{name}", value)
+    reference = reference.replace("{", "").replace("}", "").strip()
+    if not reference:
+        return None
+
+    # A macro such as ``\imgdir figure.png`` intentionally has whitespace
+    # between the directory macro and the file name.  It is never meaningful
+    # in a generated image path, so normalize it before resolving.
+    reference = re.sub(r"\s+", "", reference)
+    source = Path(reference).expanduser()
+    candidates = [source] if source.is_absolute() else [tex_path.parent / source]
+    candidates.append(images_dir / source.name)
+
+    for candidate in candidates:
+        if candidate.suffix:
+            if candidate.is_file():
+                return candidate.resolve()
+            continue
+        for suffix in _IMAGE_EXTENSIONS:
+            with_suffix = candidate.with_suffix(suffix)
+            if with_suffix.is_file():
+                return with_suffix.resolve()
+    return None
+
+
+def validate_chapter_pdf(
+    pdf_path: Path,
+    tex_path: Path,
+    images_dir: Path,
+) -> Optional[str]:
+    """Validate a generated chapter PDF before it can be published or reused.
+
+    A syntactically valid PDF can still be a stale pre-image build.  The
+    courseware contract is therefore checked end to end: every TeX image
+    reference must resolve to a source asset older than the PDF, the final PDF
+    must embed at least that many image instances, and the image-bearing pages
+    must rasterize successfully with PDFium.
+    """
+    pdf_error = validate_pdf_file(pdf_path)
+    if pdf_error:
+        return pdf_error
+    if not tex_path.is_file():
+        return f"TeX 文件不存在，无法校验图片完整性: {tex_path}"
+
+    try:
+        tex_source = tex_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        return f"TeX 文件读取失败: {exc}"
+
+    macros = {
+        match.group(1): match.group(2).strip()
+        for match in _TEX_MACRO_RE.finditer(tex_source)
+    }
+    references = _INCLUDE_GRAPHICS_RE.findall(tex_source)
+    resolved_images: list[Path] = []
+    for reference in references:
+        image_path = _resolve_tex_image_reference(
+            reference,
+            tex_path=tex_path,
+            images_dir=images_dir,
+            macros=macros,
+        )
+        if image_path is None:
+            return f"TeX 图片引用无法解析或源文件不存在: {reference.strip()}"
+        try:
+            if image_path.stat().st_size == 0:
+                return f"TeX 图片源文件为空: {image_path.name}"
+        except OSError as exc:
+            return f"TeX 图片源文件读取失败: {exc}"
+        resolved_images.append(image_path)
+
+    if not resolved_images:
+        return None
+
+    try:
+        pdf_mtime_ns = pdf_path.stat().st_mtime_ns
+    except OSError as exc:
+        return f"PDF 文件读取失败: {exc}"
+    newer_sources = [
+        image.name
+        for image in resolved_images
+        if image.stat().st_mtime_ns > pdf_mtime_ns
+    ]
+    if newer_sources:
+        return "图片源文件晚于 PDF，必须重新编译: " + ", ".join(newer_sources[:4])
+
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(pdf_path), strict=False)
+        image_pages = [
+            index for index, page in enumerate(reader.pages) if len(page.images) > 0
+        ]
+        embedded_images = sum(len(reader.pages[index].images) for index in image_pages)
+    except Exception as exc:  # pylint: disable=broad-except
+        return f"无法检查 PDF 内嵌图片: {exc}"
+
+    expected_images = len(resolved_images)
+    if embedded_images < expected_images:
+        return (
+            "PDF 内嵌图片不足: "
+            f"TeX 引用了 {expected_images} 张，PDF 仅检测到 {embedded_images} 张"
+        )
+
+    try:
+        import pypdfium2 as pdfium
+
+        document = pdfium.PdfDocument(str(pdf_path))
+        for page_index in image_pages:
+            bitmap = document[page_index].render(scale=0.25)
+            rendered = bitmap.to_pil().convert("RGB")
+            extrema = rendered.getextrema()
+            if all(low == high for low, high in extrema):
+                return f"PDF 图片页渲染为空白: 第 {page_index + 1} 页"
+    except Exception as exc:  # pylint: disable=broad-except
+        return f"PDF 图片页渲染校验失败: {exc}"
+
+    return None
 
 
 class LatexPdfCompileTool(BaseTool):
@@ -317,7 +467,9 @@ class LatexPdfCompileTool(BaseTool):
                     )
 
                 self._copy_compile_log(tmp_log_path, log_path)
-                validation_error = validate_pdf_file(tmp_pdf_path)
+                validation_error = validate_chapter_pdf(
+                    tmp_pdf_path, compile_tex, tex.parent / "images"
+                )
                 success = result.returncode == 0 and validation_error is None
                 if success:
                     tmp_pdf_path.replace(pdf_path)
@@ -367,6 +519,8 @@ latex_pdf_compile_tool = LatexPdfCompileTool()
 __all__ = [
     "LatexPdfCompileTool",
     "latex_pdf_compile_tool",
+    "pdf_artifact_revision",
+    "validate_chapter_pdf",
     "validate_pdf_file",
 ]
 

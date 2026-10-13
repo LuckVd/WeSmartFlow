@@ -3,7 +3,7 @@
  *
  * 对应后端 routers/viz.py
  */
-import { api, BASE_URL, authHeaders } from "./base.js";
+import { api, BASE_URL, authHeaders, createRequestId } from "./base.js";
 
 /**
  * 调用后端 generate_interactive_viz 工具生成一个新的可视化
@@ -27,7 +27,9 @@ export function generateViz(payload) {
  */
 export async function fetchVizCode(vizId) {
   const url = `${BASE_URL}/api/documents/${vizId}/raw`;
-  const res = await fetch(url, { headers: authHeaders() });
+  const res = await fetch(url, {
+    headers: { ...authHeaders(), "X-Request-ID": createRequestId() },
+  });
   if (!res.ok) {
     throw new Error(`加载可视化代码失败: HTTP ${res.status}`);
   }

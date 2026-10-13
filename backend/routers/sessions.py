@@ -11,6 +11,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+from api.streaming import encode_sse_event, event_stream_headers
 from models.session import SessionCreate, ChatMessage, SessionSchema, SessionDetail
 from services import TutorService
 from agent_core.agent.events import (
@@ -35,6 +37,14 @@ from services.content_guard import get_content_guard
 from utils.validators import SessionIdPath
 
 logger = logging.getLogger(__name__)
+
+
+def _sse(payload: dict) -> str:
+    """Emit the shared SSE envelope while preserving legacy top-level fields."""
+    event_type = str(payload.get("type") or "progress")
+    return encode_sse_event(
+        event_type, **{k: v for k, v in payload.items() if k != "type"}
+    )
 
 
 def _serialize_run_content(content) -> str:
@@ -77,7 +87,19 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 @router.get("", response_model=list[SessionSchema])
 def list_sessions(user_id: str = Depends(get_current_user)):
-    return TutorService().list_sessions(user_id)
+    from services.immersive.job_manager import manager as immersive_jobs
+
+    sessions = TutorService().list_sessions(user_id)
+    # 状态仍为 running/background 但进程内已没有对应任务（如服务重启），
+    # 对外按"已中断"展示，避免历史页永远显示"后台处理中"。仅读时覆盖，不落盘。
+    for s in sessions:
+        ws = s.workspace or {}
+        if ws.get("generation_status") in {
+            "running",
+            "background",
+        } and not immersive_jobs.is_running(s.id):
+            s.workspace = {**ws, "generation_status": "interrupted"}
+    return sessions
 
 
 @router.post("", response_model=SessionSchema, status_code=201)
@@ -125,22 +147,20 @@ async def chat_stream(
         guard_result = await guard.check_input(body.content)
         if not guard_result.is_safe:
             guard.log_violation(user_id, body.content, guard_result)
-            err_data = json.dumps(
-                {
-                    "type": "error",
-                    "message": guard_result.reason,
-                    "code": "content_blocked",
-                },
-                ensure_ascii=False,
-            )
 
             async def blocked_stream():
-                yield f"data: {err_data}\n\n"
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": guard_result.reason,
+                        "code": "content_blocked",
+                    }
+                )
 
             return StreamingResponse(
                 blocked_stream(),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers=event_stream_headers(),
             )
 
     service = TutorService()
@@ -161,7 +181,7 @@ async def chat_stream(
                         "delta": event.delta,
                         "step": event.step,
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif isinstance(event, AgentToolCallChunkEvent):
                     data = {
                         "type": "tool_call_chunk",
@@ -171,7 +191,7 @@ async def chat_stream(
                         "args_delta": event.arguments_delta,
                         "step": event.step,
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif isinstance(event, AgentToolRunEvent):
                     serialized = _serialize_run_content(event.content)
                     if not serialized:
@@ -183,7 +203,7 @@ async def chat_stream(
                         "content": serialized,
                         "step": event.step,
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif (
                     isinstance(event, DomainEvent)
                     and event.kind == KIND_MASTERY_UPDATED
@@ -196,27 +216,19 @@ async def chat_stream(
                         "node_id": node_id,
                         "delta": delta,
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif isinstance(event, AgentFinalEvent):
                     # ── 内容安全审核（输出净化） ──
                     final_text = guard.sanitize_output(event.content)
-                    text_data = json.dumps(
-                        {"type": "text_reply", "text": final_text},
-                        ensure_ascii=False,
-                    )
-                    yield f"data: {text_data}\n\n"
-                    done_data = json.dumps(
-                        {"type": "done", "mastery_changes": mastery_changes},
-                        ensure_ascii=False,
-                    )
-                    yield f"data: {done_data}\n\n"
+                    yield _sse({"type": "text_reply", "text": final_text})
+                    yield _sse({"type": "done", "mastery_changes": mastery_changes})
                 elif isinstance(event, AgentThinkEvent):
                     data = {
                         "type": "thinking",
                         "content": event.content,
                         "step": event.step,
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif isinstance(event, AgentToolCallEvent):
                     data = {
                         "type": "tool_call",
@@ -225,7 +237,7 @@ async def chat_stream(
                         "args": event.arguments,
                         "step": event.step,
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif isinstance(event, AgentToolResultEvent):
                     data = {
                         "type": "tool_result",
@@ -235,7 +247,7 @@ async def chat_stream(
                         "result": extract_event_text(event.result),
                         "step": event.step,
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif isinstance(event, DomainEvent) and event.kind == KIND_FILE_CREATED:
                     data = {
                         "type": "file_created",
@@ -243,44 +255,49 @@ async def chat_stream(
                         "title": event.payload.get("title", ""),
                         "file_type": event.payload.get("file_type", ""),
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
                 elif isinstance(event, DomainEvent) and event.kind == KIND_NODE_CREATED:
                     data = {
                         "type": "node_created",
                         "node_id": event.payload.get("node_id", ""),
                         "title": event.payload.get("title", ""),
                     }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    yield _sse(data)
         except asyncio.CancelledError:
             pass  # 客户端断开，静默退出
         except CreditsExceeded as e:
-            err = json.dumps(
+            yield _sse(
                 {
                     "type": "error",
                     "message": str(e),
                     "code": "credits_exceeded",
                     "quota": e.quota,
                     "used": e.used,
-                },
-                ensure_ascii=False,
+                }
             )
-            yield f"data: {err}\n\n"
-        except ValueError as e:
-            err = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
-            yield f"data: {err}\n\n"
-        except Exception as e:  # pylint: disable=broad-except
-            err = json.dumps(
-                {"type": "error", "message": f"服务器内部错误：{e}"}, ensure_ascii=False
+        except ValueError:
+            yield _sse(
+                {
+                    "type": "error",
+                    "message": "请求无法处理，请检查输入后重试。",
+                    "code": "invalid_request",
+                }
             )
-            yield f"data: {err}\n\n"
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("聊天流处理失败")
+            yield _sse(
+                {
+                    "type": "error",
+                    "message": "服务暂时不可用，请稍后重试。",
+                    "code": "internal_error",
+                    "retryable": True,
+                }
+            )
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers=event_stream_headers(),
     )
 
 

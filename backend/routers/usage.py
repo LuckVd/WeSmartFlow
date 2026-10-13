@@ -15,7 +15,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from api.contracts import ProviderMetricsResponse, standard_error_responses
 from dependencies import get_current_user
+from utils.admin_auth import require_admin
 from services.usage_meter import (
     get_platform_overview,
     get_usage_overview,
@@ -79,10 +81,34 @@ def credits_events(
 @router.get("/credits/platform")
 def credits_platform(
     period: Optional[str] = Query(None, description="计费周期 YYYY-MM，默认当期"),
-    _: str = Depends(get_current_user),
+    _: str = Depends(require_admin),
 ):
     """平台侧成本总览（含系统后台任务），按场景归因。
 
     用于回答「成本花在哪个功能上」——这是设定额度阈值的前提。
     """
     return get_platform_overview(period)
+
+
+@router.get(
+    "/providers/metrics",
+    operation_id="get_provider_metrics",
+    response_model=ProviderMetricsResponse,
+    responses=standard_error_responses(401, 422),
+)
+def provider_metrics(
+    category: Optional[str] = Query(
+        None,
+        pattern="^(llm|embedding|image|search|audio|integration)$",
+        description="可选的供应商或外部集成类别",
+    ),
+    _: str = Depends(require_admin),
+):
+    """供应商及外部集成调用观测快照，供管理员排查超时、失败与重试。
+
+    指标仅保存在当前进程的有界内存中，重启后清空；请求或用户密钥不会
+    出现在响应中。持久化监控将在 exporter 接入后复用同一事件结构。
+    """
+    from services.provider_gateway import get_provider_gateway
+
+    return get_provider_gateway().metrics.snapshot_for(category=category)

@@ -23,11 +23,12 @@ function harness(query, detail) {
     nextTick(fn) { return fn?.(); },
     startImmersive() { starts++; },
   };
-  for (const name of ['imRestoreError', 'imResumePrompt', 'phase', 'currentTopic', 'currentSessionId', 'imCompleted', 'imGenerating', 'imTab', 'topicInput', 'enableAudio', 'enableExercises', 'imAgentMessages']) {
+  for (const name of ['imRestoreError', 'imResumePrompt', 'imBackgroundProcessing', 'phase', 'currentTopic', 'currentSessionId', 'imCompleted', 'imGenerating', 'imTab', 'topicInput', 'enableAudio', 'enableExercises', 'imAgentMessages']) {
     context[name] = { value: null };
   }
   context.canvasBlocks = { value: [] };
   context.imChapters = { value: [] };
+  context.imHasPendingGeneration = { value: false };
   vm.createContext(context);
   vm.runInContext(functions, context);
   return { context, starts: () => starts };

@@ -18,6 +18,7 @@ from agent_core.llm import BaseLLM, LLMResponse
 from agent_core.llm.base import StreamFinishEvent
 from agent_core.llm.openai_llm import OpenAILLM
 from database import get_setting
+from services.provider_gateway import get_provider_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,60 @@ def _attach_hooks(
     return llm
 
 
+def _attach_provider_gateway(llm: BaseLLM, *, profile, scene: str) -> BaseLLM:
+    """Instrument the raw provider methods before quota/usage hooks wrap them.
+
+    This ordering matters: a local quota rejection must not be reported as an
+    upstream provider failure.  The gateway consequently observes only calls that
+    have passed the factory's existing governance checks.
+    """
+
+    gateway = get_provider_gateway()
+
+    def _response_ok(result) -> bool:
+        return not bool(getattr(result, "is_error", False))
+
+    def _stream_ok(event) -> bool:
+        response = getattr(event, "response", None)
+        return response is not None and not bool(getattr(response, "is_error", False))
+
+    def _attempts(result) -> int:
+        metadata = getattr(result, "metadata", {}) or {}
+        return int(metadata.get("attempts", 1))
+
+    def _stream_attempts(event) -> int:
+        return _attempts(getattr(event, "response", None))
+
+    llm.think = gateway.instrument_sync(  # type: ignore[method-assign]
+        profile,
+        "chat.completions.create",
+        llm.think,
+        scene=scene,
+        success=_response_ok,
+        attempts=_attempts,
+    )
+    llm.async_think = gateway.instrument_async(  # type: ignore[method-assign]
+        profile,
+        "chat.completions.create",
+        llm.async_think,
+        scene=scene,
+        success=_response_ok,
+        attempts=_attempts,
+    )
+    llm.stream_think = gateway.instrument_async_stream(  # type: ignore[method-assign]
+        profile,
+        "chat.completions.stream",
+        llm.stream_think,
+        scene=scene,
+        success=_stream_ok,
+        attempts=_stream_attempts,
+    )
+    # The profile deliberately has no credentials and is useful to diagnostics or
+    # future provider selection code without exposing a user's key.
+    llm.provider_profile = profile  # type: ignore[attr-defined]
+    return llm
+
+
 def create_openai_llm(
     user_id: str,
     *,
@@ -189,12 +244,23 @@ def create_openai_llm(
         raise RuntimeError(
             "未配置 LLM API Key。请在设置页面填写，或在 .env 中设置 LLM_API_KEY。"
         )
+    resolved_model = model or os.getenv("LLM_MODEL", "gpt-4o")
+    profile = get_provider_gateway().resolve(
+        category="llm",
+        backend="openai-compatible",
+        model=resolved_model,
+        endpoint=base_url,
+    )
     llm = OpenAILLM(
-        model_name=model or None,
-        timeout=timeout,
+        model_name=resolved_model,
+        timeout=timeout if timeout is not None else int(profile.retry.timeout_seconds),
         api_key=api_key,
         base_url=base_url or None,
+        max_retries=profile.retry.max_retries,
+        retry_base_delay=profile.retry.base_delay_seconds,
+        retry_max_delay=profile.retry.max_delay_seconds,
     )
+    llm = _attach_provider_gateway(llm, profile=profile, scene=scene)
     return _attach_hooks(
         llm,
         user_id=user_id,
@@ -317,16 +383,13 @@ def get_system_llm(timeout: Optional[int] = None, scene: str = "system") -> Base
         raise RuntimeError(
             "系统 LLM 配置不完整。请确保同时设置了 LLM_API_KEY, LLM_BASE_URL 和 LLM_MODEL。"
         )
-    llm = OpenAILLM(
-        model_name=model,
+    return create_openai_llm(
+        SYSTEM_USER_ID,
         api_key=api_key,
         base_url=base_url,
+        model=model,
         timeout=timeout,
-    )
-    return _attach_hooks(
-        llm,
-        user_id=SYSTEM_USER_ID,
-        scene=scene,
         with_quota=False,
+        scene=scene,
         is_system=True,
     )

@@ -20,6 +20,7 @@ import json
 import logging
 import shutil
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,7 @@ class _StageResult:
     """Internal stage result; never forwarded to the tool event stream."""
 
     value: object
+    timings_ms: dict[str, int] | None = None
 
 
 async def _stream_turn(llm, messages, ctx=None, *, stage):
@@ -161,6 +163,7 @@ def _build_designer_system() -> str:
 
 - 每个可视化只讲一个概念，不要贪多
 - 控件数量 1-5 个；类型可以是 slider/toggle/select/stepper/timeline/button
+- display 展示项必须 1-4 个，interaction_checks 检查项必须 2-4 个；不要把所有公式/说明拆成过多 display
 - 默认用 1-3 个必要控件、一张主图和简短反馈；仅在用户明确需要时增加模式和辅助按钮
 - slider 的 range 必须给出有限数值 min/max/step/default；select 的 choices 是至少两项的对象数组，每项包含 label、value 字符串；其他控件不填 range/choices
 - 每个控件都需要 expected_change，禁止只改控件标签而不影响教学内容的假交互
@@ -170,12 +173,16 @@ def _build_designer_system() -> str:
 - 优先原生 Canvas/SVG 和 SDK，确有必要才引入第三方库；聚焦一个可完整实现的关系
 - 主画布内部宽度约 900px，前端整体缩放适配窄屏；优先清晰紧凑，不要求在 600px 下重新布局
 - 数字、按钮停点与公式使用同一组参数推导；不要把有限采样值写成精确的极限值
+- 物理守恒类可视化必须先写清系统边界、方向约定和初始/末态；矢量箭头方向、长度、符号必须与守恒方程一致
+- 动量守恒/反冲/碰撞/火箭类主题中，如果设初始总动量为 0，必须让各物体末态动量等大反向，画面和数值都显示矢量和为 0；不要画成两个动量同向或大小不相等
+- 物理公式不能只展示结论；至少把“基本定律 → 代入场景 → 变形得到结论”的关键链条放进 display 或反馈文本
 
 **只输出 JSON，不要有任何其他文字。**
 """
 
 
 async def _design_viz(llm, title: str, concept: str, interaction_hint: str, ctx=None):
+    started_at = time.perf_counter()
     request = f"标题：{title}\n概念：{concept}\n交互建议：{interaction_hint}"
     messages = [
         {"role": "system", "content": _build_designer_system()},
@@ -194,7 +201,10 @@ async def _design_viz(llm, title: str, concept: str, interaction_hint: str, ctx=
             spec = parse_contract(raw, VizSpec).model_dump(exclude_none=True)
             # A design is an implementation brief, not a second scored artifact.
             # Validate structure here; verify factual claims against the actual code.
-            yield _StageResult(spec)
+            yield _StageResult(
+                spec,
+                {"design_total": round((time.perf_counter() - started_at) * 1000)},
+            )
             return
         except VizQualityError as exc:
             feedback = str(exc)
@@ -246,6 +256,9 @@ def _build_coder_system(core_doc: str, pattern_examples: str) -> str:
 - 内部渲染宽度约 900px，前端会整体缩放；不要求在 600px 下重新布局。canvas 保持比例，SVG 使用 viewBox
 - 读数和结论由同一份状态计算，按钮停点、公式代入与说明必须一致；区分采样近似值和理论极限
 - 检查步骤必须可由真实操作复现；算法展示中间状态，动画时间应决定模拟状态，不能只播放装饰
+- 物理矢量图必须用同一份状态计算箭头方向、长度、标签数值和合量读数；不要手写互相矛盾的箭头和文本
+- 动量守恒/反冲/火箭类图示必须显式显示方向约定和总动量校验：例如初始总动量为 0 时，燃气向后动量与火箭向前动量应等大反向，合动量读数必须为 0
+- 能量/动量/角动量守恒类可视化必须先定义系统边界；若外力或损失不为 0，必须在图上标明而不是继续声称守恒
 - 示例只提供 API 用法，必须补全逻辑，禁止省略号、TODO、空回调、无效开关、占位图
 
 ---
@@ -260,6 +273,7 @@ _CODE_JUDGE_SYSTEM = """你是可视化代码审查员，只识别影响使用�
 
 需要阻止发布的情况：
 - 核心公式、计算结果或算法步骤错误；例如按钮实际停在 x=0.99，解释却声称当前读数取自 x=0.999。
+- 物理守恒图的方向、大小、符号或合量错误；例如反冲/火箭图中两个动量箭头不是等大反向，却声称总动量守恒或合动量为 0。
 - 必要交互在代码中明确未实现、接错变量、必定抛错，或关键图形无法显示。
 - 实现遗漏了用户要求的核心教学内容。
 每个 blocking_issues 必须说明代码中的具体证据、触发操作、实际与正确结果，以及最小修复办法。
@@ -338,6 +352,13 @@ async def _run_code_loop(
     pattern_examples: str,
     ctx=None,
 ):
+    started_at = time.perf_counter()
+    timings_ms = {
+        "code_generation": 0,
+        "static_validation": 0,
+        "runtime_validation": 0,
+        "teaching_review": 0,
+    }
     validator = ValidateVizCodeTool()
     unavailable = validator.environment_error()
     if unavailable:
@@ -352,10 +373,14 @@ async def _run_code_loop(
     for round_i in range(1, MAX_CODE_ROUNDS + 1):
         yield f"正在生成可视化代码（第 {round_i}/{MAX_CODE_ROUNDS} 轮）..."
         raw = ""
+        code_started_at = time.perf_counter()
         async for event in _stream_turn(llm, messages, ctx, stage="code"):
             yield event
             if isinstance(event, AgentFinalEvent):
                 raw = event.content or ""
+        timings_ms["code_generation"] += round(
+            (time.perf_counter() - code_started_at) * 1000
+        )
         code = _extract_code(raw)
         messages.append({"role": "assistant", "content": raw})
         path = work_dir / f"viz_r{round_i}.js"
@@ -365,31 +390,76 @@ async def _run_code_loop(
                 ctx.checkpoint()
             yield "正在进行 JavaScript 静态检查..."
             # Node/ESLint use blocking subprocesses; keep the event loop responsive.
+            static_started_at = time.perf_counter()
             check = asyncio.to_thread(validator.run, file_path=str(path))
             result = await ctx.wait(check) if ctx else await check
+            timings_ms["static_validation"] += round(
+                (time.perf_counter() - static_started_at) * 1000
+            )
             if result != "ok":
                 raise VizQualityError(result)
             if ctx:
                 ctx.checkpoint()
             yield "正在浏览器中检查画面与交互..."
             remaining = ctx.budget.remaining_seconds if ctx else None
-            report = await async_check_viz_runtime(
-                path,
-                spec,
-                timeout=min(35, remaining) if remaining is not None else 35,
-                checkpoint=ctx.checkpoint if ctx else None,
+            runtime_started_at = time.perf_counter()
+            runtime_task = asyncio.create_task(
+                async_check_viz_runtime(
+                    path,
+                    spec,
+                    timeout=min(35, remaining) if remaining is not None else 35,
+                    checkpoint=ctx.checkpoint if ctx else None,
+                )
             )
+            report = None
+            runtime_recorded = False
+            # Let immediate environment and preflight failures settle before
+            # consuming an additional LLM call.  A real browser probe keeps
+            # running and is then overlapped with the semantic review below.
+            await asyncio.sleep(0)
+            if runtime_task.done():
+                report = runtime_task.result()
+                timings_ms["runtime_validation"] += round(
+                    (time.perf_counter() - runtime_started_at) * 1000
+                )
+                runtime_recorded = True
+                if not report["ok"]:
+                    raise VizQualityError(json.dumps(report, ensure_ascii=False))
+            yield "正在评审教学逻辑与交互实现..."
+            review = None
+            review_started_at = time.perf_counter()
+            try:
+                # The review's blocking criteria are based on the specification and
+                # code. Browser warnings are deliberately non-blocking, so this can
+                # run while the independent runtime gate is still probing controls.
+                async for event in _review_code(llm, spec_str, code, {}, ctx):
+                    if isinstance(event, _StageResult):
+                        review = event.value
+                    else:
+                        yield event
+                timings_ms["teaching_review"] += round(
+                    (time.perf_counter() - review_started_at) * 1000
+                )
+                if not runtime_task.done():
+                    report = await runtime_task
+                    timings_ms["runtime_validation"] += round(
+                        (time.perf_counter() - runtime_started_at) * 1000
+                    )
+                    runtime_recorded = True
+            finally:
+                if not runtime_task.done():
+                    runtime_task.cancel()
+                    await asyncio.gather(runtime_task, return_exceptions=True)
+            if report is None:
+                report = await runtime_task
+                if not runtime_recorded:
+                    timings_ms["runtime_validation"] += round(
+                        (time.perf_counter() - runtime_started_at) * 1000
+                    )
             if ctx:
                 ctx.checkpoint()
             if not report["ok"]:
                 raise VizQualityError(json.dumps(report, ensure_ascii=False))
-            yield "正在评审教学逻辑与交互实现..."
-            review = None
-            async for event in _review_code(llm, spec_str, code, report, ctx):
-                if isinstance(event, _StageResult):
-                    review = event.value
-                else:
-                    yield event
             if review is None:
                 raise RuntimeError("代码评审未返回有效结果")
             if review.accepted:
@@ -400,6 +470,12 @@ async def _run_code_loop(
                             "runtime": report,
                             "review": review.model_dump(),
                             "code_rounds": round_i,
+                            "timings_ms": {
+                                **timings_ms,
+                                "code_total": round(
+                                    (time.perf_counter() - started_at) * 1000
+                                ),
+                            },
                         },
                     )
                 )
@@ -521,11 +597,13 @@ class GenerateInteractiveVizTool(BaseTool):
             llm = get_llm(self.user_id, scene="chat")
             yield f"正在生成交互式可视化「{title}」..."
             spec = None
+            design_timings_ms = {}
             async for event in _design_viz(
                 llm, title, concept, interaction_hint, self._parent_ctx
             ):
                 if isinstance(event, _StageResult):
                     spec = event.value
+                    design_timings_ms = event.timings_ms or {}
                 else:
                     yield event
             if spec is None:
@@ -548,6 +626,10 @@ class GenerateInteractiveVizTool(BaseTool):
                 if result is None:
                     raise RuntimeError("代码阶段未返回有效结果")
                 code, quality = result
+                quality["timings_ms"] = {
+                    **design_timings_ms,
+                    **quality.get("timings_ms", {}),
+                }
                 if self._parent_ctx:
                     self._parent_ctx.checkpoint()
                 yield "检查通过，正在保存可视化..."

@@ -5,10 +5,11 @@ import secrets
 import time
 from urllib.parse import urlencode
 
-import requests
 from fastapi import HTTPException
 from config import GITHUB_CLIENT_ID
 from database import get_db
+from integrations.github import GitHubClient, get_github_client
+from integrations.http import IntegrationHttpError
 from services.credit_wallet import grant_github, REPOSITORY
 
 logger = logging.getLogger(__name__)
@@ -82,28 +83,37 @@ def bind_account(user_id, github_id, username, avatar=None):
         return user["name"]
 
 
-def verify_and_grant(user_id, github_id, access_token):
+def verify_and_grant(
+    user_id: str,
+    github_id: str,
+    access_token: str,
+    *,
+    client: GitHubClient | None = None,
+):
+    """Verify the authenticated account's Star and grant its one-time reward.
+
+    The OAuth access token remains inside the GitHub adapter.  GitHub's 404 Star
+    response is an ordinary product result, while transport and upstream failures
+    deliberately leave the credit ledger untouched and are safe to retry later.
+    """
+
     try:
-        response = requests.get(
-            f"https://api.github.com/user/starred/{REPOSITORY}",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=10,
+        starred = (client or get_github_client()).has_starred(access_token, REPOSITORY)
+    except IntegrationHttpError as exc:
+        # Do not log access tokens, provider payloads, URLs or exception strings:
+        # all can carry user/API credentials.  The adapter already emits a safe
+        # operation-level observation tied to the request ID.
+        logger.warning(
+            "GitHub Star 验证未完成 error_type=%s retryable=%s",
+            type(exc).__name__,
+            exc.retryable,
         )
-        if response.status_code == 404:
-            return {
-                "status": "not_starred",
-                "message": "尚未检测到 Star，请 Star 仓库后重新验证。",
-            }
-        if response.status_code != 204:
-            return {
-                "status": "unavailable",
-                "message": "GitHub 验证暂不可用，请稍后重试。",
-            }
-    except requests.RequestException:
         return {"status": "unavailable", "message": "GitHub 验证暂不可用，请稍后重试。"}
+    if not starred:
+        return {
+            "status": "not_starred",
+            "message": "尚未检测到 Star，请 Star 仓库后重新验证。",
+        }
     awarded = grant_github(user_id, github_id)
     return {
         "status": "granted" if awarded else "already_claimed",

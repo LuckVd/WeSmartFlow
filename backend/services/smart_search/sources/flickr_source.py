@@ -10,7 +10,9 @@ Flickr 上有大量 CC 许可的教育用图。
 from __future__ import annotations
 
 import logging
+from typing import Any
 
+from integrations import IntegrationHttpClient, IntegrationPolicy
 from .base_source import BaseSource
 from ..models import SearchResult
 
@@ -29,6 +31,17 @@ class FlickrSource(BaseSource):
     modalities = ["image"]
     languages = ["zh", "en"]
 
+    def __init__(self, http_client: Any = None):
+        self._http = http_client or IntegrationHttpClient(
+            IntegrationPolicy(
+                name="flickr",
+                timeout_seconds=10.0,
+                max_retries=1,
+                retry_safe=True,
+                max_concurrency=4,
+            )
+        )
+
     def is_available(self) -> bool:
         try:
             import httpx  # noqa
@@ -45,20 +58,16 @@ class FlickrSource(BaseSource):
         返回图片标题 + 描述 + 直链 URL，Agent 可直接引用。
         """
         try:
-            import httpx
             from xml.etree import ElementTree as ET
 
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    _FLICKR_SEARCH_URL,
-                    params={
-                        "format": "rss_200",
-                        "tags": query.replace(" ", ","),
-                        "lang": "zh-us",
-                    },
-                )
-                resp.raise_for_status()
-                xml_text = resp.text
+            xml_text = await self._http.get_text(
+                _FLICKR_SEARCH_URL,
+                params={
+                    "format": "rss_200",
+                    "tags": query.replace(" ", ","),
+                    "lang": "zh-us",
+                },
+            )
 
         except Exception as e:
             logger.error("[Flickr] 搜索异常: %s", e)

@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import AsyncGenerator, List, Optional
+
+import json
 
 from agent_core.agent import (
     AgentFinalEvent,
@@ -19,9 +20,13 @@ from agent_core.agent import (
 
 
 def sse_event(type: str, **data) -> str:
-    """构造单条 SSE 消息（已含末尾的双换行）。"""
-    payload = {"type": type, **data}
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    """Construct a legacy producer event.
+
+    The detached job manager enriches these frames with ordered SSE metadata at
+    the transport boundary.  Keeping producer output as a plain data frame
+    preserves direct-service callers and older tests during the migration.
+    """
+    return f"data: {json.dumps({'type': type, **data}, ensure_ascii=False)}\n\n"
 
 
 async def stream_agent_events(

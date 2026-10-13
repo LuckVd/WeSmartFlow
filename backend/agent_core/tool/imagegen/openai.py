@@ -23,6 +23,33 @@ class OpenAIImageGen(BaseImageGen):
     backend = "openai"
     default_size = "1920x1080"
 
+    #: gpt-image 系列接受的尺寸；其余尺寸按宽高比吸附到最近档位
+    _GPT_IMAGE_SIZES = {"auto", "1024x1024", "1536x1024", "1024x1536"}
+
+    @classmethod
+    def _snap_gpt_image_size(cls, raw: str) -> tuple[str, bool]:
+        """把不在支持列表里的尺寸按宽高比吸附到最近档位。
+
+        返回 ``(size, 是否被调整)``。横版（如 1920x1080 课程插图）取
+        1536x1024，竖版取 1024x1536，接近方形取 1024x1024。
+        """
+        size = str(raw or "").strip().lower()
+        if size in cls._GPT_IMAGE_SIZES:
+            return size, False
+        parts = size.replace("*", "x").split("x")
+        try:
+            width, height = int(parts[0]), int(parts[1])
+        except (IndexError, ValueError):
+            return "1024x1024", True
+        ratio = width / height if height else 1.0
+        if ratio >= 1.2:
+            snapped = "1536x1024"
+        elif ratio <= 0.83:
+            snapped = "1024x1536"
+        else:
+            snapped = "1024x1024"
+        return snapped, True
+
     def __init__(
         self,
         api_key: str = "any",
@@ -58,12 +85,21 @@ class OpenAIImageGen(BaseImageGen):
             raise ImageGenError("未安装 requests 库，请先安装 requests>=2.31.0")
 
         size = size or self.default_size
+        requested_size = size
         payload: Dict[str, Any] = {
             "prompt": prompt,
             "size": size,
-            "response_format": "b64_json",
             "n": 1,
         }
+        is_gpt_image = bool(self.model and self.model.startswith("gpt-image"))
+        if not is_gpt_image:
+            # gpt-image 系列不接受 response_format（恒定 b64/URL 返回），
+            # 传入会导致上游挂起最终 503；dall-e 等模型仍需显式声明。
+            payload["response_format"] = "b64_json"
+        if is_gpt_image:
+            size, snapped = self._snap_gpt_image_size(size)
+            if snapped:
+                payload["size"] = size
         if self.model:
             payload["model"] = self.model
         if negative_prompt:
@@ -108,7 +144,13 @@ class OpenAIImageGen(BaseImageGen):
 
         callback = getattr(self, "on_generated", None)
         if callback:
-            callback()
+            # 网关在 usage.cost_usd 中给出本次真实成本；没有则由工厂按估价记账
+            usage = resp_json.get("usage")
+            cost_usd = usage.get("cost_usd") if isinstance(usage, dict) else None
+            if cost_usd is None:
+                callback()
+            else:
+                callback(cost_usd=cost_usd)
 
         item = data_list[0]
         b64_json = item.get("b64_json")
@@ -131,19 +173,18 @@ class OpenAIImageGen(BaseImageGen):
             raise ImageGenError("响应中既无 b64_json 也无 url")
 
         try:
-            return save_image(
-                image_bytes,
-                output_dir,
-                {
-                    "prompt": prompt,
-                    "negative_prompt": negative_prompt,
-                    "size": size,
-                    "steps": self.steps,
-                    "guidance_scale": self.guidance_scale,
-                    "model": self.model,
-                    "base_url": self.base_url,
-                },
-            )
+            meta = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "size": size,
+                "steps": self.steps,
+                "guidance_scale": self.guidance_scale,
+                "model": self.model,
+                "base_url": self.base_url,
+            }
+            if size != requested_size:
+                meta["requested_size"] = requested_size
+            return save_image(image_bytes, output_dir, meta)
         except ImageGenError:
             raise
         except Exception as exc:  # pylint: disable=broad-except
